@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/sign-in\")",
+      "Bash(curl -sI \"http://localhost:3000/\")",
+      "Bash(curl -sIL \"http://localhost:3000/sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3000%2F\")",
+      "Bash(curl -sI \"http://localhost:3000/sign-in\")",
+      "Bash(curl -sI \"http://localhost:3000/sign-in/\")",
+      "Bash(curl -sI \"http://localhost:3000/sign-up\")",
+      "Bash(curl -s \"http://localhost:3000/nonexistent-route-xyz\" -o /tmp/404check.html -w \"%{http_code}\\\\n\")",
+      "Read(//tmp/**)",
+      "Bash(taskkill /PID 22836)",
+      "Bash(wmic process *)",
+      "Bash(curl -s \"http://localhost:3000/sign-in\" -o /tmp/signin404.html)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist //FI \"PID eq 5544\")",
+      "Bash(cp proxy.ts /tmp/proxy.ts.bak)",
+      "Bash(mkdir -p \"app/__testcatchall/[[...slug]]\")",
+      "Bash(rm -rf \"app/__testcatchall\"; mkdir -p \"app/zzctest/[[...slug]]\")",
+      "Bash(cp proxy.ts /tmp/proxy.ts.orig)",
+      "Bash(curl -sI \"http://localhost:3000/zzctest\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/sign-up\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3000%2F\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/\")",
+      "Bash(npx eslint *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/editor)",
+      "Bash(curl -s -L http://localhost:3000/editor)",
+      "Bash(powershell -NoProfile -Command \"Get-Process -Id 22836 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime\")"
+    ],
+    "additionalDirectories": [
+      "D:\\Ravi\\Code\\2026\\my-ai-try\\app\\__testcatchall",
+      "D:\\Ravi\\Code\\2026\\my-ai-try\\app\\zzctest",
+      "\\tmp"
+    ]
+  }
+}
