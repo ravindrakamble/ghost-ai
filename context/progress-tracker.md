@@ -15,7 +15,7 @@ Update this file whenever the current phase, active feature, or implementation s
   - `lib/liveblocks.ts` — `getLiveblocksClient()`, a lazily-instantiated, `globalThis`-cached `@liveblocks/node` singleton (deferred so a missing `LIVEBLOCKS_SECRET_KEY` doesn't break `next build`'s page-data collection); `lib/liveblocks-color.ts` — pure `getCursorColor(userId)` string-hash → fixed 8-color palette mapping.
   - `app/api/liveblocks-auth/route.ts` — `POST` handler: Clerk auth (401) → `getProjectAccess` (404/403) → `getLiveblocksClient()` (500 if unconfigured) → idempotent `getOrCreateRoom(roomId, { defaultAccesses: [] })` → `prepareSession(...).allow(roomId, ["room:write"]).authorize()`.
   - `package.json` — added `@liveblocks/node` and `@liveblocks/client` (spec's premise that these were pre-installed did not hold).
-  - `.env.local` — added an empty `LIVEBLOCKS_SECRET_KEY` placeholder; no live Liveblocks project/secret exists in this environment, so the auth route is unit-tested but not end-to-end verified against the real Liveblocks service — flagged as a human-provisioning gap before spec 11's `RoomProvider` wiring can be verified live.
+  - `.env.local` — a real `LIVEBLOCKS_SECRET_KEY` is now provisioned (added 2026-08-19, after the pipeline round below). Live end-to-end verification against the real Liveblocks API confirmed working: `getOrCreateRoom` created a room, `prepareSession(...).authorize()` returned `200` with a session token body, `deleteRoom` cleaned it up — closing the human-provisioning gap flagged during the pipeline round.
   - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (131/131 across 19 files), `npx next build` all pass (build confirmed to pass even with `LIVEBLOCKS_SECRET_KEY` unset).
   - QA: PASS, no bugs or spec gaps found. All 11 acceptance criteria independently re-verified against the code, including cross-checking the Liveblocks SDK usage (`getOrCreateRoom`, `prepareSession`/`Session.allow`/`authorize`) directly against `@liveblocks/node`'s real type definitions.
   - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec delivers the authorization boundary (`getOrCreateRoom(roomId, { defaultAccesses: [] })`) that makes spec 11's shared-room canvas access safe, without itself adding any UI/canvas/`RoomProvider` — consistent with how specs 08/09 were judged as necessary preconditions rather than end-to-end demonstrations of Success Criterion 2.
@@ -126,7 +126,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- Product Analyst pass on feature spec 11 (Base Canvas), the first spec to consume spec 10's `Presence`/`UserMeta` types and auth route via `RoomProvider`/`LiveblocksProvider`. Before this can be verified end-to-end, a real Liveblocks project + `LIVEBLOCKS_SECRET_KEY` needs to be provisioned into `.env.local` (currently an empty placeholder — see spec 10's known limitations).
+- Product Analyst pass on feature spec 11 (Base Canvas), the first spec to consume spec 10's `Presence`/`UserMeta` types and auth route via `RoomProvider`/`LiveblocksProvider`. `LIVEBLOCKS_SECRET_KEY` is now provisioned and live-verified, so this is unblocked.
 
 ## Open Questions
 
