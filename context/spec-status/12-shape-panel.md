@@ -125,8 +125,118 @@ This spec adds a floating shape toolbar to the canvas that lets a user drag a sh
 
 ## QA Report
 
-_(pending)_
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Pass — no errors |
+| `npx eslint .` | Pass — 0 errors, 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx` (unrelated to this spec, not touched) |
+| `npx vitest run` | Pass — 159/159 tests across 24 files |
+| `npx next build` | Pass — Turbopack build succeeds, all routes compile |
+
+All figures independently reproduced; they match the Dev Notes claims exactly.
+
+### Acceptance criteria checklist
+
+1. Floating pill-shaped toolbar at bottom-center with 6 draggable icon buttons (rectangle, diamond, circle, pill, cylinder, hexagon) — Pass. `components/editor/shape-panel.tsx` renders `CANVAS_SHAPES.map(...)` (order: rectangle, diamond, circle, pill, cylinder, hexagon, matching the spec's literal list) as `Button` elements with `draggable`, positioned `absolute bottom-6 left-1/2 -translate-x-1/2` inside a `rounded-full` container. Confirmed by `shape-panel.test.tsx` (one button per shape, all draggable).
+2. `dragstart` sets a `dataTransfer` payload with shape name plus default width/height, matching the spec's sizing rules — Pass. `lib/canvas-shapes.ts`'s `SHAPE_DEFAULT_SIZES`: rectangle 160x80 (wider than tall), circle 80x80 (square), diamond 160x160 (larger than the others, room for a label). Verified `serializeShapeDragPayload`/`ShapeButton`'s `handleDragStart` sets `CANVAS_DRAG_MIME_TYPE` with the JSON payload; round-trip and per-shape-payload tests pass in both `canvas-shapes.test.ts` and `shape-panel.test.tsx`.
+3. Canvas wrapper handles `dragover` (preventing default) and `drop` — Pass. `handleDragOver`/`handleDrop` are passed directly as `onDragOver`/`onDrop` props on `<ReactFlow>` in `canvas.tsx`. Independently verified against the real `@xyflow/react` source (`node_modules/@xyflow/react/dist/esm/index.mjs`) that unrecognized props are spread onto the actual `react-flow__wrapper` div — a genuine, not assumed, passthrough.
+4. On drop: reads payload, converts screen-to-canvas coords via real `screenToFlowPosition()`, creates node with empty label, default color, dragged shape and size — Pass. `handleDrop` calls `screenToFlowPosition({x: event.clientX, y: event.clientY})` and passes the returned (converted) position into `createDroppedNode`, not the raw client coordinates. Confirmed by `canvas.test.tsx`'s drop test, which mocks `screenToFlowPositionMock` to return a value distinct from the input client coordinates and asserts the created node's position equals the conversion's output, not the raw input.
+5. Node ID generated from shape name, timestamp, and counter — Pass (and strengthened). `generateNodeId` produces a shape-timestamp-counter-randomsuffix string, a superset of the literal recipe plus a random suffix per the brief's Open Questions #6 recommendation to close the cross-client collision gap. Uniqueness tested across 50 calls.
+6. New node has `type: CANVAS_NODE_TYPE` and is added into the Liveblocks-synced node list, visible to other room participants — Pass, and this is the one criterion with genuine runtime risk that I verified beyond static typing. `handleDrop` calls `onNodesChange([{ type: "add", item: newNode }])`. I read `@xyflow/system`'s real `NodeAddChange` type and confirmed the Dev's object literal matches it exactly. I then read `@liveblocks/react-flow`'s actual unminified implementation (`node_modules/@liveblocks/react-flow/dist/lib/flow.js`)'s `applyNodeChanges` function directly: it has a real `case "add":` branch that sets the new node into the room's LiveMap, i.e. the change is genuinely handled at runtime, not just type-compatible with mocks.
+7. Custom node renderer registered for `CANVAS_NODE_TYPE` via `nodeTypes`, rendering every shape as a bordered rectangle with centered label — Pass. `canvas.tsx` registers a module-level, referentially stable `nodeTypes` map. `CanvasNode` never branches on `data.shape` — confirmed by direct read: it renders identically for all shapes.
+8. No edges/CanvasEdgeData/CANVAS_EDGE_TYPE behavior touched — Pass. The only edge-related diff lines are doc comments confirming edges are untouched and pre-existing `edges`/`onEdgesChange` plumbing from spec 11 now explicitly generic-typed, with no behavioral change; `edgeTypes` is still not registered.
+9. Build/typecheck/lint pass — Pass, reproduced directly, matching Dev Notes' claims exactly.
+
+All 9 acceptance criteria pass.
+
+### Architecture invariants (context/architecture-context.md)
+
+- Invariant 1 (no long-running AI work in request handlers): N/A — no request handlers touched.
+- Invariant 2 (metadata vs. blob storage separation): N/A — no persistence code added; nodes only exist in the live Liveblocks room session.
+- Invariant 3 (auth/ownership enforced at every mutation boundary): N/A directly (no new auth boundary added), but the node-add mutation still routes through the same Liveblocks room connection spec 10's `/api/liveblocks-auth` already gates — unchanged from spec 11, not weakened.
+- Invariant 4 (client components only where needed): `canvas-node.tsx` correctly has no `"use client"` (no hooks/interactivity — RSC-eligible, still bundled transitively via `canvas.tsx`'s client tree) — confirmed by reading the file. `shape-panel.tsx` correctly has `"use client"` (drag event handlers need it). `canvas.tsx` was already `"use client"` from spec 11. No unnecessary client boundaries introduced.
+- Invariant 5 (canvas schema consistency): `createDroppedNode`'s output (label/color/shape) matches the schema `types/canvas.ts` already pinned in spec 11 — no divergent or ad hoc fields added.
+
+No invariant violations found.
+
+### Standards compliance (context/code-standards.md)
+
+- No `any` usage anywhere in the new/changed files — confirmed via targeted grep across `lib/canvas-shapes.ts`, `components/editor/canvas-node.tsx`, `components/editor/shape-panel.tsx`, `components/editor/canvas.tsx`, `types/canvas.ts` plus a clean `tsc --noEmit`.
+- No raw Tailwind color classes (zinc-/slate-) or hardcoded hex values outside the two documented constants — confirmed via grep across the full diff; the only hex-literal matches are `DEFAULT_NODE_COLOR = "#1F1F1F"` and `DEFAULT_NODE_TEXT_COLOR = "#EDEDED"` in `types/canvas.ts`, both directly traceable to `ui-context.md`'s documented default ("Default node color: #1F1F1F with #EDEDED text"). This is the same "documented data value" precedent as spec 10's `CURSOR_COLORS`, and is a reasonable, justified addition even though the brief's literal text only asked for the fill-color constant — the paired text color is necessary for the node's label to actually be legible, and nothing in the brief's Out-of-scope callouts prohibits it.
+- `components/ui/*` untouched — confirmed via `git diff main...spec/12-shape-panel --stat -- components/ui/`, empty output.
+- Test files correctly co-located and named (`lib/canvas-shapes.test.ts`, `components/editor/canvas-node.test.tsx`, `components/editor/shape-panel.test.tsx`, extended `components/editor/canvas.test.tsx`), `@vitest-environment jsdom` docblocks present where DOM rendering is needed, third-party SDKs (`@xyflow/react`, `@liveblocks/react-flow`, `@liveblocks/react/suspense`) mocked via `vi.mock`/`vi.hoisted` rather than exercised for real — consistent with the Testing section's conventions and spec 11's precedent.
+- `icon-lg` Button size variant and the six lucide-react icons (Square/Diamond/Circle/Pill/Cylinder/Hexagon) genuinely exist in the installed packages — confirmed by reading `components/ui/button.tsx` directly (not assumed) and by the clean tsc/build (an unresolvable icon import would fail both).
+
+### Error handling
+
+The main failure mode in this spec's scope is malformed or untrusted drop input (a dataTransfer payload that isn't a well-formed shape-drag payload — e.g. a file drag, a corrupted or foreign payload, or an unrecognized shape name). `parseShapeDragPayload` validates JSON parse success, object shape, NodeShape membership, and numeric/positive width/height, returning null for anything untrusted; `handleDrop` treats a null parse as a silent no-op (no `onNodesChange` call, no thrown error) rather than crashing — correctly tested in both `canvas-shapes.test.ts` (6 rejection cases) and `canvas.test.tsx` ("does not add a node when the dropped payload is missing or malformed"). `handleDragOver` similarly only claims the drop target for recognized payloads (checked via dataTransfer.types, not getData(), correctly noting in a comment that some browsers restrict reading actual data outside the drop event), so non-shape drags (e.g. browser file drops) aren't hijacked. This is proportionate to the spec's scope — no server-side or auth failure modes apply here since nothing new touches a request handler or a persistence boundary.
+
+### Housekeeping
+
+`context/progress-tracker.md` was updated accurately: Current Phase/Goal moved to "Phase 12: Shape Panel — implemented, awaiting QA", the "In Progress" entry lists the actual files added/changed and their real responsibilities (matches the code, not just Dev Notes prose), and "Completed"/"Next Up" are consistent with the rest of the pipeline. `context/ui-context.md` was also updated with a new "Floating Shape Panel" subsection documenting the pill-toolbar convention this spec introduces, per the "Keeping Docs In Sync" workflow rule — read directly and confirmed it accurately describes what was actually built (rounded-full, bg-elevated/border-surface-border, positioning, no MiniMap overlap).
+
+### Other verification performed
+
+- Independently re-derived (not trusted from Dev Notes) that `<ReactFlow>`'s own `Wrapper` component only auto-provides `ReactFlowProvider`/`StoreContext` to its own JSX children, gated on `useContext(StoreContext)` (`node_modules/@xyflow/react/dist/esm/index.mjs`, the `Wrapper`/`ReactFlowProvider` functions) — confirming the brief's Open Questions #4 concern was real, not overstated. Then confirmed the actual fix in `canvas.tsx`: `<ReactFlowProvider><CanvasFlow /></ReactFlowProvider>` wraps `CanvasFlow` from outside, and `CanvasFlow` is the component that calls `useReactFlow()` internally — this is the correct placement (an ancestor provider, not a sibling or a provider wrapping only unrelated JSX), so `useReactFlow()` resolves correctly at runtime rather than throwing a "no provider" error.
+- Independently read `@liveblocks/react-flow`'s actual unminified `lib/flow.js` and `lib/shared.js` source (not just its `.d.ts` type declarations) to confirm the `type: "add"` NodeChange is functionally wired into the Liveblocks LiveMap via `useMutation`/`applyNodeChanges`, not just type-compatible — this was the specific "tests with mocked onNodesChange could miss" risk called out in the QA instructions, and it checks out against the real library code.
+- Confirmed via `git diff main...spec/12-shape-panel --stat` that the full changeset matches Dev Notes' claimed file list exactly (`lib/canvas-shapes.ts` + test, `components/editor/canvas-node.tsx` + test, `components/editor/shape-panel.tsx` + test, `components/editor/canvas.tsx` + test, `types/canvas.ts`, `context/ui-context.md`, `context/progress-tracker.md`, this spec-status file) — no unexplained scope creep, and `components/ui/*` confirmed untouched.
+- Per this task's instructions and consistent with specs 08/10/11's QA treatment: interactive drag-and-drop cannot be visually verified in a browser in this environment. Given the genuine runtime-correctness risk this spec carries (provider placement, change-object shape), I went further than prior specs and independently verified both concerns against the real installed library source (not .d.ts declarations alone, and not Dev Notes' claims) rather than relying solely on the passing unit-test suite with its mocked @xyflow/react and @liveblocks/react-flow. Both check out. The absence of a live two-browser-tab smoke test remains a noted limitation, not a defect — recommended as a human follow-up alongside spec 11's still-open two-tab room-connection check.
+
+### Issues found
+
+None. No [Bug -> Dev] or [Spec gap -> Analyst] items to log.
+
+### Handoff
+
+QA passed — ready for Product Owner review.
 
 ## Product Owner Review
 
 _(pending)_
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Success criteria fit
+
+Judged against `project-overview.md`'s Success Criteria list:
+
+- This spec is the first place a user can actually put content on the shared canvas (drag a shape → a node appears, synced through Liveblocks to other participants). It is a direct, concrete step toward **Success Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously") — spec 11 wired the room/sync mechanism with an empty canvas; this spec is the first thing a second user in that room would actually *see* change. Consistent with how specs 08-11 were each judged as building blocks toward a specific criterion rather than standalone end-to-end features: this spec doesn't claim to satisfy Criterion 2 on its own (no live cursors/presence yet — specs 19/24), only to add the node-creation primitive that criterion depends on.
+- It also lays necessary groundwork for **Criterion 4** ("AI can generate an architecture into the shared room from a prompt") and **Criterion 5** ("the graph can be converted into a persisted Markdown spec") — both eventually need a real `CANVAS_NODE_TYPE` renderer and a node-creation code path to exist; this spec is the first to establish both, even though AI generation and spec conversion are untouched here.
+- No claim is made against Criteria 1, 3, or 6 — correctly, nothing in this spec touches project creation, starter templates, or metadata/artifact storage.
+
+### Scope check against project-overview.md and the spec's own limits
+
+- **`project-overview.md`'s Out of Scope wall** (billing, permission tiers, versioned spec history, production object storage migration, mobile apps) — untouched; nothing in the diff comes near any of these.
+- **This spec's own explicit scope limits**, checked directly against the diff (`git diff main..spec/12-shape-panel --stat` and the `types/canvas.ts`/`canvas.tsx` diff content read in full):
+  - No shape-specific SVG visuals — confirmed; `CanvasNode` renders the same bordered rectangle for every `data.shape` value, no branching.
+  - No edges touched — confirmed; the only edge-related diff lines are a generic-type annotation on already-existing `edges`/`onEdgesChange` plumbing from spec 11, no behavioral change, `edgeTypes` still unregistered.
+  - No node editing after creation — confirmed; nodes are created with a permanently empty label (rendered as an "Untitled" placeholder), no rename/resize/delete UI added.
+  - No `<Controls>` panel — confirmed absent from `CanvasFlow`'s JSX.
+  - No persistence — confirmed; `useLiveblocksFlow` still starts from `{ initial: [] }`, no blob/fetch/localStorage calls anywhere in the diff. Node creation only mutates the live in-room Liveblocks state, not any snapshot.
+  - No AI behavior — confirmed, nothing in the diff touches prompts, generation, or `broadcastEvent`/chat.
+- Diff surface matches Dev Notes/QA's claimed file list exactly (`lib/canvas-shapes.ts`+test, `components/editor/canvas-node.tsx`+test, `components/editor/shape-panel.tsx`+test, `components/editor/canvas.tsx`+test, `types/canvas.ts`, `context/ui-context.md`, `context/progress-tracker.md`, this status file — 12 files, 763/-37 lines). `components/ui/*`, `prisma/schema.prisma`, and all API routes are diff-empty. No unexplained scope creep.
+
+### `DEFAULT_NODE_TEXT_COLOR` deviation — sanity check
+
+Confirmed this holds up as a reasonable judgment call, not scope creep: it's not an invented style choice, it's the other half of a value pair `ui-context.md` already documents in one line ("Default node color: #1F1F1F with #EDEDED text"), and it's needed for the very first custom node renderer's label to actually be legible — without it, this spec's own acceptance criterion 7 ("renders every shape as a bordered rectangle with the label centered") would ship with unreadable text. The `NODE_COLORS` 8-color palette and any color-picker UI are correctly still absent — the deviation is scoped to exactly the one paired value needed, nothing more. Treating it the same way spec 10's `CURSOR_COLORS` constant was treated is the right precedent to apply.
+
+### Rough edges — acceptable at this stage, one flagged for human smoke test
+
+- **No live browser verification of drag-and-drop was performed** — expected and unavoidable in this pipeline environment (no interactive browser session), and QA went beyond the unit-test suite's mocked libraries to independently read the real `@xyflow/react` and `@liveblocks/react-flow` source to confirm provider placement and that the `"add"` NodeChange genuinely writes into the room's LiveMap, not just type-compatible with mocks. That closes most of the runtime-correctness risk at the code level, but it is not a substitute for actually seeing a shape land on the canvas. **Flagging this explicitly as a human smoke test before considering this spec fully done**, mirroring spec 11's still-open two-tab room-connection smoke test: drag each of the 6 shapes (rectangle, diamond, circle, pill, cylinder, hexagon) onto the canvas, confirm a bordered-rectangle node appears at roughly the drop position for each, and confirm the node is visible in a second browser tab open on the same project (per spec 11's now-established two-tab verification pattern) to confirm the Liveblocks sync is real end-to-end, not just at the code level.
+- Node labels stay permanently empty (no editing UI yet) — explicitly expected per this spec's scope (renaming is a later spec), not a defect.
+- Neither rough edge blocks a later spec from building correctly on top of this one: `CanvasNode`, `CANVAS_NODE_TYPE`, and the node-creation path are stable and test-guarded for the shape-specific-visuals and node-editing specs that come next.
+
+### progress-tracker.md accuracy
+
+Read in full. The "In Progress" entry for spec 12 accurately lists the actual files added/changed (`lib/canvas-shapes.ts`, `canvas-node.tsx`, `shape-panel.tsx`, `types/canvas.ts`, `canvas.tsx`, `ui-context.md`) and their real responsibilities, matching what the diff actually contains — not an aspirational description. It correctly notes the mechanical check figures (159/159 tests, tsc/eslint/build all passing), matching both Dev Notes and QA's independently-reproduced numbers. No corrections needed before promotion to "Completed."
+
+### PR creation
+
+- `gh auth status` confirms an authenticated session (`ravindrakamble`, `repo` scope) — no blocker.
+- `git branch --show-current` confirms `spec/12-shape-panel` is checked out with one commit ahead of `main` (`f0cd3f2`), so there is real work to hand off.
+- Proceeding to push the branch and open a PR against `main` (not merging).

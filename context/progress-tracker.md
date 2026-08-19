@@ -3,12 +3,25 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 12: Shape Panel — implemented, awaiting QA.
+- Phase 13: Node Shape — not started.
 
 ## Current Goal
-- QA pass on feature spec 12 (Shape Panel) — see "In Progress".
+- Analyst pass on feature spec 13 (Node Shape).
 
 ## Completed
+
+- Feature spec 12: Shape Panel
+  - `lib/canvas-shapes.ts` (new) — shared, non-component logic: `CANVAS_SHAPES` (ordered list), `SHAPE_DEFAULT_SIZES` (per-shape default `{ width, height }` table), `SHAPE_LABELS`, `CANVAS_DRAG_MIME_TYPE`, `serializeShapeDragPayload`/`parseShapeDragPayload` (validates untrusted `dataTransfer` input at the drop boundary), `generateNodeId` (shape + timestamp + counter + a short random suffix to close a low-probability cross-client collision gap), `createDroppedNode`.
+  - `components/editor/canvas-node.tsx` (new) — `CanvasNode`, the first custom node renderer registered for `CANVAS_NODE_TYPE`: bordered rectangle, centered label (or an "Untitled" placeholder), fill/text color from `data.color`/`DEFAULT_NODE_TEXT_COLOR`. No shape-specific SVGs yet (later spec).
+  - `components/editor/shape-panel.tsx` (new) — `ShapePanel`, the floating pill-shaped toolbar (bottom-center, `rounded-full`/`bg-elevated`/`border-surface-border`) with 6 draggable icon buttons (lucide `Square`/`Diamond`/`Circle`/`Pill`/`Cylinder`/`Hexagon`); `dragstart` sets the shape/size `dataTransfer` payload.
+  - `types/canvas.ts` (modified) — added `DEFAULT_NODE_COLOR` (`#1F1F1F`) and `DEFAULT_NODE_TEXT_COLOR` (`#EDEDED`), both per `ui-context.md`'s documented default pairing. No full `NODE_COLORS` palette yet (not needed by this spec).
+  - `components/editor/canvas.tsx` (modified) — wraps `CanvasFlow` in `ReactFlowProvider` (required for `useReactFlow()`/`screenToFlowPosition`, since `<ReactFlow>` doesn't auto-provide that context to its own instantiating component); adds `onDragOver`/`onDrop` directly as `<ReactFlow>` props (verified to land on the real wrapper div via prop passthrough); registers `nodeTypes={{ [CANVAS_NODE_TYPE]: CanvasNode }}`; on drop, adds the new node via `onNodesChange([{ type: "add", item: newNode }])` (the only node-mutation mechanism `useLiveblocksFlow` exposes); renders `<ShapePanel>` in the canvas's existing `relative` wrapper.
+  - `context/ui-context.md` (modified) — documented the new floating shape-panel pill-toolbar convention under Canvas.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (159/159 across 24 files), `npx next build` all pass.
+  - QA: PASS, no bugs or spec gaps found. All 9 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced. Went further than prior specs by reading the real unminified `@liveblocks/react-flow` source to confirm the `"add"` NodeChange genuinely writes into the room's Liveblocks `LiveMap`, and confirmed `ReactFlowProvider` correctly wraps the component calling `useReactFlow()`.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this is the first spec where a user can actually add visible content to the shared canvas — a concrete step toward Success Criterion 2 ("multiple users can collaborate in the same canvas simultaneously"), building on spec 11's room/sync mechanism. Scope check clean against `project-overview.md`'s Out of Scope wall and this spec's own scope limits (no shape-specific SVGs, no edges, no node editing after creation, no `Controls` panel, no persistence, no AI). `DEFAULT_NODE_TEXT_COLOR`'s addition beyond the brief's literal text confirmed as a reasonable, documented judgment call, same precedent as spec 10's `CURSOR_COLORS`. No live browser drag-and-drop verification possible in this pipeline — flagged as an acceptable rough edge, not blocking, recommended as a human smoke test (drag each of the 6 shapes onto the canvas, confirm a node appears at roughly the drop position, confirm visible in a second browser tab) before considering this fully done.
+  - PR opened against `main`: [PR #5](https://github.com/ravindrakamble/ghost-ai/pull/5) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/12-shape-panel.md`.
 
 - Feature spec 11: Base Canvas
   - `components/editor/canvas.tsx` (new) — client-side canvas wrapper: `LiveblocksProvider`/`RoomProvider` (room ID = `project.id`, `initialPresence={{ cursor: null, thinking: false }}`) → `CanvasRoomBoundary` (local-state connection-error fallback via `useErrorListener`, no `react-error-boundary` dependency added) → `ClientSideSuspense` → `CanvasFlow` (`useLiveblocksFlow({ suspense: true, nodes: { initial: [] }, edges: { initial: [] } })` wired into `<ReactFlow connectionMode={ConnectionMode.Loose} fitView>` with `<MiniMap>` and a dot-pattern `<Background>`; no `<Controls>`, no custom node/edge rendering).
@@ -134,19 +147,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- Feature spec 12: Shape Panel
-  - `lib/canvas-shapes.ts` (new) — shared, non-component logic: `CANVAS_SHAPES` (ordered list), `SHAPE_DEFAULT_SIZES` (per-shape default `{ width, height }` table), `SHAPE_LABELS`, `CANVAS_DRAG_MIME_TYPE`, `serializeShapeDragPayload`/`parseShapeDragPayload` (validates untrusted `dataTransfer` input at the drop boundary), `generateNodeId` (shape + timestamp + counter + a short random suffix — see Dev Notes), `createDroppedNode`.
-  - `components/editor/canvas-node.tsx` (new) — `CanvasNode`, the first custom node renderer registered for `CANVAS_NODE_TYPE`: bordered rectangle, centered label (or an "Untitled" placeholder), fill/text color from `data.color`/`DEFAULT_NODE_TEXT_COLOR`. No shape-specific SVGs yet (later spec).
-  - `components/editor/shape-panel.tsx` (new) — `ShapePanel`, the floating pill-shaped toolbar (bottom-center, `rounded-full`/`bg-elevated`/`border-surface-border`) with 6 draggable icon buttons (lucide `Square`/`Diamond`/`Circle`/`Pill`/`Cylinder`/`Hexagon`); `dragstart` sets the shape/size `dataTransfer` payload.
-  - `types/canvas.ts` (modified) — added `DEFAULT_NODE_COLOR` (`#1F1F1F`) and `DEFAULT_NODE_TEXT_COLOR` (`#EDEDED`), both per `ui-context.md`'s documented default pairing. No full `NODE_COLORS` palette yet (not needed by this spec).
-  - `components/editor/canvas.tsx` (modified) — wraps `CanvasFlow` in `ReactFlowProvider` (required for `useReactFlow()`/`screenToFlowPosition`, since `<ReactFlow>` doesn't auto-provide that context to its own instantiating component); adds `onDragOver`/`onDrop` directly as `<ReactFlow>` props (verified to land on the real wrapper div via prop passthrough); registers `nodeTypes={{ [CANVAS_NODE_TYPE]: CanvasNode }}`; on drop, adds the new node via `onNodesChange([{ type: "add", item: newNode }])` (the only node-mutation mechanism `useLiveblocksFlow` exposes); renders `<ShapePanel>` in the canvas's existing `relative` wrapper.
-  - `context/ui-context.md` (modified) — documented the new floating shape-panel pill-toolbar convention under Canvas.
-  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (159/159 across 24 files), `npx next build` all pass.
-  - Full pipeline trail in `context/spec-status/12-shape-panel.md`.
+_(none)_
 
 ## Next Up
 
-- QA and Product Owner review of feature spec 12 (Shape Panel).
+- Analyst pass on feature spec 13 (Node Shape).
 
 ## Open Questions
 
@@ -177,3 +182,4 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
 - Next.js 16.2.6, React 19.2.4, Tailwind v4, shadcn v4.
 - `components/ui/` files are generated — do not modify them.
 - Theme tokens live in `globals.css`; components consume via Tailwind utility names.
+</content>
