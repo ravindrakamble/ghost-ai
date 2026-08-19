@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 11: Base Canvas — complete, merged to `main` via PR #4.
+- Phase 12: Shape Panel — implemented, awaiting QA.
 
 ## Current Goal
-- Start Product Analyst pass on feature spec 12 (Shape Panel) — see "Next Up".
+- QA pass on feature spec 12 (Shape Panel) — see "In Progress".
 
 ## Completed
 
@@ -134,11 +134,19 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None.
+- Feature spec 12: Shape Panel
+  - `lib/canvas-shapes.ts` (new) — shared, non-component logic: `CANVAS_SHAPES` (ordered list), `SHAPE_DEFAULT_SIZES` (per-shape default `{ width, height }` table), `SHAPE_LABELS`, `CANVAS_DRAG_MIME_TYPE`, `serializeShapeDragPayload`/`parseShapeDragPayload` (validates untrusted `dataTransfer` input at the drop boundary), `generateNodeId` (shape + timestamp + counter + a short random suffix — see Dev Notes), `createDroppedNode`.
+  - `components/editor/canvas-node.tsx` (new) — `CanvasNode`, the first custom node renderer registered for `CANVAS_NODE_TYPE`: bordered rectangle, centered label (or an "Untitled" placeholder), fill/text color from `data.color`/`DEFAULT_NODE_TEXT_COLOR`. No shape-specific SVGs yet (later spec).
+  - `components/editor/shape-panel.tsx` (new) — `ShapePanel`, the floating pill-shaped toolbar (bottom-center, `rounded-full`/`bg-elevated`/`border-surface-border`) with 6 draggable icon buttons (lucide `Square`/`Diamond`/`Circle`/`Pill`/`Cylinder`/`Hexagon`); `dragstart` sets the shape/size `dataTransfer` payload.
+  - `types/canvas.ts` (modified) — added `DEFAULT_NODE_COLOR` (`#1F1F1F`) and `DEFAULT_NODE_TEXT_COLOR` (`#EDEDED`), both per `ui-context.md`'s documented default pairing. No full `NODE_COLORS` palette yet (not needed by this spec).
+  - `components/editor/canvas.tsx` (modified) — wraps `CanvasFlow` in `ReactFlowProvider` (required for `useReactFlow()`/`screenToFlowPosition`, since `<ReactFlow>` doesn't auto-provide that context to its own instantiating component); adds `onDragOver`/`onDrop` directly as `<ReactFlow>` props (verified to land on the real wrapper div via prop passthrough); registers `nodeTypes={{ [CANVAS_NODE_TYPE]: CanvasNode }}`; on drop, adds the new node via `onNodesChange([{ type: "add", item: newNode }])` (the only node-mutation mechanism `useLiveblocksFlow` exposes); renders `<ShapePanel>` in the canvas's existing `relative` wrapper.
+  - `context/ui-context.md` (modified) — documented the new floating shape-panel pill-toolbar convention under Canvas.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (159/159 across 24 files), `npx next build` all pass.
+  - Full pipeline trail in `context/spec-status/12-shape-panel.md`.
 
 ## Next Up
 
-- Product Analyst pass on feature spec 12 (Shape Panel).
+- QA and Product Owner review of feature spec 12 (Shape Panel).
 
 ## Open Questions
 
