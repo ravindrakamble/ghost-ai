@@ -89,3 +89,112 @@ This spec sets up the realtime collaboration *infrastructure* only: typed `Prese
 
 - **No live end-to-end verification against the real Liveblocks service.** Per this task's instructions and the brief's Open Questions #2: no `LIVEBLOCKS_SECRET_KEY` exists in this environment. The route's logic, auth/ownership branching, and error handling are unit-tested with the `@liveblocks/node` client mocked; an actual session token issued by and accepted by Liveblocks' real API has not been (and could not be) exercised here. This needs a real Liveblocks project + secret key added to `.env.local` before that final integration check can happen — flagging this up front rather than leaving it for QA to discover as a blocked manual step.
 - Everything under "Out-of-scope callouts" above was left untouched, confirmed by scope: no `RoomProvider`/`LiveblocksProvider`/canvas wiring, no `types/canvas.ts`, no presence UI, no `broadcastEvent`/`LiveList` usage, no `lib/project-access.ts` changes (diff-empty, confirmed), no canvas snapshot/Blob storage code.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Pass — no errors |
+| `npx eslint .` | Pass — 0 errors, 1 pre-existing warning in `.agents/skills/.../__root.tsx` (unrelated to this spec, not touched) |
+| `npx next build` | Pass — build succeeds with `LIVEBLOCKS_SECRET_KEY` unset in `.env.local`, confirming the lazy-client decision holds |
+| `npx vitest run` | Pass — 131/131 tests across 19 files |
+
+### Acceptance criteria checklist
+
+1. `Presence` type in `liveblocks.config.ts` matches `{ cursor: { x: number; y: number } | null; thinking: boolean }` exactly, field name `thinking` — **Pass**.
+2. `UserMeta` type carries user ID, display name, avatar URL, cursor color (`{ id: string; info: { name; avatar; color } }`) — **Pass**.
+3. Cached Liveblocks Node client exported from `lib/liveblocks.ts`, module-level singleton cached on `globalThis`, instantiated once per process (verified by singleton test and by reading the implementation) — **Pass**. Note: instantiation is lazily deferred to first call rather than eager at import time (deliberate, documented decision to keep `next build`'s page-data collection from failing with no secret set); this still satisfies "not re-created per request" since the `globalThis` cache is checked on every call.
+4. `getCursorColor(userId)` in `lib/liveblocks-color.ts` is a pure string-hash → fixed 8-color palette mapping, no randomness/state — **Pass**, confirmed by code read and by `liveblocks-color.test.ts`'s determinism/edge-case tests.
+5. `POST /api/liveblocks-auth` returns 401 with no signed-in session — **Pass**, verified via `getProjectAccess`'s `unauthenticated` discriminant and covered by test.
+6. Route resolves room/project ID from the request body (`{ room }`) and calls `getProjectAccess(room)` — **Pass**.
+7. Route returns 403 when authenticated but neither owner nor collaborator — **Pass**, covered by test.
+8. Room existence check/creation is idempotent via `liveblocks.getOrCreateRoom(roomId, { defaultAccesses: [] })`, confirmed against the real `@liveblocks/node` type definitions (`getOrCreateRoom` is the SDK's own idempotent create-or-fetch primitive) — **Pass**.
+9. On success, returns a Liveblocks session token whose `userInfo` includes name, avatar, and `getCursorColor`-derived color — **Pass**, verified against `Session`/`prepareSession`/`authorize()`'s real SDK types and the route-test's success-path assertions.
+10. No `RoomProvider`/`LiveblocksProvider`/canvas/presence UI added — **Pass**, confirmed via repo-wide grep (no matches outside spec docs) and via the isolated commit diff (`40f4dfc..c6ce0fb`, 11 files, all within `liveblocks.config.ts`/`lib/liveblocks*`/`app/api/liveblocks-auth`/`package.json`/docs).
+11. `npm run build` (`next build`) passes — **Pass**.
+
+All 11 acceptance criteria pass.
+
+### Architecture invariants (`context/architecture-context.md`)
+
+- Realtime Conventions: `Presence` shape matches the pinned spec exactly (`thinking`, not `isThinking`) — confirmed.
+- Invariant 1 (no long-running AI work in request handlers): N/A, not applicable to this spec — confirmed no violation.
+- Invariant 2 (metadata vs. blob storage separation): N/A — no storage code added.
+- Invariant 3 (auth/ownership enforced at every mutation boundary): the route enforces Clerk auth (401) then `getProjectAccess` owner-or-collaborator check (403) before the room-creation side effect (`getOrCreateRoom`) — confirmed enforced ahead of the only mutating call in this route.
+- Invariant 4/5: N/A to this spec.
+
+No invariant violations found.
+
+### Standards compliance (`context/code-standards.md`)
+
+- No `any` usage in changed files (grep confirms) — Pass.
+- `components/ui/*` untouched — confirmed via isolated commit diff.
+- Hex values exist in `lib/liveblocks-color.ts` (`CURSOR_COLORS` palette). These are not Tailwind classes or component styling — they're data values assigned to Liveblocks presence metadata, to be consumed as inline style values by a future spec's presence UI (spec 19), not used in any `className` here. Judged not to violate the "no raw Tailwind color classes / hardcoded hex values" styling rule, since that rule is scoped to component styling and no UI is rendered in this spec. Flagged for awareness, not logged as a bug.
+- Route handler is thin, single-responsibility, uses the shared `errorResponse` helper for consistent response shapes — Pass.
+- Test file conventions (co-located `*.test.ts`, Clerk/Prisma-equivalent dependencies mocked via `vi.mock`/`vi.hoisted`) followed correctly.
+
+### Error handling
+
+- 400 malformed JSON body / missing `room` / non-string `room`.
+- 401 unauthenticated (both the initial `getProjectAccess` check and a defensive re-check after a null `currentUser()` race).
+- 404 project not found, 403 forbidden (authenticated, non-member).
+- 500 when the Liveblocks client can't be constructed (missing secret).
+- 502 when the Liveblocks API call itself throws (room creation or session authorization failure).
+All paths are unit-tested in `app/api/liveblocks-auth/route.test.ts` (12 tests) with the failure precedence documented and justified in Dev Notes decision #4 (a reasonable reading of the brief's Open Questions #4, which explicitly left this as a recommendation rather than a settled requirement).
+
+### Housekeeping
+
+- `context/progress-tracker.md` updated: spec 10 moved into "In Progress" with an accurate, itemized summary of what was built, commands run, and the known live-verification limitation; "Next Up" correctly updated to point at this QA pass. Confirmed via `git diff 40f4dfc c6ce0fb -- context/progress-tracker.md`.
+
+### Other verification performed
+
+- Cross-checked `getOrCreateRoom`, `prepareSession`/`Session.allow`/`Session.authorize`, `AuthResponse` shape, `CreateRoomOptions`/`defaultAccesses`, and the `declare global { interface Liveblocks { ... } }` type-augmentation pattern directly against `node_modules/@liveblocks/node/dist/index.d.ts` and `node_modules/@liveblocks/core`'s type declarations — all match the Dev Notes' claims; nothing hallucinated.
+- Confirmed `@liveblocks/node` and `@liveblocks/client` are genuinely present in `package.json`, `package-lock.json`, and `node_modules/@liveblocks/*`.
+- Confirmed `.env.local` contains only an empty, commented `LIVEBLOCKS_SECRET_KEY=` placeholder (gitignored) — no secret leaked, matches Dev Notes.
+- Per this task's instructions, live end-to-end verification against the real Liveblocks service was not attempted (no `LIVEBLOCKS_SECRET_KEY` provisioned in this environment) — treated as a documented, expected limitation, not a bug.
+
+### Issues found
+
+None. No `[Bug → Dev]` or `[Spec gap → Analyst]` items to log.
+
+### Handoff
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Success criteria fit
+
+This spec is infrastructure-only by explicit design (Analyst Brief scope statement, confirmed by Dev Notes and QA's grep/diff check) — no UI, no `RoomProvider`, no canvas. Judged against `project-overview.md`'s Success Criteria:
+
+- **Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously") is the criterion this spec serves. It does not itself deliver visible collaboration — there is no canvas yet (that's spec 11) — but it delivers the actual authorization boundary that makes shared-room access safe: `getOrCreateRoom(roomId, { defaultAccesses: [] })` means no client can join a Liveblocks room without passing through this route's `getProjectAccess` check first. That's the load-bearing piece spec 11 needs to exist before wiring `RoomProvider`. Consistent with how spec 08 (workspace shell) and spec 09 (share dialog) were each judged in prior rounds as necessary preconditions rather than end-to-end demonstrations of a criterion.
+- No other Success Criterion (1, 3, 4, 5, 6) is touched by this spec, and none needed to be — none of its deliverables claim to.
+- `Presence`/`UserMeta` shapes matter beyond this spec: they're pinned exactly per `architecture-context.md`'s Realtime Conventions (`thinking`, not `isThinking`) and per the brief's Open Question #5 recommendation (`{ id, info: { name, avatar, color } }`), which is the shape spec 19 is documented to consume. Getting this shape right now avoids a costly rework later — confirmed correct by both Dev Notes and QA's read against the real SDK types.
+
+### Scope check against project-overview.md
+
+No crossing into Out of Scope (billing, permission tiers beyond owner/collaborator, versioned spec history, production object storage, mobile). Also cleanly held the line on this spec's own explicit Out-of-scope callouts: no `RoomProvider`/`LiveblocksProvider`/canvas wiring, no `types/canvas.ts`, no presence UI, no `broadcastEvent`/`LiveList` usage, no `lib/project-access.ts` changes (confirmed diff-empty by both Dev and QA). `prisma/schema.prisma` untouched, consistent with the brief's "no Prisma schema changes needed" dependency note — rooms are Liveblocks-managed, not relational.
+
+### Rough edges — acceptable at this stage
+
+- **No live end-to-end verification against the real Liveblocks API** (no `LIVEBLOCKS_SECRET_KEY` provisioned in this environment). This is a human-provisioning gap, not a pipeline defect — same category as spec 09's unopened PR blocker. It's explicitly flagged in Dev Notes and QA's report rather than hidden, and the lazy-client design was specifically chosen so its absence doesn't break `next build`. This does not block spec 11 from building correctly on top of the auth route's *logic* (which is unit-tested against the real SDK's types), but the human should provision a real Liveblocks project/secret before spec 11's `RoomProvider` wiring can be verified end to end — worth surfacing now rather than letting it surface as a surprise blocker two specs from now.
+- **Cursor-color palette and UserMeta shape** were both decisions the spec text left open and the brief flagged as recommendations rather than settled requirements (Open Questions #3, #5). Dev's choices are reasonable, consistent with existing UI tokens and downstream spec 19's documented expectations, and explicitly flagged as "not settled" — appropriate for this stage per `ai-workflow-rules.md`'s incremental philosophy (don't invent unflagged product behavior; do flag genuine ambiguity rather than silently resolving it).
+
+### progress-tracker.md accuracy
+
+The "In Progress" entry for spec 10 accurately reflects what was actually delivered and verified: correct file list, correct framing of the missing-secret-key limitation, correct test/build command results (131/131 tests, build passing with the secret unset). It does not overstate this as "collaboration works" — it correctly scopes the claim to infrastructure. No correction needed to the entry's content itself; per this pipeline's process it should now move from "In Progress" to "Completed" (with the PR link) once a PR exists — see below.
+
+### PR creation — blocked, not attempted
+
+Per this task's instructions, `gh` availability was verified before touching the PR step:
+
+- `git branch -a --list "spec/10-liveblocks-setup"` confirms the branch exists off `main` with one commit ahead (`c6ce0fb`), so there is real work to hand off.
+- `gh --version` and `gh auth status` both returned `command not found` in this shell session — `gh` is not on PATH here, consistent with the known winget-install-needs-new-session issue and the not-yet-completed `gh auth login`.
+
+Per instructions, I am stopping here rather than working around this: no push, no `gh pr create` attempted, and no `progress-tracker.md` "Completed"/"Current Phase"/"Next Up" update made, since that update is gated on a successful PR. The Product Owner review verdict above stands as PASS on the merits — the PR/tracker-update steps are a separate, mechanical blocker for the human to clear (open a new shell session so `gh` picks up PATH, then run `gh auth login`).
