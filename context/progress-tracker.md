@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 10: Liveblocks Setup — complete, merged to `main` via PR #3.
+- Phase 11: Base Canvas — in progress (Senior Developer pass complete, awaiting QA).
 
 ## Current Goal
-- Start Product Analyst pass on feature spec 11 (Base Canvas) — see "Next Up".
+- QA pass on feature spec 11 (Base Canvas) — see "In Progress".
 
 ## Completed
 
@@ -122,11 +122,18 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None.
+- Feature spec 11: Base Canvas
+  - `components/editor/canvas.tsx` (new) — client-side canvas wrapper: `LiveblocksProvider`/`RoomProvider` (room ID = `project.id`, `initialPresence={{ cursor: null, thinking: false }}`) → `CanvasRoomBoundary` (local-state connection-error fallback via `useErrorListener`, no `react-error-boundary` dependency added) → `ClientSideSuspense` → `CanvasFlow` (`useLiveblocksFlow({ suspense: true, nodes: { initial: [] }, edges: { initial: [] } })` wired into `<ReactFlow connectionMode={ConnectionMode.Loose} fitView>` with `<MiniMap>` and a dot-pattern `<Background>`; no `<Controls>`, no custom node/edge rendering).
+  - `types/canvas.ts` (new) — `CanvasNodeData` (`label`/`color`/`shape`), `CanvasEdgeData`, and `CANVAS_NODE_TYPE`/`CANVAS_EDGE_TYPE` identifiers, defined but not yet registered or consumed anywhere (future custom-rendering spec's job).
+  - `components/editor/workspace-shell.tsx` (modified) — renders `<Canvas roomId={project.id} />` in place of the deleted `CanvasPlaceholder`.
+  - `components/editor/canvas-placeholder.tsx` — deleted.
+  - `package.json` — added `@liveblocks/react`, `@liveblocks/react-flow`, `@xyflow/react`.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (136/136 across 21 files), `npx next build` all pass.
+  - Full pipeline trail (Dev Notes) in `context/spec-status/11-base-canvas.md`; not yet reviewed by QA/Product Owner.
 
 ## Next Up
 
-- Product Analyst pass on feature spec 11 (Base Canvas), the first spec to consume spec 10's `Presence`/`UserMeta` types and auth route via `RoomProvider`/`LiveblocksProvider`. `LIVEBLOCKS_SECRET_KEY` is now provisioned and live-verified, so this is unblocked.
+- QA pass on feature spec 11 (Base Canvas).
 
 ## Open Questions
 

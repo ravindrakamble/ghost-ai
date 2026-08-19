@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { AiSidebarPlaceholder } from "@/components/editor/ai-sidebar-placeholder"
-import { CanvasPlaceholder } from "@/components/editor/canvas-placeholder"
+import { Canvas } from "@/components/editor/canvas"
 import { ShareDialog } from "@/components/editor/share-dialog"
 import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
@@ -15,9 +15,11 @@ interface WorkspaceShellProps {
 
 /**
  * `/editor/[roomId]` workspace layout: project-name navbar with share/AI-toggle
- * actions, canvas placeholder, and a slide-over AI sidebar placeholder.
- * Client component because the AI-sidebar toggle and Share dialog need
- * local UI state — no canvas, Liveblocks, or AI chat logic lives here yet.
+ * actions, the Liveblocks-backed canvas, and a slide-over AI sidebar
+ * placeholder. Client component because the AI-sidebar toggle and Share
+ * dialog need local UI state. `project.id` is passed as the canvas's
+ * Liveblocks room ID, per spec 10's convention (room ID = project ID). No
+ * AI chat logic lives here yet.
  *
  * Owns the `useCollaborators` hook (rather than `ShareDialog` owning it
  * internally) so the initial collaborator fetch can be triggered directly
@@ -45,7 +47,7 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
         onOpenShare={handleOpenShare}
       />
       <div className="relative flex flex-1 overflow-hidden">
-        <CanvasPlaceholder />
+        <Canvas roomId={project.id} />
         <AiSidebarPlaceholder isOpen={isAiSidebarOpen} />
       </div>
       <ShareDialog
