@@ -3,12 +3,37 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 4: Project Dialogs
+- Phase 6: Project APIs
 
 ## Current Goal
-- Move to the next feature spec.
+- Feature spec 06 (Project APIs) QA-passed and Product Owner PASS (round 1) — awaiting human review before starting spec 07.
 
 ## Completed
+
+- Feature spec 06: Project APIs
+  - `lib/projects.ts` — `getAuthenticatedUserId`, `getOwnedProjectOrError`, `DEFAULT_PROJECT_NAME` shared auth/ownership helper.
+  - `lib/api-response.ts` — `errorResponse()` envelope helper.
+  - `app/api/projects/route.ts` — `GET` (list owner's projects), `POST` (create; empty name defaults to "Untitled Project").
+  - `app/api/projects/[projectId]/route.ts` — `PATCH` (rename), `DELETE`; both enforce 401/404/403 precedence.
+  - `prisma/schema.prisma` — added `Project`, `ProjectCollaborator` models + `ProjectStatus` enum (migration `20260819021510_add_project_and_collaborator`, applied to the linked database) — this was spec 05's originally-planned schema, never actually shipped until now.
+  - `lib/prisma.ts` — fixed a pre-existing `tsc` error on the (unused) Accelerate branch: Prisma 7's generated client has no zero-arg constructor, so it now passes `{ accelerateUrl: databaseUrl }`.
+  - First spec needing tests: added Vitest + React Testing Library (`vitest.config.mts`; decision recorded in `context/code-standards.md`'s new Testing section; installed with `--legacy-peer-deps` due to a Babel 7/8 peer conflict between `@vitejs/plugin-react` and `shadcn`). 20/20 unit tests passing across 3 files.
+  - `npx tsc --noEmit`, `npx eslint`, `npx next build`, `npx vitest run` all pass — independently re-verified by QA, not just Dev's claim.
+  - QA: PASS, no bugs or spec gaps found (one non-blocking behavioral observation: `POST` treats malformed/missing JSON as an empty body rather than 400 — documented, not a violation).
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Two product-shaped open questions correctly deferred to spec 07's Analyst pass rather than decided here: whether `GET /api/projects` should include collaborator-shared projects, and project-ID vs. Liveblocks room-ID slugging.
+  - Full pipeline trail in `context/spec-status/06-project-apis.md`.
+  - Scope note: backend only, per the brief — no UI wiring, no collaborator routes, no blob storage. Spec 07 owns wiring this into `/editor`.
+
+- Feature spec 05: Prisma Postgres
+  - Installed `prisma`, `@prisma/client`, `@prisma/adapter-pg`, `pg`, `dotenv`, `tsx`, `@types/node`, `@types/pg`.
+  - Linked existing Prisma Postgres database (`db_cmszekrwi4jg519eexz26jiko`) via `prisma postgres link`; wrote `DATABASE_URL` to `.env` (gitignored via existing `.env*` rule, confirmed untracked).
+  - Prisma 7 schema note: `datasource db { url = env(...) }` in `schema.prisma` is no longer supported — connection URL lives only in `prisma.config.ts` (`datasource.url`), and `PrismaClient` takes an `adapter` (or `accelerateUrl` for Accelerate) instead of reading the schema's `url`.
+  - `prisma/schema.prisma`: `prisma-client` generator (output `../generated/prisma`), starter `Author`/`Post` models (1:many). `generated/prisma` is gitignored.
+  - `prisma.config.ts`: schema path, `migrations.path`/`migrations.seed` (`tsx prisma/seed.ts`), `datasource.url` from `process.env.DATABASE_URL`.
+  - `lib/prisma.ts`: singleton `PrismaClient`, branches on `DATABASE_URL` prefix — `PrismaPg` adapter for `postgres://` (this project's case), no adapter for `prisma+postgres://` (Accelerate).
+  - Ran `prisma migrate dev --name init`, `prisma generate`, `prisma db seed` (`prisma/seed.ts` seeds one author + 3 posts) — all succeeded against the live database.
+  - `scripts/verify-prisma.ts` and `prisma/seed.ts` both need `import "dotenv/config"` directly — unlike Prisma CLI commands (which load `.env` via `prisma.config.ts`), a bare `tsx` invocation has no parent process populating `process.env`.
+  - `npx tsx scripts/verify-prisma.ts` → `✅ Connected — found 1 author row(s).`
 
 - Feature spec 04: Project Dialogs
   - `/editor` home now renders an empty-state prompt (heading, description, `New Project` button) instead of the placeholder canvas text; content is not wrapped in a card.
@@ -59,17 +84,31 @@ Update this file whenever the current phase, active feature, or implementation s
 - None.
 
 ## Next Up
-- Feature spec 05 (TBD)
+- Human review of spec 06's Product Owner PASS, then feature spec 07 (Wire Editor Home) — starting its Analyst pass.
 
 ## Open Questions
 
 - None yet.
+
+## Deferred — Production Hardening (after spec 29)
+
+Cross-cutting gaps found during the pre-pipeline review that don't block any individual spec 06–29, so they're logged here rather than wedged into an unrelated spec. Revisit as a dedicated pass once the feature specs are done:
+
+- **Rate limiting** on `/api/ai/design` and `/api/ai/spec` — either endpoint can trigger a paid Gemini + Trigger.dev run; nothing currently stops a project collaborator from spamming them.
+- **Vercel Blob access model** — confirm whether the blob store is public (default) or private. If public, the raw blob URL bypasses the app's own access checks once it leaks anywhere (client state, network tab, logs); the download-route wrapping specs 21/28 build is necessary but not sufficient if the underlying URL itself isn't also protected.
+- **Migrations on deploy** — no spec currently wires `prisma migrate deploy` into the build/deploy step.
+- **Error monitoring / observability** — nothing in the context docs specifies a monitoring tool (e.g. Sentry) for production.
 
 ## Architecture Decisions
 
 - Using shadcn/ui v4 with `@base-ui/react` primitives (not Radix UI) — this is the default for the "base-nova" preset in shadcn v4.
 - Tailwind v4 CSS-first configuration — no `tailwind.config.js`. All tokens in `globals.css` via `@theme inline`.
 - Dark-only: `:root` and `.dark` both carry identical dark values. `<html>` always has `class="dark"`.
+- Pre-spec-06 doc consistency pass (before starting the Analyst/Dev/QA/PO pipeline): resolved three contradictions across the remaining feature specs so no two specs assume different behavior for the same thing.
+  - Presence field standardized on `thinking` (was `isThinking` in spec 10, `thinking` in specs 19/24) — spec 10 updated, decision recorded in `architecture-context.md` under "Realtime Conventions."
+  - Prisma schema path in spec 21 corrected from `prisma/model/project.prisma` to `prisma/schema.prisma` — matches the actual single-file schema delivered in spec 05, not the multi-file `prisma/models/` split spec 05 originally described.
+  - Token expiration: spec 22's design-run token route now sets 1-hour expiration, matching spec 27's spec-run token route (was previously only specified on 27).
+  - New conventions documented in `architecture-context.md`: hooks go in a top-level `hooks/` folder going forward (spec 21's autosave hook updated from `/hook` accordingly; `components/editor/use-project-dialogs.ts` stays as a pre-convention exception), and the `ai-status-feed` / `ai-chat` Liveblocks mechanism is pinned down (`broadcastEvent` for status, Storage `LiveList` for chat) ahead of specs 22/24/25.
 
 ## Session Notes
 
