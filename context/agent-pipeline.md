@@ -12,10 +12,10 @@ For each spec in `context/feature-specs/`, in order:
    - If QA finds bugs → back to Senior Developer, then QA re-checks.
    - If QA finds a spec gap → back to Product Analyst for a brief revision, then Senior Developer picks it up, then QA re-checks.
 4. **Product Owner** reviews a QA-passed implementation against `project-overview.md`'s success criteria and scope.
-   - PASS → the spec is ready for you (the human) to review and mark done.
-   - Changes requested → back to Product Analyst, capped at 2 rounds.
-   - Unresolved after 2 rounds → escalates to you directly.
-5. You review the Product Owner's PASS, spot-check if you want, and move on to the next spec.
+   - PASS → pushes the spec's branch and opens a PR against `main` via `gh pr create`, then the spec is ready for you (the human) to review and merge.
+   - Changes requested → back to Product Analyst, capped at 2 rounds. No PR opened.
+   - Unresolved after 2 rounds → escalates to you directly. No PR opened.
+5. You review the PR, merge (or send it back) yourself. The Product Owner never merges.
 
 Only one spec is in flight at a time. Do not start the next spec's Analyst pass until the current spec has a human-reviewed PASS — this matches `ai-workflow-rules.md`'s "one feature unit at a time" rule and avoids two passes touching the same files concurrently (several specs, especially the canvas ones, share files like `types/canvas.ts`).
 
@@ -41,6 +41,10 @@ Sections accumulate in order as the spec moves through the pipeline:
 
 If a spec bounces back (QA → Dev, QA → Analyst, or PO → Analyst), the returning role appends a new dated section rather than overwriting — keep the full history of a spec's pass through the pipeline visible in one file.
 
+## Version control
+
+Each spec lives on its own branch, `spec/<NN>-<slug>`, created by the Senior Developer at the start of implementation and never touched by Analyst or QA (they don't have Bash/git access). Dev commits its own work there, including any QA-driven bugfix rounds. Nothing is pushed until Product Owner reaches a PASS verdict — at that point PO pushes the branch and opens the PR itself. This means a spec produces at most one open PR, only once it's actually ready for you to look at, never mid-review.
+
 ## Suggested invocation (Claude Code)
 
 ```
@@ -55,8 +59,11 @@ Or drive it as one instruction per spec ("run the full pipeline on spec 05") and
 
 ## Status
 
-Spec 05 (Prisma Postgres) is complete — see `context/progress-tracker.md`. It shipped a single-file `prisma/schema.prisma` rather than the multi-file `prisma/models/` split originally planned; later specs were corrected to reference the real path.
+This file documents the process, not the current state — it doesn't change spec to spec, so it isn't the place to look for "what's done" or "what's next." That lives in `context/progress-tracker.md`, which the Product Owner updates on every PASS (see "Who updates `progress-tracker.md`" below). Check there, not here, for current phase and next spec.
 
-`package.json` still has no test runner configured (Playwright is present as a devDependency but nothing else) — spec 05 didn't need one. The Senior Developer agent is instructed to set up Vitest + React Testing Library on the first spec that actually needs tests and record that decision in `code-standards.md`. Expect that setup work to show up in that spec's Dev Notes as a prerequisite, not a deliverable of the spec itself.
+This file only gets edited when the *process itself* changes — a new role, a different branching model, a change to how status files hand off. If you find yourself updating this file's status just to reflect a spec finishing, that's a sign something in the pipeline isn't updating `progress-tracker.md` correctly — fix that instead of patching this file.
 
-Start the pipeline at **spec 06** (project APIs).
+## Who updates `progress-tracker.md`
+
+- **Senior Developer**, mid-pass: notes the spec under "In Progress." Never writes it under "Completed" — Dev doesn't run again after QA/PO, so it can't know the final verdict.
+- **Product Owner**, only on PASS: moves the spec from "In Progress" to "Completed" (with a one-line summary and the PR URL), and advances "Current Phase" / "Next Up" to the following spec. On CHANGES REQUESTED or ESCALATE, PO leaves it under "In Progress" — it isn't done yet.

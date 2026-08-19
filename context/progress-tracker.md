@@ -3,12 +3,41 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 6: Project APIs
+- Phase 9: Share Dialog — pipeline complete (Analyst → Dev → QA → Product Owner), awaiting human sign-off and PR creation.
 
 ## Current Goal
-- Feature spec 06 (Project APIs) QA-passed and Product Owner PASS (round 1) — awaiting human review before starting spec 07.
+- Feature spec 09 (Share Dialog) passed Product Owner review. Blocked on human action before a PR can be opened — see "Next Up".
 
 ## Completed
+
+- Feature spec 09: Share Dialog
+  - New: `types/collaborator.ts`; `lib/collaborators.ts` (list/invite/remove against `prisma.projectCollaborator`, live Clerk Backend API enrichment, no new local user table); `app/api/projects/[projectId]/collaborators/route.ts` (`GET` owner-or-collaborator, `POST` owner-only); `app/api/projects/[projectId]/collaborators/[collaboratorId]/route.ts` (`DELETE` owner-only); `hooks/use-collaborators.ts`; `components/editor/share-dialog.tsx`.
+  - Modified: `lib/project-access.ts` (`ProjectAccessResult`'s `ok: true` branch now also returns `isOwner: boolean`); `app/editor/[roomId]/page.tsx` (threads `isOwner` through); `components/editor/workspace-navbar.tsx` (Share button now opens the dialog instead of being inert); `components/editor/workspace-shell.tsx` (owns `useCollaborators` + dialog open state; the collaborator fetch is triggered from the Share button's click handler rather than a `useEffect`, to satisfy `eslint-plugin-react-hooks`'s `set-state-in-effect` rule — `ShareDialog` itself is presentational).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (110/110 across 16 files), `npx next build` all pass.
+  - QA: PASS, no bugs or spec gaps found. All 11 acceptance criteria independently re-verified against the code (not just Dev's claim), including confirming the owner-only mutation gate (`getOwnedProjectOrError`) is enforced server-side independent of the client's `isOwner` UI-gating, and that no local user table was introduced.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is the actual mechanism by which a project becomes accessible to anyone besides its owner — the precondition Success Criterion 2 ("multiple users can collaborate") and spec 10 (realtime canvas) depend on. Scope check confirmed clean against `project-overview.md`'s Out of Scope list: no local user table, no email-sending/notification system, no permission tiers beyond owner/collaborator, no Liveblocks/room-membership changes, `prisma/schema.prisma` and `package.json` both diff-empty.
+  - **PR not yet opened.** No `spec/09-share-dialog` branch exists — this spec's work (along with specs 07 and 08's) sits as uncommitted changes on `feat/prisma-postgres-and-project-apis`, which only has committed history through specs 05–06. `gh` CLI is also unavailable in the review environment. Both need human attention before a PR can be created; see "Next Up".
+  - Full pipeline trail in `context/spec-status/09-share-dialog.md`.
+
+- Feature spec 08: Editor Workspace Shell
+  - `app/editor/[roomId]/page.tsx` (new) — async server component. Resolves `lib/project-access.ts#getProjectAccess`; redirects unauthenticated to `/sign-in`, renders `AccessDenied` for missing/unauthorized projects, otherwise renders `WorkspaceShell` with the real project `{ id, name }`.
+  - `lib/project-access.ts` (new) — `getCallerIdentity()` + `getProjectAccess()`, an owner-or-collaborator *view*-access gate kept fully separate from `lib/projects.ts#getOwnedProjectOrError` (owner-only, mutation routes).
+  - `components/editor/access-denied.tsx` (new), `components/editor/workspace-shell.tsx` + `workspace-navbar.tsx` + `canvas-placeholder.tsx` + `ai-sidebar-placeholder.tsx` (new) — static, non-functional workspace layout; AI-sidebar toggle is real local UI state, Share button is inert (spec 09 wires it up).
+  - `components/editor/project-sidebar.tsx` (modified) — reads `useParams().roomId` to highlight the active project in both the owned and shared lists.
+  - Testing infra gap found and fixed: `vitest.setup.ts` (new, wired via `vitest.config.mts`) — jest-dom matchers and RTL `cleanup()` weren't actually active despite being "installed" per spec 06's Testing section (latent gap, only surfaced by this spec's multi-`it` component tests). Documented in `context/code-standards.md`.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (61/61 across 11 files), `npx next build` all pass.
+  - QA: PASS, no bugs or spec gaps found. All 10 acceptance criteria independently re-verified against the code (not just Dev's claim), including grepping for accidental Liveblocks/React Flow imports and confirming the mutation-only owner gate (`getOwnedProjectOrError`) was left untouched.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is the piece that makes "open a project" (Success Criterion 1) real — `/editor/[roomId]` previously had no destination page. No scope creep into Liveblocks/canvas (spec 10), AI chat (specs 20/25/26), or share behavior (spec 09); project-overview.md's Out of Scope wall untouched. `lib/project-access.ts` confirmed cleanly separated from spec 06's mutation-only owner gate, which spec 09/10 depend on.
+  - Full pipeline trail in `context/spec-status/08-editor-workspace-shell.md`.
+
+- Feature spec 07: Wire Editor Home
+  - `app/editor/layout.tsx` is now an async server component: fetches owned + shared projects via new `lib/projects.ts#getProjectsForUser` (Clerk `currentUser()` id + primary email; `ProjectCollaborator` keyed by email) and threads both lists as props through `EditorShell` → `ProjectDialogsProvider` → `ProjectSidebar`. `app/editor/page.tsx` is back to a server component; its "New Project" button moved into a new client leaf, `components/editor/editor-home-empty-state.tsx`.
+  - New `hooks/use-project-actions.ts` replaces the mock `useProjectDialogs` hook: owns dialog state and real create/rename/delete calls against spec 06's `app/api/projects` routes (contracts unchanged). Create navigates using the server-returned project ID (not the cosmetic `slug-suffix` room-ID preview, which stays UI-only). Delete's "active workspace" redirect-vs-refresh check reads `useParams().roomId`, which is a no-op until spec 08 adds `/editor/[roomId]`.
+  - Removed now-dead mock code: `components/editor/use-project-dialogs.ts`, `lib/mock-projects.ts`. `types/project.ts` trimmed to `{ id, name }` (`slug` was never a persisted column; it's derived at render time via `lib/slug.ts`, now including a new `generateShortSuffix()`).
+  - `npx tsc --noEmit`, `npx eslint`, `npx vitest run` (40/40 across 6 files), `npx next build` all pass.
+  - QA: PASS, no bugs or spec gaps found. All 8 acceptance criteria independently verified against the code (not just Dev's claim), including confirming the mock files/references are fully deleted.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed no scope creep into spec 08 (workspace route/access checks), spec 09 (collaborator invite/remove UI), or spec 10 (Liveblocks); `app/api/projects` contracts and `prisma/schema.prisma` confirmed untouched. Navigating to a newly created project currently has no destination page (`/editor/[roomId]` doesn't exist until spec 08) — expected and documented as a known limitation, not a defect of this spec.
+  - Full pipeline trail in `context/spec-status/07-wire-editor-home.md`.
 
 - Feature spec 06: Project APIs
   - `lib/projects.ts` — `getAuthenticatedUserId`, `getOwnedProjectOrError`, `DEFAULT_PROJECT_NAME` shared auth/ownership helper.
@@ -81,10 +110,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None.
+- None. Spec 09 (Share Dialog) has completed the full Analyst → Senior Developer → QA → Product Owner pipeline; only PR creation and human sign-off remain (see "Next Up").
 
 ## Next Up
-- Human review of spec 06's Product Owner PASS, then feature spec 07 (Wire Editor Home) — starting its Analyst pass.
+
+- **Human action needed before spec 09's PR can be opened:** no `spec/09-share-dialog` branch exists (specs 07, 08, and 09's work is currently uncommitted on `feat/prisma-postgres-and-project-apis`, which only has committed history through specs 05–06), and the `gh` CLI is unavailable in the review environment. Once a properly named branch with these commits exists and `gh auth status` succeeds, the PR for spec 09 (and any catch-up PRs needed for 07/08) can be created.
+- After human sign-off on specs 07–09, begin spec 10 (Realtime canvas).
 
 ## Open Questions
 
