@@ -3,6 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceShell } from "./workspace-shell";
 
+// `Canvas` owns a real Liveblocks room connection (`LiveblocksProvider`/
+// `RoomProvider`/`useLiveblocksFlow`) — unsuitable for this component-level
+// test, which only cares that `WorkspaceShell` renders it with the right
+// room ID. Canvas's own internals are covered by `canvas.test.tsx`.
+vi.mock("@/components/editor/canvas", () => ({
+  Canvas: ({ roomId }: { roomId: string }) => <div data-testid="canvas" data-room-id={roomId} />,
+}));
+
 const fetchMock = vi.fn();
 
 beforeEach(() => {
@@ -16,11 +24,11 @@ afterEach(() => {
 });
 
 describe("WorkspaceShell", () => {
-  it("renders the project name, canvas placeholder, and a closed AI sidebar by default", () => {
+  it("renders the project name, the canvas scoped to the project's room, and a closed AI sidebar by default", () => {
     render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
 
     expect(screen.getByRole("heading", { name: "Project One" })).toBeInTheDocument();
-    expect(screen.getByText(/canvas coming soon/i)).toBeInTheDocument();
+    expect(screen.getByTestId("canvas")).toHaveAttribute("data-room-id", "p1");
 
     const aiSidebar = screen.getByText(/ai chat is coming soon/i).closest("aside");
     expect(aiSidebar).toHaveAttribute("aria-hidden", "true");

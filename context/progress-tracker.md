@@ -3,12 +3,24 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 10: Liveblocks Setup — complete, merged to `main` via PR #3.
+- Phase 11: Base Canvas — complete, PR opened (awaiting human review/merge).
 
 ## Current Goal
-- Start Product Analyst pass on feature spec 11 (Base Canvas) — see "Next Up".
+- Start Product Analyst pass on feature spec 12 (Shape Panel) — see "Next Up".
 
 ## Completed
+
+- Feature spec 11: Base Canvas
+  - `components/editor/canvas.tsx` (new) — client-side canvas wrapper: `LiveblocksProvider`/`RoomProvider` (room ID = `project.id`, `initialPresence={{ cursor: null, thinking: false }}`) → `CanvasRoomBoundary` (local-state connection-error fallback via `useErrorListener`, no `react-error-boundary` dependency added) → `ClientSideSuspense` → `CanvasFlow` (`useLiveblocksFlow({ suspense: true, nodes: { initial: [] }, edges: { initial: [] } })` wired into `<ReactFlow connectionMode={ConnectionMode.Loose} fitView>` with `<MiniMap>` and a dot-pattern `<Background>`; no `<Controls>`, no custom node/edge rendering).
+  - `types/canvas.ts` (new) — `CanvasNodeData` (`label`/`color`/`shape`), `CanvasEdgeData`, and `CANVAS_NODE_TYPE`/`CANVAS_EDGE_TYPE` identifiers, defined but not yet registered or consumed anywhere (future custom-rendering spec's job).
+  - `components/editor/workspace-shell.tsx` (modified) — renders `<Canvas roomId={project.id} />` in place of the deleted `CanvasPlaceholder`.
+  - `components/editor/canvas-placeholder.tsx` — deleted, no remaining references.
+  - `package.json` — added `@liveblocks/react`, `@liveblocks/react-flow`, `@xyflow/react`.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (136/136 across 21 files), `npx next build` all pass.
+  - QA: PASS, no bugs or spec gaps found. All 10 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced, `canvas-placeholder.tsx` confirmed deleted with no remaining references.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this is the first spec where the collaboration mechanism behind Success Criterion 2 is wired end to end at the code level (same project → same Liveblocks room → synced node/edge state), building on spec 09 (collaborator access) and spec 10 (room auth). Scope check clean against `project-overview.md`'s Out of Scope wall and this spec's own Scope Limits (no `Controls`, no custom node/edge rendering, no persistence, no AI behavior). `types/canvas.ts`'s defined-but-unconsumed state confirmed as a reasonable, test-guarded interim decision rather than dead code. No live browser/multiplayer verification possible in this pipeline (no interactive session) — flagged as an acceptable rough edge, not blocking, recommended as a human smoke test before specs 19+ (presence/cursors) build further on this room-connection assumption.
+  - Opened via [PR #4](https://github.com/ravindrakamble/ghost-ai/pull/4) — human review/merge pending.
+  - Full pipeline trail in `context/spec-status/11-base-canvas.md`.
 
 - Feature spec 10: Liveblocks Setup
   - `liveblocks.config.ts` (root) — `Presence` (`cursor: { x, y } | null`, `thinking: boolean`) and `UserMeta` (`{ id: string; info: { name, avatar, color } }`) types, global type augmentation.
@@ -126,7 +138,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- Product Analyst pass on feature spec 11 (Base Canvas), the first spec to consume spec 10's `Presence`/`UserMeta` types and auth route via `RoomProvider`/`LiveblocksProvider`. `LIVEBLOCKS_SECRET_KEY` is now provisioned and live-verified, so this is unblocked.
+- Product Analyst pass on feature spec 12 (Shape Panel).
 
 ## Open Questions
 
