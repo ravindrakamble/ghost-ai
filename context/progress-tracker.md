@@ -3,12 +3,24 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 9: Share Dialog — pipeline complete (Analyst → Dev → QA → Product Owner), awaiting human sign-off and PR creation.
+- Phase 10: Liveblocks Setup — complete, merged to `main` via PR #3.
 
 ## Current Goal
-- Feature spec 09 (Share Dialog) passed Product Owner review. Blocked on human action before a PR can be opened — see "Next Up".
+- Start Product Analyst pass on feature spec 11 (Base Canvas) — see "Next Up".
 
 ## Completed
+
+- Feature spec 10: Liveblocks Setup
+  - `liveblocks.config.ts` (root) — `Presence` (`cursor: { x, y } | null`, `thinking: boolean`) and `UserMeta` (`{ id: string; info: { name, avatar, color } }`) types, global type augmentation.
+  - `lib/liveblocks.ts` — `getLiveblocksClient()`, a lazily-instantiated, `globalThis`-cached `@liveblocks/node` singleton (deferred so a missing `LIVEBLOCKS_SECRET_KEY` doesn't break `next build`'s page-data collection); `lib/liveblocks-color.ts` — pure `getCursorColor(userId)` string-hash → fixed 8-color palette mapping.
+  - `app/api/liveblocks-auth/route.ts` — `POST` handler: Clerk auth (401) → `getProjectAccess` (404/403) → `getLiveblocksClient()` (500 if unconfigured) → idempotent `getOrCreateRoom(roomId, { defaultAccesses: [] })` → `prepareSession(...).allow(roomId, ["room:write"]).authorize()`.
+  - `package.json` — added `@liveblocks/node` and `@liveblocks/client` (spec's premise that these were pre-installed did not hold).
+  - `.env.local` — added an empty `LIVEBLOCKS_SECRET_KEY` placeholder; no live Liveblocks project/secret exists in this environment, so the auth route is unit-tested but not end-to-end verified against the real Liveblocks service — flagged as a human-provisioning gap before spec 11's `RoomProvider` wiring can be verified live.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (131/131 across 19 files), `npx next build` all pass (build confirmed to pass even with `LIVEBLOCKS_SECRET_KEY` unset).
+  - QA: PASS, no bugs or spec gaps found. All 11 acceptance criteria independently re-verified against the code, including cross-checking the Liveblocks SDK usage (`getOrCreateRoom`, `prepareSession`/`Session.allow`/`authorize`) directly against `@liveblocks/node`'s real type definitions.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec delivers the authorization boundary (`getOrCreateRoom(roomId, { defaultAccesses: [] })`) that makes spec 11's shared-room canvas access safe, without itself adding any UI/canvas/`RoomProvider` — consistent with how specs 08/09 were judged as necessary preconditions rather than end-to-end demonstrations of Success Criterion 2.
+  - Merged to `main` via [PR #3](https://github.com/ravindrakamble/ghost-ai/pull/3).
+  - Full pipeline trail in `context/spec-status/10-liveblocks-setup.md`.
 
 - Feature spec 09: Share Dialog
   - New: `types/collaborator.ts`; `lib/collaborators.ts` (list/invite/remove against `prisma.projectCollaborator`, live Clerk Backend API enrichment, no new local user table); `app/api/projects/[projectId]/collaborators/route.ts` (`GET` owner-or-collaborator, `POST` owner-only); `app/api/projects/[projectId]/collaborators/[collaboratorId]/route.ts` (`DELETE` owner-only); `hooks/use-collaborators.ts`; `components/editor/share-dialog.tsx`.
@@ -110,16 +122,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- Feature spec 10: Liveblocks Setup — Senior Developer pass complete on branch `spec/10-liveblocks-setup` (off `main`, which now includes specs 05–09 merged via PR #1 and PR #2). Awaiting QA.
-  - New: `liveblocks.config.ts` (root) — `Presence`/`UserMeta` types + global Liveblocks type augmentation, per `architecture-context.md`'s Realtime Conventions; `lib/liveblocks.ts` — cached `@liveblocks/node` client (lazy singleton, mirrors `lib/prisma.ts`'s pattern but defers instantiation to first call so a missing secret doesn't break `next build`'s page-data collection); `lib/liveblocks-color.ts` — deterministic `getCursorColor(userId)` against a locally chosen fixed palette; `app/api/liveblocks-auth/route.ts` — `POST` handler wiring Clerk auth + `getProjectAccess` + idempotent room creation + session token issuance.
-  - `package.json` — added `@liveblocks/node` and `@liveblocks/client` (spec's premise that these were already installed did not hold — see spec's Open Questions #1).
-  - `.env.local` — added an empty `LIVEBLOCKS_SECRET_KEY` placeholder with a comment; no live Liveblocks project/secret exists in this environment (spec's Open Questions #2), so the auth route is type-checked/unit-tested but not verified end-to-end against the real Liveblocks service.
-  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (131/131 across 19 files), `npx next build` all pass — build confirmed to pass even with `LIVEBLOCKS_SECRET_KEY` unset.
-  - Full pipeline trail in `context/spec-status/10-liveblocks-setup.md`.
+- None.
 
 ## Next Up
 
-- QA pass on spec 10 (Liveblocks Setup).
+- Product Analyst pass on feature spec 11 (Base Canvas), the first spec to consume spec 10's `Presence`/`UserMeta` types and auth route via `RoomProvider`/`LiveblocksProvider`. Before this can be verified end-to-end, a real Liveblocks project + `LIVEBLOCKS_SECRET_KEY` needs to be provisioned into `.env.local` (currently an empty placeholder — see spec 10's known limitations).
 
 ## Open Questions
 
