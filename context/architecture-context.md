@@ -59,6 +59,19 @@
 - Execution: durable background task via Trigger.dev.
 - Output: Markdown technical spec saved to the filesystem and linked to the project in the database.
 
+## Realtime Conventions
+
+Resolved ahead of spec 10 so later specs (19, 22, 24, 25) don't each make a different call:
+
+- **Presence shape**: `{ cursor: { x: number; y: number } | null; thinking: boolean }`. Field is `thinking`, not `isThinking`.
+- **`ai-status-feed`**: latest-message-only, no history needed by any consuming spec. Implemented via Liveblocks `room.broadcastEvent` — ephemeral, no Storage write.
+- **`ai-chat`**: ordered, persisted, and must replay to participants who join mid-conversation. Implemented via a Liveblocks Storage `LiveList` — not `broadcastEvent`, since that has no replay/history for new joiners.
+- Both stay room-scoped and separate from each other; neither is a general-purpose event bus.
+
+## Hooks Convention
+
+New client-side hooks go in a top-level `hooks/` folder. One pre-existing exception: `components/editor/use-project-dialogs.ts` (from spec 04, before this convention was set) stays where it is rather than being moved as a side effect of an unrelated spec.
+
 ## Invariants
 
 1. Request handlers do not run long-lived AI work — that belongs in background tasks.

@@ -41,6 +41,16 @@
 - Do not store large generated content directly in the database.
 - Task run records are first-class relational data — treat ownership and run IDs as verified before any token issuance.
 
+## Testing
+
+- Framework: Vitest, set up in spec 06 (first spec needing tests). Config at `vitest.config.mts` (`.mts` to avoid the ESM-in-CommonJS config warning; uses `import.meta.dirname`, not `__dirname`).
+- Default test environment is `node` (most tests so far are API route handlers / server-side utilities). For component tests that need a DOM, add a `// @vitest-environment jsdom` docblock at the top of that test file — `jsdom`, `@testing-library/react`, `@testing-library/dom`, and `@testing-library/jest-dom` are installed for this.
+- `@vitejs/plugin-react` and the testing-library packages were installed with `--legacy-peer-deps` due to a peer conflict between `@vitejs/plugin-react`'s Babel 8 optional peer and `shadcn`'s Babel 7 dependency chain. Re-check this if either package is upgraded.
+- Playwright remains reserved for canvas/interaction-level checks, not general unit coverage.
+- Test files live next to the code they cover, named `*.test.ts`/`*.test.tsx` (e.g. `app/api/projects/route.test.ts`).
+- Mock Clerk's `auth()` (`@clerk/nextjs/server`) and the Prisma singleton (`@/lib/prisma`) with `vi.mock` + `vi.hoisted` in route handler tests — do not hit a real database or a real Clerk session in unit tests.
+- Run with `npm test` (`vitest run`).
+
 ## File Organization
 
 - `lib/` — shared infrastructure: Prisma client, auth helpers, utilities.
