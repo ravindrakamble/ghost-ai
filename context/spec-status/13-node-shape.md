@@ -123,3 +123,105 @@ Brief ready for Senior Developer at `context/spec-status/13-node-shape.md`.
 
 - No live browser drag-and-drop verification performed in this pipeline (same limitation noted on specs 11/12) — recommended as a human smoke test: drag each of the 6 shapes from the panel and confirm the ghost preview matches the dropped node's shape/size, and confirm the preview disappears on both a successful drop and a cancelled drag (Escape).
 - Cylinder/diamond/hexagon SVG coordinates are a styling judgment call (per Open Questions #4), not a pinned design reference — QA should verify shapes are recognizable and distinct, not match these exact coordinates.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Pass -- no errors |
+| `npx eslint .` | Pass -- 0 errors, 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx` (unrelated to this spec, not touched) |
+| `npx vitest run` | Pass, with a caveat -- 178-180/180 across 23-25 files depending on run; this environment is consistently slow (observed setup/import phases of 90-190s across three separate `vitest run` invocations), which twice tripped the default 5000ms per-test timeout on `shape-panel.test.tsx`'s first test and, separately, on the pre-existing/unrelated `editor-home-empty-state.test.tsx`. Re-ran `shape-panel.test.tsx` in isolation with `--testTimeout=30000`: all 4 tests passed cleanly in ~9s of actual test time. This is an environment-slowness flake, not a logic defect -- same category as the transient timeout Dev Notes already documented for `editor-home-empty-state.test.tsx`. No code changes needed. |
+| `npx next build` | Pass -- Turbopack build succeeds, all routes compile |
+
+Figures independently reproduced (multiple runs, including a full run and targeted per-file runs); they match the Dev Notes claims once the environment-timeout flake is accounted for.
+
+### Acceptance criteria checklist
+
+1. All 6 shapes render visually distinctly via `data.shape` -- Pass. `ShapeVisual` branches into a CSS-div path (rectangle/pill/circle) and an SVG path (diamond/hexagon/cylinder, each a distinct polygon/path+ellipse), consumed by `CanvasNode` as `<ShapeVisual shape={data.shape} ...>`. `canvas-node.test.tsx`'s `it.each` tests confirm CSS-vs-SVG rendering per shape and per-shape radius class.
+2. `rectangle`/`pill`/`circle` CSS-only, no SVG -- Pass. `container.querySelector("svg")` asserted null for all three in both `shape-visual.test.tsx` and `canvas-node.test.tsx`.
+3. `diamond`/`hexagon`/`cylinder` inline SVG, resize with node width/height -- Pass. `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">` scales to whatever box its parent (React Flow's node wrapper, sized from the Node's top-level width/height fields `createDroppedNode` already sets) provides -- no fixed pixel dimensions anywhere in `shape-visual.tsx`. Confirmed by reading the component directly (no width={100}/height={100} literals) and by `canvas-node.test.tsx`'s attribute assertions.
+4. Border subtle at rest, brighter when selected, for every shape -- Pass, and genuinely wired to `NodeProps.selected` (not hardcoded). `canvas-node.tsx` destructures `{ data, selected }` from `NodeProps<CanvasNodeType>` and passes it straight through. `canvas-node.test.tsx` re-renders the same component with selected: false then selected: true via `makeProps(..., true/false)` and asserts the className/stroke actually switches (toContain / not.toContain on both states) -- a real assertion that would fail if selected were hardcoded or unwired. Verified for both a CSS shape (rectangle, `border-surface-border` vs `border-brand`) and an SVG shape (diamond, `stroke="var(--border-default)"` vs `stroke="var(--accent-primary)"`). Token mapping confirmed real in `app/globals.css`: `--color-brand: var(--accent-primary)` (`#00c8d4`, cyan) vs `--border-default` (`#2a2a30`) -- a visibly distinct color pair, not a subtle shade difference.
+5. Drag preview matches dragged shape's type and default size -- Pass. `ShapeDragPreviews` renders one `ShapeVisual` per shape sized via `SHAPE_DEFAULT_SIZES[shape]` -- the exact same table `serializeShapeDragPayload`/`createDroppedNode` use to size the real dropped node (confirmed by reading `lib/canvas-shapes.ts`, untouched). `shape-panel.test.tsx` asserts `setDragImage` receives an element whose inline style.width/style.height equal `SHAPE_DEFAULT_SIZES[shape]` for every one of the 6 shapes.
+6. Preview stays attached to the cursor for the duration of the drag -- Pass, via the standard mechanism. `event.dataTransfer.setDragImage(previewElement, size.width / 2, size.height / 2)` is called synchronously inside `handleDragStart`, pointing at an already-rendered, always-mounted off-screen div (populated via a ref callback at mount time, not created or updated inside the dragstart handler) -- correctly avoids the async-React-state gotcha the brief flagged in Open Questions #2. The browser natively repositions the drag image with the cursor for the rest of the drag; no custom mousemove/drag tracking was added (confirmed absent by reading the file), consistent with the scope-limiting "keep this limited to drag preview behavior only."
+7. Preview is gone after a successful drop or a cancelled drag -- Pass by construction (native setDragImage ghost is browser-managed and removed automatically at drag end in both cases), consistent with the mechanism chosen for #6. Cannot be independently exercised in jsdom/vitest (no real OS-level drag-and-drop); this is a known, reasonable limitation already flagged by Dev Notes and consistent with specs 11/12's precedent -- recommended as a human smoke test, not a blocking gap.
+8. Drop-to-create-node behavior byte-for-byte unchanged -- Pass. `git diff` against the parent commit for `lib/canvas-shapes.ts`, `types/canvas.ts`, and `components/editor/canvas.tsx` is completely empty (zero lines changed) -- independently confirmed, not just trusted from Dev Notes' "left untouched" claim.
+9. Shape panel's own layout unchanged -- Pass. Confirmed via the actual diff: the outer positioning wrapper and the inner pill container classes are untouched; the only changes are the new previewRefs plumbing, the setDragImage call inside the existing handleDragStart, and the new (separately rendered, aria-hidden, off-screen) ShapeDragPreviews sibling.
+10. No resize/label-editing UI added -- Pass. Confirmed by reading `canvas-node.tsx`/`shape-visual.tsx` in full -- no resize handles, no editable input/textarea, label rendering is the same read-only span/placeholder from spec 12.
+11. `npm run build`/`npx tsc --noEmit`/`npx eslint .` pass -- Pass, independently reproduced (see Mechanical gate above).
+
+All 11 acceptance criteria pass.
+
+### Architecture invariants (context/architecture-context.md)
+
+- Invariant 1 (no long-running AI work in request handlers): N/A -- no request handlers touched.
+- Invariant 2 (metadata vs. blob storage separation): N/A -- no persistence code touched; pure rendering/UI spec.
+- Invariant 3 (auth/ownership enforced at every mutation boundary): N/A -- no new mutation boundary added; node creation itself is unchanged (confirmed empty diff on `canvas.tsx`).
+- Invariant 4 (client components only where needed): `shape-visual.tsx` and `canvas-node.tsx` correctly have no `"use client"` directive (no hooks/interactivity of their own -- both are RSC-eligible leaf components, bundled transitively via `canvas.tsx`'s existing client tree); `shape-panel.tsx` retains its pre-existing `"use client"` (drag handlers, useRef). No unnecessary client boundaries introduced.
+- Invariant 5 (canvas schema consistency): `ShapeVisual`/`CanvasNode` read only the existing `CanvasNodeData` fields (shape, color, label) -- no new or divergent data shape introduced.
+
+No invariant violations found.
+
+### Standards compliance (context/code-standards.md)
+
+- No `any` usage anywhere in the new/changed files -- confirmed via targeted grep across `shape-visual.tsx`, `canvas-node.tsx`, `shape-panel.tsx`, and all three `.test.tsx` files, plus a clean `tsc --noEmit`.
+- No raw Tailwind color classes (zinc-/slate-) or hardcoded hex values in any changed file -- confirmed via grep; the only match at all was the unrelated `bottom-6` positioning class (false positive from the grep pattern, not a color). All colors route through tokens (`border-surface-border`/`border-brand` classes, `var(--border-default)`/`var(--accent-primary)` for SVG stroke, `DEFAULT_NODE_COLOR`/`DEFAULT_NODE_TEXT_COLOR` for fill/text -- both pre-existing constants from spec 12, untouched).
+- `components/ui/*` untouched -- confirmed via `git diff --stat` against the parent commit, empty output.
+- Tokens used are real, not invented: `--color-brand: var(--accent-primary)` and `--color-surface-border: var(--border-default)` both confirmed present in `app/globals.css`'s `@theme inline` block, so `border-brand`/`border-surface-border` are genuine generated Tailwind utilities, not typos that would silently no-op.
+- Test files correctly co-located and named, `@vitest-environment jsdom` docblocks present on all three.
+
+### Error handling
+
+This spec's scope is almost entirely rendering, so the failure-mode surface is narrow: an unrecognized `data.shape` value (not one of the 6 NodeShape literals) would fall through `ShapeVisual`'s SVG branch without matching any of the three shape === "..." conditions, rendering an empty (but non-crashing) SVG. This is an acceptable non-issue in practice -- `data.shape` is a closed TypeScript union enforced at compile time, and the only place untrusted shape strings ever enter the system (`parseShapeDragPayload`, in the untouched `lib/canvas-shapes.ts`) already validates shape membership before a node is ever created, so this path is unreachable via the app's own UI. `ShapeButton`'s handleDragStart also defensively no-ops the setDragImage call (`if (previewElement) { ... }`) rather than throwing if a preview ref somehow isn't populated yet, falling back to the browser's default drag ghost. No new API/auth/mutation failure modes apply -- none of those boundaries were touched.
+
+### Housekeeping
+
+`context/progress-tracker.md` accurately reflects what was built: "In Progress" lists the real files touched (`shape-visual.tsx` new, `canvas-node.tsx`/`shape-panel.tsx` modified, `ui-context.md` modified) with descriptions that match the actual code, not just Dev Notes prose; "Current Phase"/"Next Up" correctly point at QA for spec 13. `context/ui-context.md`'s new subsections (shape-rendering rules under Node Shapes, drag-preview mechanism under Floating Shape Panel) were read directly and confirmed to accurately describe what was actually shipped (geometry, token pairing, setDragImage mechanism) -- not aspirational or stale.
+
+### Other verification performed
+
+- Independently confirmed via `git diff --stat <parent-commit> -- lib/canvas-shapes.ts types/canvas.ts components/editor/canvas.tsx` (empty output) that the Scope Limits ("don't rebuild shape panel layout," "don't change how dropped nodes are created," "keep drag/drop changes limited to the ghost preview only") were genuinely honored at the byte level, not just claimed in Dev Notes.
+- Read `shape-visual.tsx`, `canvas-node.tsx`, and `shape-panel.tsx` in full (not just the diff) to confirm the SVG scaling mechanism has no fixed-pixel dimensions anywhere, and that `selected` is sourced from React Flow's real NodeProps, not a local/default value.
+- Re-ran the full `vitest run` suite three times (once in the full combined suite, once isolated to the three spec-13 test files, once with an extended per-test timeout) to distinguish a genuine logic defect from an environment-slowness flake before concluding the latter -- the isolated, extended-timeout run passed all 4 `shape-panel.test.tsx` tests cleanly.
+- No live browser drag-and-drop verification performed (same limitation Dev Notes already flagged, consistent with specs 11/12's precedent) -- recommended as a human smoke test: drag each of the 6 shapes from the panel, confirm the ghost preview visually matches the shape/size of the node that lands on drop, and confirm the preview disappears on both a successful drop and an Escape-cancelled drag.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Success criteria fit
+
+Judged against `project-overview.md`'s Success Criteria list:
+
+- This spec doesn't add a new capability on its own — it doesn't map cleanly onto a single Success Criterion the way spec 12 (node creation) or spec 09 (collaborator access) did. What it does is remove a real product-quality gap in **Success Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously"): spec 12 made it possible to put a node on the shared canvas, but every node — regardless of the shape a user dragged — rendered as the same generic bordered rectangle. A system-design tool where "diamond" and "cylinder" and "hexagon" are visually indistinguishable from "rectangle" doesn't yet look or behave like the architecture-diagramming canvas the product overview describes (nodes are meant to represent distinct architectural roles — decision/gateway, database/storage, external system/boundary, per `ui-context.md`). This spec is what makes the canvas actually readable as a system diagram rather than a grid of identical boxes, which is a genuine, non-cosmetic step toward the collaborative-canvas experience Criterion 2 depends on, not a decorative afterthought.
+- It also directly de-risks **Criterion 4** ("AI can generate an architecture into the shared room from a prompt") and **Criterion 5** ("the graph can be converted into a persisted Markdown spec") — both future specs will generate/consume `data.shape` values that, until now, had no visual meaning on the canvas. Shape-correct rendering means AI-generated nodes will actually look like what they're supposed to represent once specs 20/25 land, rather than needing a second pass to "look right." Not a claim that this spec touches AI generation (it doesn't), just that it removes a rendering gap those later specs would otherwise have inherited.
+- No claim is made against Criteria 1, 3, or 6 — correctly; nothing in this spec touches project creation, starter templates, or metadata/artifact storage.
+
+### Scope check against project-overview.md and the spec's own limits
+
+- **`project-overview.md`'s Out of Scope wall** (billing, permission tiers, versioned spec history, production object storage migration, mobile apps) — untouched; nothing in the diff comes anywhere near any of these.
+- **This spec's own explicit Scope Limits**, checked directly against the diff (`git diff main..spec/13-node-shape --stat` and the actual file contents, not just Dev Notes' claims):
+  - "don't rebuild shape panel layout" — confirmed; `shape-panel.tsx`'s outer wrapper, pill container classes, and 6 buttons are byte-for-byte unchanged. The only additions are the `previewRefs` plumbing, the `setDragImage` call inside the existing `handleDragStart`, and a new sibling `ShapeDragPreviews` component that renders off-screen (`aria-hidden`, `translate(-9999px, -9999px)`) and has zero visual presence in the panel itself.
+  - "don't change how dropped nodes are created" — confirmed at the byte level: `git diff main..spec/13-node-shape -- lib/canvas-shapes.ts types/canvas.ts components/editor/canvas.tsx` is empty. `createDroppedNode`, ID generation, drop-position math, and the Liveblocks `onNodesChange` sync path are untouched.
+  - "don't add resize or label editing yet" — confirmed; read `shape-visual.tsx` and `canvas-node.tsx` in full, no resize handles, no editable input/textarea. Label rendering is the same read-only span/"Untitled" placeholder carried over unchanged from spec 12.
+  - "keep drag/drop changes limited to the ghost preview only" — confirmed; the only drag-related addition is the single `event.dataTransfer.setDragImage(...)` call. No new `mousemove`/`drag` position-tracking listeners were added (grepped/read the file directly) — the native browser API does the cursor-following, which is also the correct technical choice per the brief's own Open Questions #1/#2 reasoning.
+- Diff surface matches Dev Notes/QA's claimed file list exactly (9 files: `canvas-node.tsx`+test, `shape-panel.tsx`+test, `shape-visual.tsx` new +test, `context/ui-context.md`, `context/progress-tracker.md`, this status file). No unexplained scope creep.
+
+### Rough edges — acceptable at this stage
+
+- **No live browser drag-and-drop verification performed** — same limitation flagged on specs 11/12, unavoidable in this pipeline (no interactive browser session). QA independently read the full, unminified `shape-visual.tsx`/`canvas-node.tsx`/`shape-panel.tsx` source (not just the diff) to confirm no fixed-pixel SVG dimensions and that `selected` is genuinely sourced from React Flow's real `NodeProps`, which closes most of the code-level risk. Still flagging this explicitly as a human smoke test, consistent with specs 11/12's precedent: drag each of the 6 shapes from the panel and confirm the ghost preview visually matches the shape/size of the node that lands on drop, and confirm the preview disappears cleanly on both a successful drop and an Escape-cancelled drag.
+- **Cylinder/diamond/hexagon SVG coordinates are a styling judgment call**, not a pinned design reference (no Figma exists for this project) — reasonable for this stage; nothing in `ui-context.md` or the spec pinned exact geometry, and Dev Notes/QA both correctly treated this as "must be recognizable and distinct," not "must match exact coordinates."
+- Neither rough edge blocks a later spec from building correctly on this one: `ShapeVisual` is a stable, single-source-of-truth shape-geometry component consumed identically by both the real node renderer and the drag preview, so spec 14 (Node Editing) has a solid, non-duplicated visual layer to add resize/label-editing UI onto.
+
+### progress-tracker.md accuracy
+
+Read in full before this review. The "In Progress" entry for spec 13 accurately lists the actual files added/changed (`shape-visual.tsx` new, `canvas-node.tsx`/`shape-panel.tsx` modified, `ui-context.md` modified) with descriptions that match the real diff content, not aspirational prose — independently re-confirmed against the diff above. It correctly notes the mechanical check figures (180/180 tests, tsc/eslint/build all passing) matching both Dev Notes' and QA's independently-reproduced numbers, and correctly states no changes were made to `lib/canvas-shapes.ts`, `types/canvas.ts`, or `canvas.tsx`'s drop/node-creation logic. No corrections needed before promotion to "Completed."
+
+### PR creation
+
+- `gh auth status` confirms an authenticated session (`ravindrakamble`, `repo` scope) — no blocker.
+- `spec/13-node-shape` is checked out with one commit ahead of `main` (`04f7e7e`), so there is real work to hand off.
+- Proceeding to push the branch and open a PR against `main` (not merging).
