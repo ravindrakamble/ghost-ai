@@ -1,0 +1,91 @@
+# Spec 10 — Liveblocks Setup
+
+## Analyst Brief
+
+### Scope statement
+
+This spec sets up the realtime collaboration *infrastructure* only: typed `Presence`/`UserMeta` definitions in `liveblocks.config.ts`, a cached Liveblocks Node client plus a deterministic user-ID-to-cursor-color helper in `lib/`, and an authenticated `POST /api/liveblocks-auth` route that verifies project access (via the existing access helper) and issues a Liveblocks room session token. It delivers no UI, no canvas, and no room-consuming component — those belong to later specs.
+
+### Concrete deliverables
+
+- `liveblocks.config.ts` (project root, per the spec's explicit path) — `Presence` type (`cursor: { x: number; y: number } | null`, `thinking: boolean` — this exact shape and field name is already pinned in `architecture-context.md`'s "Realtime Conventions" section specifically so this spec doesn't have to re-decide it) and `UserMeta` type (user ID, display name, avatar URL, cursor color).
+- `lib/liveblocks.ts` (or an equivalently single-purpose split, e.g. `lib/liveblocks.ts` + `lib/liveblocks-color.ts`) — a module-level cached `Liveblocks` node client (from `@liveblocks/node`, keyed off a secret key env var), following the same singleton pattern as `lib/prisma.ts`, plus a pure `getCursorColor(userId: string): string` helper that deterministically maps a user ID to one color from a fixed palette.
+- `app/api/liveblocks-auth/route.ts` (new) — `POST` handler: Clerk auth check, `getProjectAccess` (from `lib/project-access.ts`) call using the room ID as the project ID, room existence check/creation, session token issuance with user name/avatar/color.
+- `package.json` — new `@liveblocks/*` dependencies (see Open Questions — the spec's claim that these are "already installed" does not match the current lockfile).
+- Env var addition (`.env` / `.env.local`) for a Liveblocks secret key — currently absent from the repo entirely (see Open Questions).
+
+### Acceptance criteria
+
+1. `liveblocks.config.ts` at the project root defines a `Presence` type with `cursor: { x: number; y: number } | null` and `thinking: boolean`, matching `architecture-context.md`'s Realtime Conventions exactly (field name `thinking`, not `isThinking`).
+2. `liveblocks.config.ts` defines a `UserMeta` type carrying user ID, display name, avatar URL, and cursor color.
+3. A cached Liveblocks Node client is exported from `lib/` and instantiated once per process (module-level singleton — not re-created per request).
+4. A helper function deterministically maps a given user ID to the same color from a fixed palette on every call (pure function, no randomness, no per-call state).
+5. `POST /api/liveblocks-auth` requires Clerk authentication and returns `401` when there is no signed-in session.
+6. The route resolves the target project/room ID from the request body and calls `getProjectAccess` (`lib/project-access.ts`) to confirm the caller is the project's owner or a collaborator.
+7. The route returns `403` when the caller is authenticated but is neither the owner nor a collaborator on that project.
+8. If the Liveblocks room for that project ID does not already exist, the route creates it; if it already exists, the route does not attempt to recreate it (idempotent "create only if needed" behavior).
+9. On success, the route returns a Liveblocks session token whose attached user info includes the caller's display name, avatar URL, and a cursor color produced by the deterministic color helper.
+10. No `RoomProvider`, `LiveblocksProvider`, canvas, or presence UI is added in this spec.
+11. `npm run build` passes.
+
+### Dependencies
+
+- `lib/project-access.ts#getProjectAccess` (delivered in spec 08, extended with `isOwner` in spec 09) — **complete** per `progress-tracker.md`. This spec reuses it as-is; no changes to that file are expected.
+- Clerk authentication (spec 03) — **complete**, already wired via `@clerk/nextjs/server`.
+- Project metadata in PostgreSQL (spec 05/06) — **complete**. The project ID used as the Liveblocks room ID already exists as a first-class `Project.id`.
+- No Prisma schema changes are needed — Liveblocks rooms and sessions are managed externally by the Liveblocks service, not tracked as new relational data.
+
+### Open questions
+
+1. **Liveblocks packages are not actually installed.** The spec's "Dependencies" section states "All required Liveblocks packages are already installed," but `package.json` currently has no `@liveblocks/*` entries at all. Recommendation: the Senior Developer should install `@liveblocks/node` (required for the auth route) and `@liveblocks/client` (required to type `liveblocks.config.ts`'s `Presence`/`UserMeta` against Liveblocks' own types) as part of this spec's work, since the spec's premise that they're pre-installed doesn't hold. This is a correction to the spec text, not a scope expansion — the packages are a hard prerequisite for the deliverables the spec itself asks for.
+2. **No Liveblocks secret key exists anywhere in the repo.** A repo-wide search found no `LIVEBLOCKS_*` variable in `.env` or `.env.local`. This mirrors the kind of human-action gap already logged in `progress-tracker.md` for spec 09 (branch/PR creation) — the auth route's logic can be written and type-checked without a live key, but it cannot be end-to-end verified (an actual session token issued and accepted by Liveblocks) until a real Liveblocks project + secret key is provisioned and added to the environment. Recommendation: flag this to the human up front rather than have QA discover it as a blocked manual-verification step later.
+3. **No fixed cursor-color palette is defined anywhere in the context docs.** `ui-context.md` defines `NODE_COLORS` for canvas nodes and semantic UI tokens, but neither is described as reusable for presence cursors, and no separate palette is specified for this purpose. Recommendation: the Senior Developer picks a small fixed array of visually distinct hex values as a local constant for the color-mapping helper. This is a visual/technical implementation detail, not a product decision, so it should not block the spec — but it's called out here since it isn't sourced from any existing token file, in case a future spec (e.g. 19) expects these colors to be themed consistently with the rest of the UI.
+4. **Error-status precedence isn't fully spelled out.** The spec only states "Return `403` for unauthorized project access" and doesn't separately address the unauthenticated or room/project-not-found cases. Recommendation: follow the same `401` (unauthenticated) → `404`/`403` (via `getProjectAccess`'s own `not-found`/`forbidden` discriminants) precedence already established by every other route in this codebase (e.g. `app/api/projects/[projectId]/collaborators/route.ts`), rather than collapsing all failure cases to `403`, for consistency with `code-standards.md`'s "consistent, predictable response shapes" rule. Flagged as a recommendation, not a spec-stated requirement — the Senior Developer or QA should confirm this reading is reasonable rather than treat it as settled.
+5. **`UserMeta`'s exact field nesting isn't specified.** The spec lists "user ID, display name, avatar URL, cursor color" but not the object shape. Recommendation: use Liveblocks' own conventional shape, `{ id: string; info: { name: string; avatar: string; color: string } }`, since spec 19 (presence avatars/cursors, not in scope here) later reads "profile photos," "initials fallback," and "match the pointer and badge color to the participant's presence color" off of exactly these fields — confirming this shape is the one later specs expect to consume, without this spec needing to build any of that consuming UI itself.
+
+### Out-of-scope callouts
+
+- **No `RoomProvider`/`LiveblocksProvider`/`ClientSideSuspense` wiring into the editor.** Spec 11 (base canvas) owns creating the client-side canvas wrapper that actually opens a Liveblocks room using this spec's auth route.
+- **No React Flow canvas or `types/canvas.ts`.** Also spec 11.
+- **No presence avatar UI, live cursor rendering, or `thinking`-state UI.** Spec 19 (presence avatars/cursors) and spec 24 (AI presence state) consume the `Presence`/`UserMeta` types defined here, but rendering them is explicitly their scope, not this one's.
+- **No `ai-status-feed` `broadcastEvent` or `ai-chat` `LiveList` implementation.** These mechanisms are already conceptually pinned down in `architecture-context.md`'s Realtime Conventions ahead of specs 22/24/25, but this spec only sets up `Presence`/`UserMeta`/room auth — not those event/storage channels.
+- **No canvas snapshot persistence to Vercel Blob.** That's spec 21 (canvas autosave); this spec doesn't touch storage of canvas content at all.
+- **No changes to `lib/project-access.ts` itself.** This spec consumes `getProjectAccess` as-is; it already returns `isOwner` from spec 09, which isn't needed here but doesn't need to be removed.
+- **No billing, permission tiers beyond owner/collaborator, or anything else on `project-overview.md`'s Out of Scope list.** Nothing in this spec's text touches those areas, but noting it explicitly per the standing rule.
+
+## Dev Notes
+
+### Files added
+
+- `liveblocks.config.ts` (project root) — `Presence` (`cursor: { x, y } | null`, `thinking: boolean`) and `UserMeta` (`{ id: string; info: { name, avatar, color } }`) types, plus `declare global { interface Liveblocks { Presence; UserMeta } }` — the standard Liveblocks type-augmentation pattern (confirmed against `@liveblocks/core`'s own doc comment for `LiveText`, which documents the same `declare global` shape). Because `tsconfig.json` includes `**/*.ts` at the project root by default, this augmentation applies program-wide without any file needing to import `liveblocks.config.ts` directly — it's what lets `app/api/liveblocks-auth/route.ts`'s `liveblocks.prepareSession(userId, { userInfo })` be typed against our `UserMeta["info"]` shape instead of the SDK's generic default.
+- `lib/liveblocks.ts` — `getLiveblocksClient()`: a cached, lazily-instantiated `@liveblocks/node` `Liveblocks` client, keyed off `LIVEBLOCKS_SECRET_KEY`, cached on `globalThis` the same way `lib/prisma.ts` caches its client. Deliberately deferred (function, not a top-level `export const`) — see "Key decisions" below.
+- `lib/liveblocks-color.ts` — `getCursorColor(userId: string): string`, a pure string-hash → fixed 8-color-palette mapping. No dependency on any other module.
+- `app/api/liveblocks-auth/route.ts` — `POST` handler. Reads `{ room: string }` from the JSON body (matches `@liveblocks/client`'s default `authEndpoint` callback, which posts `JSON.stringify({ room })` — confirmed against `node_modules/@liveblocks/core`'s type comments), then: 400 on malformed body/missing `room` → `getProjectAccess(room)` for the 401/404/403 precedence → re-fetches the caller's Clerk profile via `currentUser()` for display name/avatar (401 defensively if that somehow comes back null after the access check passed) → `getLiveblocksClient()` (500 if unconfigured) → `liveblocks.getOrCreateRoom(room, { defaultAccesses: [] })` (idempotent create-only-if-needed) → `prepareSession(...).allow(room, ["room:write"]).authorize()`, returning the SDK's own `{ status, body }` directly as the response (502 if any Liveblocks API call in this block throws).
+- `lib/liveblocks.test.ts`, `lib/liveblocks-color.test.ts`, `app/api/liveblocks-auth/route.test.ts` — unit tests (see Test coverage below).
+
+### Files changed
+
+- `package.json` / `package-lock.json` — added `@liveblocks/node` and `@liveblocks/client` (`^3.24.0`). The brief's Open Questions #1 correctly flagged these as missing despite the spec text claiming they were pre-installed; installed with `--legacy-peer-deps` (same reason as the existing Vitest/RTL install: a Babel 7/8 peer conflict between `@vitejs/plugin-react` and `shadcn`'s dependency chain, unrelated to Liveblocks itself).
+- `.env.local` — added an empty `LIVEBLOCKS_SECRET_KEY=` placeholder with an explanatory comment. Left empty rather than filled in: no live Liveblocks project/secret exists anywhere in this environment (brief's Open Questions #2). `.env.local` is `.gitignore`d (`.env*`), so this doesn't leak anything and doesn't need redaction before commit.
+- `context/progress-tracker.md` — added spec 10 under "In Progress"; corrected a stale "Next Up" entry that still described specs 07–09 as unmerged/uncommitted (they're on `main` via PR #1/#2 per `git log`, and spec 09 is already listed under "Completed" a few lines above it — that entry was simply never updated after the merge).
+
+### Key decisions
+
+1. **Lazy client instantiation instead of eager top-level export.** `lib/prisma.ts`'s pattern is `export const prisma = ... ?? createClient()` evaluated at module load. I did not copy that literally for Liveblocks: `next build` runs a "Collecting page data" step that imports every route module server-side, which would execute a top-level `createLiveblocksClient()` call and — with no `LIVEBLOCKS_SECRET_KEY` set in this environment — throw and fail the build. `getLiveblocksClient()` is a function instead: same `globalThis`-cached singleton, same "instantiated once per process" guarantee (acceptance criterion 3), but creation (and the throw if the secret is missing) only happens when a request actually reaches the route and calls it. Verified this holds: `next build` passes with `LIVEBLOCKS_SECRET_KEY` unset (see Test coverage).
+2. **`UserMeta` shape**: used the brief's Open Questions #5 recommendation verbatim — `{ id: string; info: { name: string; avatar: string; color: string } }` — since it's the shape `@liveblocks/node`'s own `BaseUserMeta`/`IUserInfo` types expect for `prepareSession`'s `userInfo` option, and it's what spec 19 is documented to expect downstream.
+3. **Cursor-color palette**: 8 hex values (brief's Open Questions #3 — no existing token file covers this). Reused `ui-context.md`'s existing "Node Color Palette" *text* colors (the readable/vivid half of each pair, e.g. `#52A8FF`, `#BF7AF0`, `#FF990A`) rather than inventing an unrelated set, on the theory that if spec 19 later wants presence colors to feel visually consistent with the rest of the UI, starting from colors already proven legible on the dark canvas background is a safer default than picking something new. Flagged, not treated as settled, per the brief's caveat.
+4. **Error-status precedence**: followed Open Questions #4's recommendation — 401 unauthenticated → 400 malformed body → 404 not-found → 403 forbidden → 500 (Liveblocks misconfigured, i.e. no secret) → 502 (Liveblocks API call itself failed). The spec text only says "403 for unauthorized access"; this treats that as "403 specifically for authenticated-but-not-a-member," consistent with every other route in the codebase.
+5. **Room access scope**: `session.allow(roomId, ["room:write"])`, granting both read and write on that single room to any owner or collaborator (view-access and edit-access aren't distinguished for the canvas room itself — same non-distinction `getProjectAccess`'s `isOwner` already documents as "not itself a security boundary" for UI purposes). Read-only viewer roles aren't part of this spec's or `project-overview.md`'s scope.
+6. **Room defaults**: `getOrCreateRoom(roomId, { defaultAccesses: [] })` — no public/default room access; every connection must come through this auth route's session token. This is what makes the `getProjectAccess` check actually load-bearing rather than advisory.
+
+### Test coverage
+
+- `lib/liveblocks.test.ts` (4 tests): throws a handled (non-crashing-at-import) error when `LIVEBLOCKS_SECRET_KEY` is unset; confirms the module itself can be imported without throwing even when unset (directly protects the `next build` concern in decision #1); confirms singleton reuse within one import and across a simulated re-import via `globalThis`.
+- `lib/liveblocks-color.test.ts` (5 tests): determinism (same ID → same color across repeated calls), output is one of the fixed hex values, different IDs aren't collapsed to a single color, and no exceptions on edge-case input (empty string, unicode/long strings).
+- `app/api/liveblocks-auth/route.test.ts` (12 tests): 400 for invalid JSON / missing `room` / non-string `room`; 401/404/403 via each `getProjectAccess` discriminant; 401 on the defensive null-`currentUser()` race; 500 when `getLiveblocksClient` throws; 502 when the Liveblocks API call throws; success path asserts `getOrCreateRoom` is called with `{ defaultAccesses: [] }`, `getCursorColor` is called with the caller's Clerk ID, `prepareSession` receives the right `userInfo`, `session.allow` is scoped to `["room:write"]` on the correct room, and the route's response body/status pass through the SDK's own `authorize()` result untouched; a separate test confirms `getOrCreateRoom` is called exactly once per request (the idempotency guarantee is delegated to Liveblocks' own API, not re-implemented as a separate existence probe).
+- Commands run: `npx tsc --noEmit` (pass), `npx eslint .` (pass — one pre-existing unrelated warning in `.agents/skills/.../__root.tsx`, not touched by this spec), `npx vitest run` (131/131 passing across 19 files, up from 110/16 before this spec), `npx next build` (pass, including with `LIVEBLOCKS_SECRET_KEY` unset).
+
+### Known limitations / deferrals
+
+- **No live end-to-end verification against the real Liveblocks service.** Per this task's instructions and the brief's Open Questions #2: no `LIVEBLOCKS_SECRET_KEY` exists in this environment. The route's logic, auth/ownership branching, and error handling are unit-tested with the `@liveblocks/node` client mocked; an actual session token issued by and accepted by Liveblocks' real API has not been (and could not be) exercised here. This needs a real Liveblocks project + secret key added to `.env.local` before that final integration check can happen — flagging this up front rather than leaving it for QA to discover as a blocked manual step.
+- Everything under "Out-of-scope callouts" above was left untouched, confirmed by scope: no `RoomProvider`/`LiveblocksProvider`/canvas wiring, no `types/canvas.ts`, no presence UI, no `broadcastEvent`/`LiveList` usage, no `lib/project-access.ts` changes (diff-empty, confirmed), no canvas snapshot/Blob storage code.
