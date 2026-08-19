@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 13: Node Shape — not started.
+- Phase 13: Node Shape — implementation complete, QA next.
 
 ## Current Goal
-- Analyst pass on feature spec 13 (Node Shape).
+- QA pass on feature spec 13 (Node Shape).
 
 ## Completed
 
@@ -148,11 +148,18 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-_(none)_
+- Feature spec 13: Node Shape
+  - `components/editor/shape-visual.tsx` (new) — shared shape-geometry component (`ShapeVisual`) consumed by both `canvas-node.tsx` and `shape-panel.tsx`'s drag preview: CSS `<div>` for rectangle/pill/circle, inline scaling `<svg viewBox="0 0 100 100" preserveAspectRatio="none">` for diamond/hexagon/cylinder. Border/stroke subtle at rest (`border-surface-border`/`var(--border-default)`), brand accent when selected (`border-brand`/`var(--accent-primary)`).
+  - `components/editor/canvas-node.tsx` (modified) — replaced the spec-12 placeholder (bordered rectangle for every shape) with `ShapeVisual`, wired to React Flow's `NodeProps.selected`.
+  - `components/editor/shape-panel.tsx` (modified) — added a cursor-attached ghost drag preview via native `dataTransfer.setDragImage`, backed by 6 always-mounted, off-screen preview elements (one per shape, sized per `SHAPE_DEFAULT_SIZES`) so `setDragImage` always has an already-rendered DOM node at `dragstart`. Panel's own layout/buttons unchanged.
+  - `context/ui-context.md` (modified) — documented the shape-rendering rules and the drag-preview mechanism under Canvas.
+  - No changes to `lib/canvas-shapes.ts`, `types/canvas.ts`, or `canvas.tsx`'s drop/node-creation logic — out of scope per the brief.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (180/180 across 25 files), `npx next build` all pass.
+  - Full pipeline trail in `context/spec-status/13-node-shape.md`.
 
 ## Next Up
 
-- Analyst pass on feature spec 13 (Node Shape).
+- QA pass on feature spec 13 (Node Shape).
 
 ## Open Questions
 

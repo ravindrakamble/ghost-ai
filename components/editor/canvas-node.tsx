@@ -1,24 +1,24 @@
 import type { NodeProps } from "@xyflow/react"
-import { DEFAULT_NODE_TEXT_COLOR, type CanvasNode as CanvasNodeType } from "@/types/canvas"
+import { ShapeVisual } from "@/components/editor/shape-visual"
+import { type CanvasNode as CanvasNodeType } from "@/types/canvas"
 
 /**
- * Custom node renderer registered for `CANVAS_NODE_TYPE`. For this unit,
- * every shape renders as a bordered rectangle with the label centered —
- * shape-specific inline-SVG visuals (diamond, hexagon, cylinder, etc., per
- * `ui-context.md`'s Canvas > Node Shapes) are explicitly out of scope for
- * spec 12 and land in a later spec.
+ * Custom node renderer registered for `CANVAS_NODE_TYPE`. Shape-correct
+ * rendering (CSS for rectangle/pill/circle, inline SVG for diamond/hexagon/
+ * cylinder) is delegated to the shared `ShapeVisual` — see spec 13's
+ * Analyst Brief, Open Questions #3 — so this component only owns the
+ * label/placeholder content and the `selected` → border-brightness wiring
+ * (React Flow's `NodeProps.selected`, already available with zero new
+ * wiring).
  */
-export function CanvasNode({ data }: NodeProps<CanvasNodeType>) {
+export function CanvasNode({ data, selected }: NodeProps<CanvasNodeType>) {
   return (
-    <div
-      className="flex h-full w-full items-center justify-center rounded-xl border border-surface-border px-3 text-center text-sm"
-      style={{ backgroundColor: data.color, color: DEFAULT_NODE_TEXT_COLOR }}
-    >
+    <ShapeVisual shape={data.shape} color={data.color} selected={selected}>
       {data.label ? (
         <span className="truncate">{data.label}</span>
       ) : (
         <span className="text-copy-faint">Untitled</span>
       )}
-    </div>
+    </ShapeVisual>
   )
 }
