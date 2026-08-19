@@ -45,6 +45,7 @@
 
 - Framework: Vitest, set up in spec 06 (first spec needing tests). Config at `vitest.config.mts` (`.mts` to avoid the ESM-in-CommonJS config warning; uses `import.meta.dirname`, not `__dirname`).
 - Default test environment is `node` (most tests so far are API route handlers / server-side utilities). For component tests that need a DOM, add a `// @vitest-environment jsdom` docblock at the top of that test file — `jsdom`, `@testing-library/react`, `@testing-library/dom`, and `@testing-library/jest-dom` are installed for this.
+- `vitest.setup.ts` (wired via `test.setupFiles` in `vitest.config.mts`) imports `@testing-library/jest-dom/vitest` (extends `expect` with matchers like `toBeInTheDocument`/`toHaveAttribute` — vitest isn't run with `test.globals: true`, so jest-dom's own auto-detection doesn't apply) and calls React Testing Library's `cleanup()` in a global `afterEach` (same reason — RTL's built-in auto-cleanup also relies on globals). Component test files with more than one `it` block need this to avoid leaking DOM between renders in the same file.
 - `@vitejs/plugin-react` and the testing-library packages were installed with `--legacy-peer-deps` due to a peer conflict between `@vitejs/plugin-react`'s Babel 8 optional peer and `shadcn`'s Babel 7 dependency chain. Re-check this if either package is upgraded.
 - Playwright remains reserved for canvas/interaction-level checks, not general unit coverage.
 - Test files live next to the code they cover, named `*.test.ts`/`*.test.tsx` (e.g. `app/api/projects/route.test.ts`).

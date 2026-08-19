@@ -1,9 +1,16 @@
 import { EditorShell } from "@/components/editor/editor-shell"
+import { getProjectsForUser } from "@/lib/projects"
 
-export default function EditorLayout({
+export default async function EditorLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  return <EditorShell>{children}</EditorShell>
+  const { owned, shared } = await getProjectsForUser()
+
+  return (
+    <EditorShell ownedProjects={owned} sharedProjects={shared}>
+      {children}
+    </EditorShell>
+  )
 }

@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 export function CreateProjectDialog() {
-  const { dialogType, name, slug, isLoading, setName, closeDialog, submitCreate } =
+  const { dialogType, name, roomIdPreview, isLoading, error, setName, closeDialog, submitCreate } =
     useProjectDialogsContext()
   const isOpen = dialogType === "create"
 
@@ -24,7 +24,7 @@ export function CreateProjectDialog() {
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            submitCreate()
+            void submitCreate()
           }}
         >
           <DialogHeader>
@@ -46,8 +46,9 @@ export function CreateProjectDialog() {
               autoFocus
             />
             <p className="text-xs text-copy-muted">
-              {slug ? `/editor/${slug}` : "Enter a name to preview the slug"}
+              {roomIdPreview ? `/editor/${roomIdPreview}` : "Enter a name to preview the room ID"}
             </p>
+            {error && <p className="text-xs text-state-error">{error}</p>}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={closeDialog}>

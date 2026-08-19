@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog"
 
 export function DeleteProjectDialog() {
-  const { dialogType, activeProject, isLoading, closeDialog, submitDelete } =
+  const { dialogType, activeProject, isLoading, error, closeDialog, submitDelete } =
     useProjectDialogsContext()
   const isOpen = dialogType === "delete"
 
@@ -26,11 +26,12 @@ export function DeleteProjectDialog() {
             undone.
           </DialogDescription>
         </DialogHeader>
+        {error && <p className="text-xs text-state-error">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={closeDialog}>
             Cancel
           </Button>
-          <Button variant="destructive" disabled={isLoading} onClick={submitDelete}>
+          <Button variant="destructive" disabled={isLoading} onClick={() => void submitDelete()}>
             Delete
           </Button>
         </DialogFooter>

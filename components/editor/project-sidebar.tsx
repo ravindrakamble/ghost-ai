@@ -1,6 +1,7 @@
 "use client"
 
 import { Pencil, Plus, Trash2, X } from "lucide-react"
+import { useParams } from "next/navigation"
 import { useProjectDialogsContext } from "@/components/editor/project-dialogs-provider"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -12,11 +13,11 @@ interface ProjectSidebarProps {
 }
 
 export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
-  const { projects, openCreateDialog, openRenameDialog, openDeleteDialog } =
+  const { ownedProjects, sharedProjects, openCreateDialog, openRenameDialog, openDeleteDialog } =
     useProjectDialogsContext()
-
-  const ownedProjects = projects.filter((project) => project.role === "owner")
-  const sharedProjects = projects.filter((project) => project.role === "collaborator")
+  // Rendered above the `[roomId]` segment, but `useParams()` still reads it —
+  // same precedent as `hooks/use-project-actions.ts` (see spec 07's Dev Notes).
+  const { roomId } = useParams<{ roomId?: string }>()
 
   return (
     <>
@@ -62,6 +63,7 @@ export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
                   <ProjectItem
                     key={project.id}
                     project={project}
+                    isActive={project.id === roomId}
                     onRename={() => openRenameDialog(project)}
                     onDelete={() => openDeleteDialog(project)}
                   />
@@ -78,7 +80,11 @@ export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
                 sharedProjects.map((project) => (
                   <div
                     key={project.id}
-                    className="truncate rounded-lg px-2 py-1.5 text-sm text-copy-primary"
+                    className={`truncate rounded-lg px-2 py-1.5 text-sm ${
+                      project.id === roomId
+                        ? "bg-accent-dim text-brand"
+                        : "text-copy-primary"
+                    }`}
                   >
                     {project.name}
                   </div>
@@ -101,16 +107,26 @@ export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
 
 function ProjectItem({
   project,
+  isActive,
   onRename,
   onDelete,
 }: {
   project: Project
+  isActive: boolean
   onRename: () => void
   onDelete: () => void
 }) {
   return (
-    <div className="group flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-subtle">
-      <span className="truncate text-sm text-copy-primary">{project.name}</span>
+    <div
+      className={`group flex items-center justify-between rounded-lg px-2 py-1.5 ${
+        isActive ? "bg-accent-dim" : "hover:bg-subtle"
+      }`}
+    >
+      <span
+        className={`truncate text-sm ${isActive ? "text-brand" : "text-copy-primary"}`}
+      >
+        {project.name}
+      </span>
       <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
         <Button variant="ghost" size="icon-sm" onClick={onRename}>
           <Pencil />

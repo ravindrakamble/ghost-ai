@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 export function RenameProjectDialog() {
-  const { dialogType, activeProject, name, isLoading, setName, closeDialog, submitRename } =
+  const { dialogType, activeProject, name, isLoading, error, setName, closeDialog, submitRename } =
     useProjectDialogsContext()
   const isOpen = dialogType === "rename"
 
@@ -24,7 +24,7 @@ export function RenameProjectDialog() {
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            submitRename()
+            void submitRename()
           }}
         >
           <DialogHeader>
@@ -44,6 +44,7 @@ export function RenameProjectDialog() {
               onChange={(event) => setName(event.target.value)}
               autoFocus
             />
+            {error && <p className="text-xs text-state-error">{error}</p>}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={closeDialog}>
