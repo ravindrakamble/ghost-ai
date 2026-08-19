@@ -4,19 +4,30 @@ import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Canvas } from "./canvas";
+import { CANVAS_DRAG_MIME_TYPE, serializeShapeDragPayload } from "@/lib/canvas-shapes";
+import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
 
 // `Canvas` wires together three real Liveblocks/React Flow packages that
 // need a live network connection to do anything — this test only verifies
 // that `Canvas` wires them together correctly (right room ID, right initial
-// presence, synced nodes/edges/handlers reach `ReactFlow`, and the
-// connection-error fallback replaces the canvas when `useErrorListener`
-// reports a `ROOM_CONNECTION_ERROR`), not that the real SDKs work.
+// presence, synced nodes/edges/handlers reach `ReactFlow`, the drop handler
+// creates nodes via `onNodesChange`, and the connection-error fallback
+// replaces the canvas when `useErrorListener` reports a
+// `ROOM_CONNECTION_ERROR`), not that the real SDKs work.
 type ErrorListenerCallback = (error: { context: { type: string } }) => void;
+type CapturedReactFlowProps = {
+  nodeTypes?: Record<string, unknown>;
+  onDragOver?: (event: unknown) => void;
+  onDrop?: (event: unknown) => void;
+};
 
-const { errorListenerRef, useLiveblocksFlowMock } = vi.hoisted(() => ({
-  errorListenerRef: { current: null as ErrorListenerCallback | null },
-  useLiveblocksFlowMock: vi.fn(),
-}));
+const { errorListenerRef, useLiveblocksFlowMock, screenToFlowPositionMock, reactFlowPropsRef } =
+  vi.hoisted(() => ({
+    errorListenerRef: { current: null as ErrorListenerCallback | null },
+    useLiveblocksFlowMock: vi.fn(),
+    screenToFlowPositionMock: vi.fn(),
+    reactFlowPropsRef: { current: null as CapturedReactFlowProps | null },
+  }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
   LiveblocksProvider: ({
@@ -54,29 +65,28 @@ vi.mock("@liveblocks/react-flow", () => ({
 }));
 
 vi.mock("@xyflow/react", () => ({
-  ReactFlow: ({
-    children,
-    nodes,
-    edges,
-    connectionMode,
-    fitView,
-  }: {
+  ReactFlowProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useReactFlow: () => ({ screenToFlowPosition: screenToFlowPositionMock }),
+  ReactFlow: (props: CapturedReactFlowProps & {
     children: ReactNode;
     nodes: unknown[];
     edges: unknown[];
     connectionMode: string;
     fitView: boolean;
-  }) => (
-    <div
-      data-testid="react-flow"
-      data-nodes-count={nodes.length}
-      data-edges-count={edges.length}
-      data-connection-mode={connectionMode}
-      data-fit-view={String(fitView)}
-    >
-      {children}
-    </div>
-  ),
+  }) => {
+    reactFlowPropsRef.current = props;
+    return (
+      <div
+        data-testid="react-flow"
+        data-nodes-count={props.nodes.length}
+        data-edges-count={props.edges.length}
+        data-connection-mode={props.connectionMode}
+        data-fit-view={String(props.fitView)}
+      >
+        {props.children}
+      </div>
+    );
+  },
   Background: ({ variant }: { variant: string }) => <div data-testid="background" data-variant={variant} />,
   MiniMap: () => <div data-testid="minimap" />,
   BackgroundVariant: { Lines: "lines", Dots: "dots", Cross: "cross" },
@@ -90,6 +100,7 @@ const onConnect = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   errorListenerRef.current = null;
+  reactFlowPropsRef.current = null;
   useLiveblocksFlowMock.mockReturnValue({
     nodes: [],
     edges: [],
@@ -156,5 +167,84 @@ describe("Canvas", () => {
 
     expect(screen.getByTestId("react-flow")).toBeInTheDocument();
     expect(screen.queryByText(/unable to connect to the canvas/i)).not.toBeInTheDocument();
+  });
+
+  it("renders the floating shape panel within the canvas's relative wrapper", () => {
+    render(<Canvas roomId="project-123" />);
+
+    // 6 shapes per the spec: rectangle, diamond, circle, pill, cylinder, hexagon.
+    expect(screen.getAllByRole("button")).toHaveLength(6);
+  });
+
+  it("registers the custom CanvasNode renderer for CANVAS_NODE_TYPE", () => {
+    render(<Canvas roomId="project-123" />);
+
+    expect(reactFlowPropsRef.current?.nodeTypes).toHaveProperty(CANVAS_NODE_TYPE);
+    expect(Object.keys(reactFlowPropsRef.current?.nodeTypes ?? {})).toEqual([CANVAS_NODE_TYPE]);
+  });
+
+  it("allows a drop when dragover carries the shape MIME type", () => {
+    render(<Canvas roomId="project-123" />);
+
+    const preventDefault = vi.fn();
+    const dataTransfer = { types: [CANVAS_DRAG_MIME_TYPE], dropEffect: "" };
+    reactFlowPropsRef.current?.onDragOver?.({ preventDefault, dataTransfer });
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(dataTransfer.dropEffect).toBe("copy");
+  });
+
+  it("ignores dragover for a drag that isn't a shape payload", () => {
+    render(<Canvas roomId="project-123" />);
+
+    const preventDefault = vi.fn();
+    reactFlowPropsRef.current?.onDragOver?.({
+      preventDefault,
+      dataTransfer: { types: ["text/plain"], dropEffect: "" },
+    });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("adds a new node via onNodesChange at the dropped screen position, converted through screenToFlowPosition", () => {
+    render(<Canvas roomId="project-123" />);
+    screenToFlowPositionMock.mockReturnValue({ x: 42, y: 99 });
+
+    const preventDefault = vi.fn();
+    const raw = serializeShapeDragPayload("rectangle");
+    reactFlowPropsRef.current?.onDrop?.({
+      preventDefault,
+      clientX: 500,
+      clientY: 600,
+      dataTransfer: { getData: () => raw },
+    });
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(screenToFlowPositionMock).toHaveBeenCalledWith({ x: 500, y: 600 });
+    expect(onNodesChange).toHaveBeenCalledTimes(1);
+
+    const [changes] = onNodesChange.mock.calls[0] as [Array<{ type: string; item: Record<string, unknown> }>];
+    expect(changes).toHaveLength(1);
+    expect(changes[0].type).toBe("add");
+    expect(changes[0].item).toMatchObject({
+      type: CANVAS_NODE_TYPE,
+      position: { x: 42, y: 99 },
+      width: 160,
+      height: 80,
+      data: { label: "", color: DEFAULT_NODE_COLOR, shape: "rectangle" },
+    });
+  });
+
+  it("does not add a node when the dropped payload is missing or malformed", () => {
+    render(<Canvas roomId="project-123" />);
+
+    reactFlowPropsRef.current?.onDrop?.({
+      preventDefault: vi.fn(),
+      clientX: 0,
+      clientY: 0,
+      dataTransfer: { getData: () => "" },
+    });
+
+    expect(onNodesChange).not.toHaveBeenCalled();
   });
 });

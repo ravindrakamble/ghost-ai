@@ -89,6 +89,10 @@ Small white circular handles, hidden by default, revealed on node hover. Appear 
 
 React Flow `<Background>` component. Canvas sits on the base background color.
 
+### Floating Shape Panel
+
+Bottom-center pill-shaped toolbar for dragging new shapes onto the canvas (spec 12). Convention: `rounded-full` container (the standard way to get a true pill shape — the Border Radius scale has no dedicated "pill" entry), `bg-elevated` background with `border-surface-border`, matching the same floating-overlay visual language documented for sidebars above. Positioned via `absolute bottom-* left-1/2 -translate-x-1/2` inside the canvas's `relative` wrapper; does not overlap the default bottom-right `MiniMap`.
+
 ## Component Library
 
 shadcn/ui on top of Tailwind. No custom design system. Components live in `components/ui/`. Use the `shadcn` CLI to add new components rather than writing them from scratch.

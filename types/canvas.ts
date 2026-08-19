@@ -49,3 +49,21 @@ export type CanvasEdgeType = typeof CANVAS_EDGE_TYPE
 /** Fully-typed node/edge aliases for when custom rendering is registered. */
 export type CanvasNode = Node<CanvasNodeData, CanvasNodeType>
 export type CanvasEdge = Edge<CanvasEdgeData, CanvasEdgeType>
+
+/**
+ * Default node fill color, per `ui-context.md`'s Canvas > Node Color
+ * Palette ("Default node color: #1F1F1F with #EDEDED text"). Spec 12 adds
+ * only this single default — not the full 8-color `NODE_COLORS` palette,
+ * since nothing in that spec's scope needs a color picker. See spec 12's
+ * Analyst Brief, Open Questions #3.
+ */
+export const DEFAULT_NODE_COLOR = "#1F1F1F"
+
+/**
+ * Text color paired with `DEFAULT_NODE_COLOR` above, per the same
+ * `ui-context.md` line. Needed by `CanvasNode`'s renderer to keep the label
+ * legible against the fill; not part of the brief's literal ask but the
+ * documented pairing, not an invented value — same "documented data value"
+ * precedent as `CURSOR_COLORS` (spec 10).
+ */
+export const DEFAULT_NODE_TEXT_COLOR = "#EDEDED"
