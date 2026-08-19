@@ -107,3 +107,118 @@ This spec replaces the static `CanvasPlaceholder` in the editor workspace with a
 - **No live browser verification**, per Open Questions #6 — `LIVEBLOCKS_SECRET_KEY` is provisioned and spec 10 already live-verified the auth route itself, but no live multiplayer canvas session (two browser tabs actually syncing nodes/edges through a real Liveblocks room) was exercised in this pipeline. All verification here is type-level (against the installed SDKs' real `.d.ts` files) and mocked-unit-test-level, same treatment as spec 10's documented limitation.
 - Per the spec's own Scope Limits, deliberately not built: `<Controls>` panel, custom node/edge visual components (`nodeTypes`/`edgeTypes` registration), canvas snapshot persistence, AI-generated content, live cursor rendering (`Cursors` from `@liveblocks/react-flow`), and presence avatar/thinking-state UI. All of these are named as later specs' scope in the brief's Out-of-scope callouts.
 - The canvas currently starts empty on every load and has no way to persist or reload state across page refreshes — expected per this spec (autosave/snapshot loading is spec 21), not a defect.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Pass — no errors |
+| `npx eslint .` | Pass — 0 errors, 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx` (unrelated to this spec, not touched) |
+| `npx vitest run` | Pass — 136/136 tests across 21 files |
+| `npx next build` | Pass — build succeeds; `/editor/[roomId]` remains a dynamic route |
+
+All figures independently reproduced; they match the Dev Notes claims exactly.
+
+### Acceptance criteria checklist
+
+1. app/editor/[roomId]/page.tsx remains a server component, no Liveblocks/React Flow logic added to the page - Pass. Read the file directly: no "use client", no Liveblocks/React Flow imports; it still only resolves access and renders WorkspaceShell.
+2. New client-side canvas component wraps the surface in LiveblocksProvider (authEndpoint="/api/liveblocks-auth") and RoomProvider scoped to the room ID, with initialPresence={{ cursor: null, thinking: false }} - Pass. Confirmed in components/editor/canvas.tsx lines 30-31, and the value matches liveblocks.config.ts's Presence type ({ cursor: {x,y} | null; thinking: boolean }) exactly - thinking is present and required, not omitted.
+3. ClientSideSuspense with a loading fallback, plus a distinct connection-error fallback - Pass. CanvasLoading/CanvasError are distinct components; the error fallback is driven by useErrorListener inside CanvasRoomBoundary, gated on error.context.type === "ROOM_CONNECTION_ERROR" (other error types are correctly ignored, per the brief's Open Questions #3 recommendation).
+4. types/canvas.ts defines a node data shape with label/color/shape, plus canvasNode/canvasEdge type identifiers, without introducing or registering any custom node/edge rendering components - Pass. CanvasNodeData has all three fields; CANVAS_NODE_TYPE/CANVAS_EDGE_TYPE are plain string constants; grep confirms no nodeTypes/edgeTypes prop usage anywhere in canvas.tsx.
+5. React Flow wired to Liveblocks-synced state via useLiveblocksFlow({ suspense: true, nodes: { initial: [] }, edges: { initial: [] } }), with nodes/edges/onNodesChange/onEdgesChange/onConnect passed into <ReactFlow> - Pass. Confirmed in CanvasFlow (canvas.tsx lines 94-114) and exercised by canvas.test.tsx's second test, which asserts the exact call args and that the returned values reach <ReactFlow>.
+6. connectionMode="loose", fitView, a <MiniMap>, a dot-pattern <Background>, no <Controls> - Pass. ConnectionMode.Loose/BackgroundVariant.Dots used (typed enum members rather than string literals - confirmed this is required under strict mode since @xyflow/react's props are typed as string enums, not literal unions; behaviorally identical). Grep confirms no Controls import or usage anywhere in the changed files.
+7. workspace-shell.tsx renders the new canvas component using project.id as the room ID; canvas-placeholder.tsx deleted - Pass. <Canvas roomId={project.id} /> confirmed in workspace-shell.tsx line 50; components/editor/canvas-placeholder.tsx confirmed absent from the filesystem; repo-wide grep for canvas-placeholder|CanvasPlaceholder returns only historical/doc mentions in context/progress-tracker.md and prior spec-status files (expected).
+8. No canvas snapshot persistence, no AI-generated content, no custom node/edge visual components - Pass. Grep for blob|localStorage|fetch(|snapshot and trigger|openai|anthropic|generat in canvas.tsx/types/canvas.ts returns no functional matches (only doc-comment mentions of what was deliberately not built).
+9. npm run build passes - Pass, reproduced above.
+10. npx tsc --noEmit and npx eslint . pass with no new errors - Pass, reproduced above.
+
+All 10 acceptance criteria pass.
+
+### Architecture invariants (context/architecture-context.md)
+
+- Realtime Conventions: initialPresence matches the pinned Presence shape exactly ({ cursor: null, thinking: boolean }, field name thinking) - confirmed.
+- Invariant 1 (no long-running AI work in request handlers): N/A - no request handlers touched in this spec.
+- Invariant 2 (metadata vs. blob storage separation): N/A - no storage code added; canvas starts empty every load, consistent with "no persistence" scope limit.
+- Invariant 3 (auth/ownership enforced at every mutation boundary): N/A to this spec directly (no new mutation added), but the room connection correctly routes through spec 10's /api/liveblocks-auth, which already enforces this - confirmed the authEndpoint string matches exactly and the route's contract (POST with { room } body, resolved by LiveblocksProvider's default auth flow) lines up with app/api/liveblocks-auth/route.ts's actual implementation.
+- Invariant 4 (client components only where needed): Canvas and WorkspaceShell are both "use client", justified by real-time Liveblocks state and local UI toggles respectively - confirmed appropriate.
+- Invariant 5 (canvas schema consistency between user content and templates): N/A - no template import logic touches this spec; types/canvas.ts's shape is defined but unconsumed, as intended.
+
+No invariant violations found.
+
+### Standards compliance (context/code-standards.md)
+
+- No "any" usage in any new/changed file - confirmed via grep (only a doc-comment substring match on the word "any" in types/canvas.ts, not a type usage).
+- No raw Tailwind color classes (zinc-/slate-) or hardcoded hex values in canvas.tsx/types/canvas.ts/workspace-shell.tsx - confirmed via grep, zero matches. Only token classes (bg-base, text-copy-muted) used.
+- components/ui/* untouched - confirmed via git diff main --stat, no components/ui files in the changeset.
+- Test files co-located and correctly named (canvas.test.tsx, types/canvas.test.ts, workspace-shell.test.tsx), the jsdom environment docblock present where DOM is needed, third-party SDKs mocked via vi.mock/vi.hoisted rather than hitting real Liveblocks/React Flow - consistent with the Testing section's conventions.
+- Hooks convention: no new hooks/ file added; useLiveblocksFlow is consumed directly as a third-party hook inside CanvasFlow, which is a reasonable reading of the convention (it exists to house repo-authored hooks, not to wrap every third-party hook call) - not flagged as a violation.
+- package.json diff is exactly the three claimed dependencies (@liveblocks/react, @liveblocks/react-flow, @xyflow/react) at the versions stated - confirmed via git diff main -- package.json.
+
+### Error handling
+
+This spec's only failure mode in scope is the Liveblocks room connection itself (no new mutation/API logic is added). CanvasRoomBoundary correctly narrows on ROOM_CONNECTION_ERROR specifically (covering auth failure, no access, full room, changed room ID per the Dev Notes) and ignores unrelated error contexts (e.g. CREATE_THREAD_ERROR), which is both tested (canvas.test.tsx, tests 3 and 4) and matches the brief's Open Questions #3 recommendation. The loading and error fallbacks are visually distinct components (CanvasLoading vs. CanvasError), satisfying acceptance criterion 3's "distinct fallback" requirement.
+
+### Housekeeping
+
+- context/progress-tracker.md updated to reflect spec 11's Dev pass complete, awaiting QA, with an accurate pointer to context/spec-status/11-base-canvas.md for the full pipeline trail - confirmed via direct read.
+
+### Other verification performed
+
+- Cross-checked initialPresence's literal value against liveblocks.config.ts's declare global { interface Liveblocks { Presence: Presence } } augmentation directly (not just Dev Notes' claim) - matches exactly.
+- Confirmed app/api/liveblocks-auth/route.ts (spec 10) resolves the room ID from body.room and that LiveblocksProvider's default behavior is to POST { room: roomId } to authEndpoint - the two contracts line up without any custom authEndpoint function needed.
+- Confirmed via git diff main --stat that the full changeset is scoped to exactly the files the Dev Notes claim (canvas.tsx, canvas.test.tsx, types/canvas.ts, types/canvas.test.ts, workspace-shell.tsx/.test.tsx, canvas-placeholder.tsx deletion, package.json/package-lock.json, progress-tracker.md, this spec-status file) - no unexplained scope creep.
+- Per this task's instructions and consistent with spec 08's QA treatment: this spec cannot be visually verified in a browser in this environment (no interactive session, and per the brief's Open Questions #6, live multiplayer canvas behavior requires two real tabs against a live Liveblocks room). This is noted as an expected limitation of the pipeline, not a defect - all verification performed here is type-level (against the real installed .d.ts files), mocked-unit-test-level, and static-analysis-level (grep/diff/build).
+
+### Issues found
+
+None. No [Bug -> Dev] or [Spec gap -> Analyst] items to log.
+
+### Handoff
+
+QA passed - ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Success criteria fit
+
+This is the first spec to render an actual collaborative canvas surface, judged against `project-overview.md`'s Success Criteria:
+
+- **Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously") — this spec makes the criterion concretely visible for the first time: `WorkspaceShell` now renders `<Canvas roomId={project.id} />`, which wraps a real `LiveblocksProvider`/`RoomProvider` (scoped to the project via spec 09/10's access + auth chain) around a `useLiveblocksFlow`-synced React Flow surface. Two collaborators opening the same project would now join the same Liveblocks room and see the same (currently empty) node/edge state sync between them via `onNodesChange`/`onEdgesChange`/`onConnect`. That is a genuine, load-bearing step toward Criterion 2 — not just infrastructure sitting behind a criterion (spec 10's framing), but the first spec where the criterion's mechanism is actually wired end to end at the code level. It is not yet *demonstrated* live (see Rough edges below), and there is nothing to look at yet (empty canvas, no cursors, no presence UI — those are specs 19/24), but the sync plumbing itself is real and correctly scoped. This reading matches the brief's own framing and QA's "N/A, but routes through spec 10 correctly" note on Invariant 3 — I confirm it holds up under review, not just as a stated intention.
+- No other Success Criterion (1, 3, 4, 5, 6) is claimed or touched by this spec, correctly.
+
+### Scope check against project-overview.md
+
+- **Out of Scope wall** (billing, permission tiers, versioned spec history, production object storage migration, mobile apps) — untouched, nothing in this diff comes close.
+- **This spec's own Scope Limits**, each independently confirmed by direct read of `components/editor/canvas.tsx`:
+  - No `<Controls>` — confirmed absent (grep and direct read of `CanvasFlow`'s JSX, which renders only `<MiniMap>` and `<Background variant={BackgroundVariant.Dots}>`).
+  - No custom node/edge rendering — confirmed no `nodeTypes`/`edgeTypes` prop anywhere; `types/canvas.ts`'s `CANVAS_NODE_TYPE`/`CANVAS_EDGE_TYPE` are unreferenced outside their own file and its test.
+  - No persistence logic — confirmed no `fetch`/blob/localStorage calls; `useLiveblocksFlow` starts from `{ initial: [] }` for both nodes and edges every load, which is Liveblocks Storage sync (in-room, in-memory-on-the-server-side-of-Liveblocks), not app-level snapshot persistence to Vercel Blob (that's spec 21's job, correctly deferred).
+  - No AI behavior — confirmed, nothing in this diff touches prompts, generation, or `broadcastEvent`/chat.
+  - No live cursor rendering (`Cursors` from `@liveblocks/react-flow`) or presence UI — confirmed absent, correctly deferred to specs 19/24 per the brief's Out-of-scope callouts.
+- Diff surface is exactly what Dev Notes/QA claim (`git diff main..spec/11-base-canvas --stat`): `canvas.tsx`/`.test.tsx`, `types/canvas.ts`/`.test.ts`, `workspace-shell.tsx`/`.test.tsx` changes, `canvas-placeholder.tsx` deletion, `package.json`/lock, progress-tracker, this status file. No unexplained scope creep.
+
+### `types/canvas.ts` defined-but-unconsumed — sanity check
+
+This is a reasonable interim state, not a red flag. Reasoning holds: the file exists solely to pin a shared vocabulary (`CanvasNodeData`'s `label`/`color`/`shape`, `CANVAS_NODE_TYPE`/`CANVAS_EDGE_TYPE` string identifiers) that a later spec building actual custom node/edge components will need to agree on rather than reinvent — the pinned literal-string test (`types/canvas.test.ts`) exists specifically to guard against silent renaming before that consumer shows up. Registering `nodeTypes`/`edgeTypes` now, or building the `NODE_COLORS`/`NODE_SHAPES` palette constants `ui-context.md` describes, would have pulled real rendering work into a spec whose own Scope Limits explicitly exclude it — correctly resisted per Open Questions #5's own reasoning. The risk this pattern normally carries (dead code nobody will ever wire up) is mitigated here because the type shape is small, cheap to define, load-bearing for a concretely-named future spec, and test-guarded — not speculative scaffolding for an undefined future.
+
+### Rough edges — acceptable at this stage
+
+- **No live browser/multiplayer verification.** Same category and same treatment as spec 10's documented gap: this pipeline has no interactive browser session, so two-tab real-time sync (nodes/edges actually propagating between two live Liveblocks room connections) has not been exercised — only type-level (against installed `.d.ts` files), mocked-unit-test-level (`canvas.test.tsx`'s 4 tests, all three SDKs mocked), and static-analysis-level (grep/diff/build) verification exists. Unlike spec 10, this spec doesn't need a *new* secret provisioned (`LIVEBLOCKS_SECRET_KEY` already closed out after spec 10's round) — what's missing here is purely an interactive browser, not a missing credential. This is consistent with how spec 10's live-API gap was handled: flagged explicitly in Dev Notes/QA rather than silently implied as tested, not blocking a PASS, and appropriately left for a human smoke test (open the same project in two browser windows/profiles, confirm a node move in one appears in the other) before this is treated as end-to-end proven. Recommend the human do that smoke test at some point before specs 19+ (presence/cursors) build further on top of this room-connection assumption, though nothing about this spec's code gives reason to doubt it will work — the wiring matches the Liveblocks SDK's documented `useLiveblocksFlow` contract exactly, and the auth handshake it depends on (spec 10) was already live-verified against the real API.
+- **Canvas is empty and has no persistence across refresh** — explicitly expected per this spec's scope (autosave/snapshot loading is spec 21), not a defect.
+- Neither rough edge blocks a later spec from building correctly on top of this one: the room-connection/sync contract is stable and typed, and `types/canvas.ts`'s shape is pinned and test-guarded for the next spec that needs it.
+
+### progress-tracker.md accuracy
+
+The "In Progress" entry for spec 11 accurately reflects what was actually built and verified: correct file list (`canvas.tsx`, `types/canvas.ts`, `workspace-shell.tsx` change, `canvas-placeholder.tsx` deletion, `package.json` additions), correct test/build figures (136/136 across 21 files, tsc/eslint/build all passing), and it does not overstate this as "live multiplayer verified" — it stays at the level of what was actually checked. No correction needed to the entry's content; per this pipeline's process it should now move from "In Progress" to "Completed" (with the PR link) — done below since the verdict is PASS.
+
+### PR creation
+
+- `gh auth status` confirms an authenticated session (`ravindrakamble`, `repo` scope) — no blocker here, unlike spec 09's round.
+- `git branch -a` confirms `spec/11-base-canvas` exists locally with one commit ahead of `main` (`f6a714a`), so there is real work to hand off.
+- Proceeding to push the branch and open a PR against `main` (not merging).
