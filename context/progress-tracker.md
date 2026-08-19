@@ -110,12 +110,16 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None. Spec 09 (Share Dialog) has completed the full Analyst → Senior Developer → QA → Product Owner pipeline; only PR creation and human sign-off remain (see "Next Up").
+- Feature spec 10: Liveblocks Setup — Senior Developer pass complete on branch `spec/10-liveblocks-setup` (off `main`, which now includes specs 05–09 merged via PR #1 and PR #2). Awaiting QA.
+  - New: `liveblocks.config.ts` (root) — `Presence`/`UserMeta` types + global Liveblocks type augmentation, per `architecture-context.md`'s Realtime Conventions; `lib/liveblocks.ts` — cached `@liveblocks/node` client (lazy singleton, mirrors `lib/prisma.ts`'s pattern but defers instantiation to first call so a missing secret doesn't break `next build`'s page-data collection); `lib/liveblocks-color.ts` — deterministic `getCursorColor(userId)` against a locally chosen fixed palette; `app/api/liveblocks-auth/route.ts` — `POST` handler wiring Clerk auth + `getProjectAccess` + idempotent room creation + session token issuance.
+  - `package.json` — added `@liveblocks/node` and `@liveblocks/client` (spec's premise that these were already installed did not hold — see spec's Open Questions #1).
+  - `.env.local` — added an empty `LIVEBLOCKS_SECRET_KEY` placeholder with a comment; no live Liveblocks project/secret exists in this environment (spec's Open Questions #2), so the auth route is type-checked/unit-tested but not verified end-to-end against the real Liveblocks service.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (131/131 across 19 files), `npx next build` all pass — build confirmed to pass even with `LIVEBLOCKS_SECRET_KEY` unset.
+  - Full pipeline trail in `context/spec-status/10-liveblocks-setup.md`.
 
 ## Next Up
 
-- **Human action needed before spec 09's PR can be opened:** no `spec/09-share-dialog` branch exists (specs 07, 08, and 09's work is currently uncommitted on `feat/prisma-postgres-and-project-apis`, which only has committed history through specs 05–06), and the `gh` CLI is unavailable in the review environment. Once a properly named branch with these commits exists and `gh auth status` succeeds, the PR for spec 09 (and any catch-up PRs needed for 07/08) can be created.
-- After human sign-off on specs 07–09, begin spec 10 (Realtime canvas).
+- QA pass on spec 10 (Liveblocks Setup).
 
 ## Open Questions
 
