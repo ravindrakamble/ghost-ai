@@ -3,12 +3,27 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 18: Starter Template — not yet started.
+- Phase 19: Presence Avatars & Cursor — not yet started.
 
 ## Current Goal
-- Analyst pass for feature spec 18 (Starter Template) at `context/feature-specs/18-starter-template.md`.
+- Analyst pass for feature spec 19 (Presence Avatars & Cursor) at `context/feature-specs/19-presence-avatars-cursor.md`.
 
 ## Completed
+
+- Feature spec 18: Starter Template
+  - `components/editor/starter-templates.ts` (new) — `CanvasTemplate` type (`{ id, name, description, nodes: CanvasNode[], edges: CanvasEdge[] }`), `templateNode()`/`templateEdge()` authoring helpers, and `CANVAS_TEMPLATES` (3 templates — microservices, cicd-pipeline, event-driven-system, 6–7 nodes each) — static human-readable IDs (not `generateNodeId()`), every color/textColor pair a real `NODE_COLORS` entry, every shape/size a real `CANVAS_SHAPES`/`SHAPE_DEFAULT_SIZES` entry, shapes chosen for documented "character" (hexagon for gateways/event buses, cylinder for databases/registries, diamond for a CI/CD quality gate, pill for services).
+  - `components/editor/starter-template-preview.tsx` (new) — `StarterTemplatePreview`, an SVG-only (no `@xyflow/react`, no `ShapeVisual` import) per-template diagram preview: `getTemplateBounds()` computes viewBox bounds from the template's own node positions (with padding), default `preserveAspectRatio` fits-and-centers, nodes drawn via `<rect>`/`<circle>` or a per-node transformed `<g>` mirroring `shape-visual.tsx`'s polygon/path constants for diamond/hexagon/cylinder, edges drawn as plain `<line>` between node centers.
+  - `components/editor/starter-templates-modal.tsx` (new) — `StarterTemplatesModal`, a `Dialog`-based (`components/ui/dialog.tsx`, same convention as `share-dialog.tsx`) scrollable card grid; each card shows name/description/preview/Import button; Import calls `onImport(template)` then closes.
+  - `components/editor/workspace-navbar.tsx` (modified) — new `LayoutTemplate`-icon "Templates" button + `onOpenTemplates: () => void` prop, mirroring `onOpenShare`.
+  - `components/editor/workspace-shell.tsx` (modified) — owns `isTemplatesModalOpen` local state (mirrors `isShareOpen`), wires the navbar button, passes the open-state/setter down to `<Canvas>` as new props (same direction `roomId` already flows).
+  - `components/editor/canvas.tsx` (modified) — `Canvas`/`CanvasFlow` forward the new open-state props straight through, no new context; `CanvasFlow` renders `<StarterTemplatesModal>` and owns `handleImportTemplate`. Import clears the canvas via `onDelete({ nodes, edges })` (the real, previously-unused `useLiveblocksFlow` removal channel — the brief's originally-sketched `{ type: "remove" }` `NodeChange`/`EdgeChange` was verified to be a genuine no-op in the installed `@liveblocks/react-flow` source) and adds the template's nodes/edges via `onNodesChange`/`onEdgesChange` (`"add"`-only entries), then calls `fitView`. All three mutation calls are wrapped in one `room.batch(...)` (via `useRoom()` from `@liveblocks/react/suspense`) so they flush as a single Storage commit/broadcast — added in a QA-forced bugfix round after the initial 3-separate-mutation version let a remote collaborator observe a transient empty-canvas frame mid-import. `fitView`'s own internal `fitViewQueued`/`nodesInitialized` deferral (verified via `@xyflow/react`/`@xyflow/system` source) makes the synchronous post-batch call correctly frame the new diagram's real bounds with no manual rAF/effect deferral needed.
+  - `context/ui-context.md` (modified) — new "Starter Templates" section under Canvas (modal styling, SVG preview mechanism/rationale, navbar entry point, the `onDelete`-vs-`{type:"remove"}` deviation, the `room.batch(...)` import mechanism).
+  - Tests: `starter-templates.test.ts`, `starter-template-preview.test.tsx`, `starter-templates-modal.test.tsx`, `workspace-navbar.test.tsx` (all new), `canvas.test.tsx` and `workspace-shell.test.tsx` (extended). 280/280 tests passing across 35 files (up from 257/31 at the end of spec 17) with `--no-file-parallelism` — default parallelism showed environment-driven (not spec-related) flaky file timeouts on this machine, consistent with prior specs' documented flakiness.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass (both the initial pass and the bugfix round).
+  - QA: FAIL on first pass (clear-then-add sequence didn't actually avoid a transient empty-canvas frame despite passing all 11 acceptance criteria on their literal text — QA verified `room.batch(...)`'s reentrant-nesting behavior directly against `@liveblocks/core` source and found a real fix Dev's Known Limitations note had incorrectly ruled out) → Dev fix (wrapped the three mutations in one outer `room.batch(...)`) → QA re-review PASS, independently re-verified the reentrant-batch claim against source, confirmed the diff scope, reproduced the full gate, and empirically proved the new regression test actually catches the bug via a stash-and-revert.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is a direct hit on Success Criterion 3 ("A user can import a prebuilt starter design into the canvas") and Core User Flow step 4, and that the QA-forced `room.batch(...)` fix is a genuine multiplayer-correctness improvement (not cosmetic) strengthening Success Criterion 2. Independently re-verified via `git diff` against this branch's real parent (`fix/shape-panel-pointer-drag`'s tip, not `main`) that `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, and `node-color-toolbar.tsx` are genuinely untouched, that no `app/api` route/Prisma model/new dependency was added, and read `canvas.tsx`/`starter-templates.ts` directly rather than trusting Dev/QA's account. Formed an independent view on the brief's no-confirmation-dialog judgment call (Open Questions #6) and agrees it's acceptable for this stage (two deliberate clicks, working local Liveblocks undo, lower stakes than Delete Project), but flagged for the human reviewer that undo doesn't fully cover the multiplayer case (a second collaborator's own just-made edits could be lost without their own prompt) — not a blocker for this recommendation. No live browser/multiplayer verification possible in this pipeline (consistent with specs 11–17) — recommended human smoke test (import with a second tab open, watch for a transient empty frame; confirm `fitView` frames the new diagram; confirm Ctrl+Z restores the pre-import canvas) before considering this fully proven, not a blocker for this recommendation.
+  - **PR not yet opened.** Branch `spec/18-starter-template` (stacked on `fix/shape-panel-pointer-drag`'s tip, since specs 16/17 and the pointer-drag fix aren't merged to `main` yet) needs a PR opened against `fix/shape-panel-pointer-drag` (not `main`, which is still at spec 15) — see "Next Up".
+  - Full pipeline trail in `context/spec-status/18-starter-template.md`.
 
 - Feature spec 17: Canvas Ergonomics
   - `hooks/use-keyboard-shortcuts.ts` (new) — `useKeyboardShortcuts({ zoomIn, zoomOut, undo, redo })`, a single `window` `keydown` listener mirroring `CanvasControlBar`'s five actions (`+`/`=` zoom in, `-` zoom out, `Cmd/Ctrl+Z` undo, `Cmd/Ctrl+Shift+Z`/`Cmd/Ctrl+Y` redo), ignored when the event target or `document.activeElement` is an editable field (input/textarea/contenteditable) — the guard that keeps it from hijacking specs 14/16's inline label editing. Calls `preventDefault()` on every recognized shortcut.
@@ -218,11 +233,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- Analyst pass for feature spec 18 (Starter Template) at `context/feature-specs/18-starter-template.md`.
+- Open a PR for `spec/18-starter-template` against `fix/shape-panel-pointer-drag` (its real parent — `main` is still at spec 15) — human's call, `gh pr create` has been unreliable for this agent in past specs.
+- Analyst pass for feature spec 19 (Presence Avatars & Cursor) at `context/feature-specs/19-presence-avatars-cursor.md`.
 
 ## Open Questions
 
-- None yet.
+- Spec 18's no-confirmation-dialog posture on the destructive template-import clear — Product Owner accepted it for this stage but flagged that Liveblocks undo doesn't fully cover the multiplayer case (a second collaborator's own just-made edits could be lost without their own prompt). Recommended as a candidate follow-up (lightweight confirmation, or gating it when other collaborators are present), not a blocker for spec 19+.
 
 ## Deferred — Production Hardening (after spec 29)
 
