@@ -23,6 +23,7 @@ import {
   useCanUndo,
   useErrorListener,
   useRedo,
+  useRoom,
   useUndo,
 } from "@liveblocks/react/suspense"
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
@@ -244,6 +245,19 @@ function CanvasError() {
  * this library version, not a workaround. See this component's own inline
  * comment on `handleImportTemplate` below, and the Dev Notes appended to
  * `context/spec-status/18-starter-template.md` for the full source excerpt.
+ *
+ * QA's bugfix round: the three mutations (`onDelete`, `onNodesChange`,
+ * `onEdgesChange`) are wrapped in `room.batch(...)` (`room` from `useRoom()`,
+ * the same `@liveblocks/react/suspense` module already imported here for
+ * `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo`). Each is itself a
+ * `useMutation`-returned function that already wraps its own call in
+ * `room.batch(...)` internally — but `@liveblocks/core`'s `batch()` is
+ * reentrant (a nested `batch()` call runs its callback inline and folds its
+ * ops into the enclosing batch rather than flushing on its own), so wrapping
+ * all three in one outer `room.batch(...)` coalesces them into a single
+ * Storage commit/broadcast instead of three. See the "Bugfix round" note
+ * appended to `context/spec-status/18-starter-template.md` for the verified
+ * source.
  */
 function CanvasFlow({
   isTemplatesModalOpen,
@@ -265,6 +279,7 @@ function CanvasFlow({
   const redo = useRedo()
   const canUndo = useCanUndo()
   const canRedo = useCanRedo()
+  const room = useRoom()
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {
@@ -315,6 +330,15 @@ function CanvasFlow({
    * pattern), one call each so every template node/edge lands in a single
    * batch rather than one mutation per item.
    *
+   * All three calls (`onDelete`, `onNodesChange`, `onEdgesChange`) are
+   * wrapped in `room.batch(...)` so they coalesce into one Storage commit/
+   * broadcast rather than three — otherwise a remote collaborator could
+   * observe a transient empty-canvas frame between the `onDelete` commit and
+   * the subsequent "add" commits, which is exactly the race the Concrete
+   * Deliverables text for this spec calls out as something to avoid. See
+   * this component's docblock above and the "Bugfix round" note in
+   * `context/spec-status/18-starter-template.md`.
+   *
    * `fitView()` is called synchronously right after, with no manual
    * deferral (rAF/effect/microtask) — verified via `@xyflow/react`'s real
    * source (`dist/esm/index.js`) that `fitView()` itself only flags
@@ -332,8 +356,6 @@ function CanvasFlow({
    */
   const handleImportTemplate = useCallback(
     (template: CanvasTemplate) => {
-      onDelete({ nodes, edges })
-
       const nodeChanges: NodeChange<CanvasNodeAlias>[] = template.nodes.map((node) => ({
         type: "add" as const,
         item: node,
@@ -342,12 +364,16 @@ function CanvasFlow({
         type: "add" as const,
         item: edge,
       }))
-      onNodesChange(nodeChanges)
-      onEdgesChange(edgeChanges)
+
+      room.batch(() => {
+        onDelete({ nodes, edges })
+        onNodesChange(nodeChanges)
+        onEdgesChange(edgeChanges)
+      })
 
       fitView({ duration: ZOOM_TRANSITION_DURATION_MS })
     },
-    [nodes, edges, onNodesChange, onEdgesChange, onDelete, fitView],
+    [nodes, edges, onNodesChange, onEdgesChange, onDelete, fitView, room],
   )
 
   // Shared by both CanvasControlBar's buttons and the keyboard shortcuts

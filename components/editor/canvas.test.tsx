@@ -33,6 +33,8 @@ const {
   useCanUndoMock,
   useCanRedoMock,
   onDeleteMock,
+  useRoomMock,
+  roomBatchMock,
   reactFlowPropsRef,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
@@ -46,6 +48,13 @@ const {
   useCanUndoMock: vi.fn(),
   useCanRedoMock: vi.fn(),
   onDeleteMock: vi.fn(),
+  // `room.batch(callback)` — mirrors `@liveblocks/core`'s real behavior of
+  // just invoking `callback` synchronously (batching/flushing is an
+  // implementation detail this test surface doesn't need to simulate; what
+  // matters here is that `handleImportTemplate` routes all three mutations
+  // through this single call rather than invoking them unwrapped).
+  roomBatchMock: vi.fn((callback: () => void) => callback()),
+  useRoomMock: vi.fn(),
   reactFlowPropsRef: { current: null as CapturedReactFlowProps | null },
 }));
 
@@ -84,6 +93,9 @@ vi.mock("@liveblocks/react/suspense", () => ({
   useRedo: useRedoMock,
   useCanUndo: useCanUndoMock,
   useCanRedo: useCanRedoMock,
+  // Spec 18's bugfix round: `useRoom()` gives `handleImportTemplate` a real
+  // `room.batch(...)` to coalesce its three mutations into one commit.
+  useRoom: useRoomMock,
 }));
 
 vi.mock("@liveblocks/react-flow", () => ({
@@ -168,6 +180,7 @@ beforeEach(() => {
   useRedoMock.mockReturnValue(vi.fn());
   useCanUndoMock.mockReturnValue(true);
   useCanRedoMock.mockReturnValue(true);
+  useRoomMock.mockReturnValue({ batch: roomBatchMock });
 });
 
 describe("Canvas", () => {
@@ -420,6 +433,23 @@ describe("Canvas", () => {
       expect(edgeChanges).toHaveLength(target.edges.length);
       expect(edgeChanges.every((change) => change.type === "add")).toBe(true);
       expect(edgeChanges.map((change) => change.item)).toEqual(target.edges);
+    });
+
+    it("bugfix round: wraps onDelete/onNodesChange/onEdgesChange in a single room.batch(...) call so collaborators don't see a transient empty-canvas frame", () => {
+      renderCanvas({ isTemplatesModalOpen: true });
+
+      const importButtons = screen.getAllByRole("button", { name: /import/i });
+      fireEvent.click(importButtons[0]);
+
+      expect(roomBatchMock).toHaveBeenCalledTimes(1);
+
+      // All three mutations must run *inside* the batch callback (i.e. after
+      // room.batch was invoked), not before it — otherwise they wouldn't
+      // actually be coalesced into the same batch.
+      const batchCallOrder = roomBatchMock.mock.invocationCallOrder[0];
+      expect(onDeleteMock.mock.invocationCallOrder[0]).toBeGreaterThan(batchCallOrder);
+      expect(onNodesChange.mock.invocationCallOrder[0]).toBeGreaterThan(batchCallOrder);
+      expect(onEdgesChange.mock.invocationCallOrder[0]).toBeGreaterThan(batchCallOrder);
     });
 
     it("calls fitView after importing a template", () => {
