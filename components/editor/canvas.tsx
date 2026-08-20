@@ -5,10 +5,13 @@ import {
   Background,
   BackgroundVariant,
   ConnectionMode,
+  MarkerType,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  type DefaultEdgeOptions,
+  type EdgeTypes,
   type NodeTypes,
 } from "@xyflow/react"
 import {
@@ -18,20 +21,45 @@ import {
   useErrorListener,
 } from "@liveblocks/react/suspense"
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
+import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
 import { ShapePanel } from "@/components/editor/shape-panel"
+import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { CANVAS_DRAG_MIME_TYPE, createDroppedNode, parseShapeDragPayload } from "@/lib/canvas-shapes"
-import { CANVAS_NODE_TYPE, type CanvasEdge, type CanvasNode as CanvasNodeAlias } from "@/types/canvas"
+import {
+  CANVAS_EDGE_TYPE,
+  CANVAS_NODE_TYPE,
+  type CanvasEdge as CanvasEdgeAlias,
+  type CanvasNode as CanvasNodeAlias,
+} from "@/types/canvas"
 import "@xyflow/react/dist/style.css"
 import "@liveblocks/react-flow/styles.css"
 
 /**
- * `nodeTypes` must be a stable reference across renders (React Flow warns
- * and re-renders unnecessarily otherwise) — defined once at module scope
- * rather than inline in `CanvasFlow`.
+ * `nodeTypes`/`edgeTypes` must be stable references across renders (React
+ * Flow warns and re-renders unnecessarily otherwise) — defined once at
+ * module scope rather than inline in `CanvasFlow`.
  */
 const CANVAS_NODE_TYPES: NodeTypes = { [CANVAS_NODE_TYPE]: CanvasNode }
+const CANVAS_EDGE_TYPES: EdgeTypes = { [CANVAS_EDGE_TYPE]: CanvasEdge }
+
+/**
+ * New connections created via `onConnect` (dragging from a node handle) use
+ * the custom `CANVAS_EDGE_TYPE` renderer and an arrow marker from creation —
+ * spec 16's Analyst Brief, Concrete deliverables, step 2 ("make new
+ * connections use the custom canvas edge renderer"). Marker color is fixed
+ * (not hover/selected-tracking) rather than dynamic — see spec 16's Analyst
+ * Brief, Open Questions #5: React Flow resolves `markerEnd` into a static
+ * per-edge SVG `<marker>` def from the edge's own persisted data, not a
+ * per-render style, so tracking `CanvasEdge`'s local hover state would need
+ * a hand-rolled marker instead of React Flow's own marker system — judged
+ * not worth the complexity for a recommendation the spec text calls minor.
+ */
+const DEFAULT_EDGE_OPTIONS: DefaultEdgeOptions = {
+  type: CANVAS_EDGE_TYPE,
+  markerEnd: { type: MarkerType.ArrowClosed, color: "var(--text-secondary)" },
+}
 
 interface CanvasProps {
   /** Liveblocks room ID — the current project's ID (spec 10's convention). */
@@ -129,11 +157,22 @@ function CanvasError() {
  * `CanvasNodeUpdateContext` so the leaf `CanvasNode` renderer can dispatch
  * label edits back through the real `onNodesChange` — see spec 14's
  * Analyst Brief, Open Questions #1, and `hooks/use-update-canvas-node.ts`.
+ *
+ * Spec 16 registers `edgeTypes` (the custom `CanvasEdge` renderer, first
+ * consumer of `CANVAS_EDGE_TYPE`/`CanvasEdgeData` since spec 11 defined
+ * them) and `defaultEdgeOptions` so edges created via `onConnect` — already
+ * wired up since spec 11, previously producing React Flow's default
+ * `bezier` edge — use the custom renderer and arrow marker from creation.
+ * Also adds `updateEdgeData`, the edge-scoped mirror of `updateNodeData`
+ * above, provided via `CanvasEdgeUpdateContext` so the leaf `CanvasEdge`
+ * renderer can dispatch label edits back through the real `onEdgesChange`
+ * — see spec 16's Analyst Brief, Open Questions #1, and
+ * `hooks/use-update-canvas-edge.ts`.
  */
 function CanvasFlow() {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useLiveblocksFlow<
     CanvasNodeAlias,
-    CanvasEdge
+    CanvasEdgeAlias
   >({
     suspense: true,
     nodes: { initial: [] },
@@ -172,23 +211,38 @@ function CanvasFlow() {
     [nodes, onNodesChange],
   )
 
+  const updateEdgeData = useCallback<UpdateCanvasEdgeData>(
+    (edgeId, data) => {
+      const edge = edges.find((candidate) => candidate.id === edgeId)
+      if (!edge) return
+
+      const updatedEdge: CanvasEdgeAlias = { ...edge, data: { ...edge.data, ...data } }
+      onEdgesChange([{ id: edgeId, type: "replace", item: updatedEdge }])
+    },
+    [edges, onEdgesChange],
+  )
+
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        nodeTypes={CANVAS_NODE_TYPES}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        connectionMode={ConnectionMode.Loose}
-        fitView
-      >
-        <MiniMap />
-        <Background variant={BackgroundVariant.Dots} />
-      </ReactFlow>
+      <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          nodeTypes={CANVAS_NODE_TYPES}
+          edgeTypes={CANVAS_EDGE_TYPES}
+          defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          connectionMode={ConnectionMode.Loose}
+          fitView
+        >
+          <MiniMap />
+          <Background variant={BackgroundVariant.Dots} />
+        </ReactFlow>
+      </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>
   )
 }

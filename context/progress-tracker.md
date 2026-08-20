@@ -3,12 +3,25 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 16: Edge Behavior — not yet started.
+- Phase 17: Canvas Ergonomics — not yet started.
 
 ## Current Goal
-- Analyst brief for feature spec 16 (Edge Behavior).
+- Analyst pass for feature spec 17 (Canvas Ergonomics) at `context/feature-specs/17-canvas-ergonomics.md`.
 
 ## Completed
+
+- Feature spec 16: Edge Behavior
+  - `hooks/use-update-canvas-edge.ts` (new) — `CanvasEdgeUpdateContext`/`useUpdateCanvasEdge()`, the edge-scoped mirror of spec 14's `hooks/use-update-canvas-node.ts`, so the leaf `CanvasEdge` renderer can dispatch label edits back through `CanvasFlow`'s real `onEdgesChange`.
+  - `components/editor/canvas-edge.tsx` (new) — `CanvasEdge`, the custom edge renderer for `CANVAS_EDGE_TYPE` (first consumer of `CanvasEdgeData`, defined in spec 11, never rendered until now). Right-angle/smooth-step routing via `getSmoothStepPath`, `BaseEdge`, `EdgeLabelRenderer` positioned at the path's own `labelX`/`labelY`; dimmed-at-rest (`var(--border-default)`) / brightened-on-hover-or-selected (`var(--accent-primary)`) stroke; `BaseEdge`'s own `interactionWidth` (default 20px) provides the enlarged hit area; double-click-to-edit label with pill-badge (saved) / faint-hint-while-editing-empty / nothing-at-rest states, dispatched via `useUpdateCanvasEdge()` on every keystroke, `nodrag nopan` on interactive elements.
+  - `components/editor/canvas-node.tsx` (modified) — added four `Handle` components (one per side), wrapped with `ShapeVisual` in a new `group relative` `<div>` for hover-driven fade-in (the brief's one permitted exception to "don't redesign the node renderer"). Single `type="source"` handle per side, verified sufficient under `ConnectionMode.Loose` by reading `@xyflow/system`'s `isValidHandle` source.
+  - `components/editor/canvas.tsx` (modified) — registers `edgeTypes={{ [CANVAS_EDGE_TYPE]: CanvasEdge }}` and `defaultEdgeOptions` (`type: CANVAS_EDGE_TYPE`, arrow `markerEnd`) on `<ReactFlow>`; adds `updateEdgeData`/`CanvasEdgeUpdateContext.Provider` alongside the existing node one. No drag/drop/node-creation changes.
+  - `context/ui-context.md` (modified) — Edge Style section rewritten from aspirational/doc-only to the real implementation; Connection Handles section gained an implementation paragraph.
+  - Tests: `hooks/use-update-canvas-edge.test.tsx` (new), `components/editor/canvas-edge.test.tsx` (new, 19 tests), `components/editor/canvas-node.test.tsx` (extended, handle presence/hover/ids), `components/editor/canvas.test.tsx` (extended — `edgeTypes`/`defaultEdgeOptions` wiring, plus `Position`/`MarkerType` added to its existing `@xyflow/react` mock since both are now dereferenced at module scope). 236/236 tests passing across 29 files (up from 211/27 at the end of spec 15).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 13 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced. Confirmed via `git diff spec/15-nodes-color-toolbar..spec/16-edge-behavior` that `lib/canvas-shapes.ts`, `shape-panel.tsx`, `shape-visual.tsx`, `types/canvas.ts`, and `node-color-toolbar.tsx` are byte-for-byte untouched, and `canvas-node.tsx`'s diff is limited to the four handles plus a non-functional hover wrapper.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec closes a real gap toward Success Criterion 2 (collaborative canvas) and the Core User Flow's "collaborators edit and refine the design" step: previously nodes had no connection handles at all, so no edge could be drawn on the canvas despite `onConnect`/`onEdgesChange` being wired since spec 11 and `CanvasEdgeData`/`CANVAS_EDGE_TYPE` sitting unconsumed since then. Also de-risks later Criteria 4/5 (AI-generated architecture, spec generation) by making edges a real, renderable, labelable part of the graph ahead of time. Independently re-verified via `git diff spec/15-nodes-color-toolbar..spec/16-edge-behavior` (this branch's actual parent, not `main`) — not just trusting Dev/QA claims — that node-creation, shape-panel, and node-shape/color files are genuinely untouched, and that `canvas-node.tsx`/`canvas.tsx`'s changes are additive and scoped exactly as the brief describes. No touches to any `project-overview.md` Out of Scope item. Two minor, honestly-disclosed judgment calls (fixed marker color, "hint only while actively editing empty" reading of criterion 10) accepted as reasonable within genuinely ambiguous spec wording, not blockers for specs 17+. No live browser/multiplayer verification possible in this pipeline (consistent with specs 11–15) — recommended human smoke test (two-tab drag-connect, live label sync, hover brighten, resize/select regression check) before considering this fully proven, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #9](https://github.com/ravindrakamble/ghost-ai/pull/9) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/16-edge-behavior.md`.
 
 - Feature spec 15: Nodes Color Toolbar
   - `types/canvas.ts` (modified) — added `NodeColorPair` interface and `NODE_COLORS` (the 8 fill/text pairs from `ui-context.md`'s Node Color Palette table, first entry reusing `DEFAULT_NODE_COLOR`/`DEFAULT_NODE_TEXT_COLOR` rather than duplicating their values); extended `CanvasNodeData` with a required `textColor: string` field.
@@ -189,11 +202,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently.
+- None.
 
 ## Next Up
 
-- Analyst brief for feature spec 16 (Edge Behavior).
+- Analyst pass for feature spec 17 (Canvas Ergonomics) at `context/feature-specs/17-canvas-ergonomics.md`.
 
 ## Open Questions
 
@@ -224,3 +237,4 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
 - Next.js 16.2.6, React 19.2.4, Tailwind v4, shadcn v4.
 - `components/ui/` files are generated — do not modify them.
 - Theme tokens live in `globals.css`; components consume via Tailwind utility names.
+</content>

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Canvas } from "./canvas";
 import { CANVAS_DRAG_MIME_TYPE, serializeShapeDragPayload } from "@/lib/canvas-shapes";
-import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
+import { CANVAS_EDGE_TYPE, CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
 
 // `Canvas` wires together three real Liveblocks/React Flow packages that
 // need a live network connection to do anything — this test only verifies
@@ -17,6 +17,8 @@ import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
 type ErrorListenerCallback = (error: { context: { type: string } }) => void;
 type CapturedReactFlowProps = {
   nodeTypes?: Record<string, unknown>;
+  edgeTypes?: Record<string, unknown>;
+  defaultEdgeOptions?: { type?: string; markerEnd?: unknown };
   onDragOver?: (event: unknown) => void;
   onDrop?: (event: unknown) => void;
 };
@@ -91,6 +93,14 @@ vi.mock("@xyflow/react", () => ({
   MiniMap: () => <div data-testid="minimap" />,
   BackgroundVariant: { Lines: "lines", Dots: "dots", Cross: "cross" },
   ConnectionMode: { Strict: "strict", Loose: "loose" },
+  // `canvas-node.tsx`/`canvas.tsx` reference `Position.*`/`MarkerType.*` at
+  // module scope (building `CONNECTION_HANDLES`/`DEFAULT_EDGE_OPTIONS`), so
+  // importing `Canvas` in this test dereferences them even though
+  // `CanvasNode`/`CanvasEdge` themselves never actually render here (this
+  // mock replaces `ReactFlow` with a passthrough that only renders its
+  // `children` prop, not `nodeTypes`/`edgeTypes`).
+  Position: { Top: "top", Right: "right", Bottom: "bottom", Left: "left" },
+  MarkerType: { Arrow: "arrow", ArrowClosed: "arrowclosed" },
 }));
 
 const onNodesChange = vi.fn();
@@ -181,6 +191,15 @@ describe("Canvas", () => {
 
     expect(reactFlowPropsRef.current?.nodeTypes).toHaveProperty(CANVAS_NODE_TYPE);
     expect(Object.keys(reactFlowPropsRef.current?.nodeTypes ?? {})).toEqual([CANVAS_NODE_TYPE]);
+  });
+
+  it("registers the custom CanvasEdge renderer for CANVAS_EDGE_TYPE and defaults new edges to it with an arrow marker", () => {
+    render(<Canvas roomId="project-123" />);
+
+    expect(reactFlowPropsRef.current?.edgeTypes).toHaveProperty(CANVAS_EDGE_TYPE);
+    expect(Object.keys(reactFlowPropsRef.current?.edgeTypes ?? {})).toEqual([CANVAS_EDGE_TYPE]);
+    expect(reactFlowPropsRef.current?.defaultEdgeOptions?.type).toBe(CANVAS_EDGE_TYPE);
+    expect(reactFlowPropsRef.current?.defaultEdgeOptions?.markerEnd).toBeTruthy();
   });
 
   it("allows a drop when dragover carries the shape MIME type", () => {
