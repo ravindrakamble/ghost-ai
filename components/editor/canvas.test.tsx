@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { Canvas } from "./canvas";
 import { CANVAS_DRAG_MIME_TYPE, serializeShapeDragPayload } from "@/lib/canvas-shapes";
 import { CANVAS_EDGE_TYPE, CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
@@ -23,13 +23,31 @@ type CapturedReactFlowProps = {
   onDrop?: (event: unknown) => void;
 };
 
-const { errorListenerRef, useLiveblocksFlowMock, screenToFlowPositionMock, reactFlowPropsRef } =
-  vi.hoisted(() => ({
-    errorListenerRef: { current: null as ErrorListenerCallback | null },
-    useLiveblocksFlowMock: vi.fn(),
-    screenToFlowPositionMock: vi.fn(),
-    reactFlowPropsRef: { current: null as CapturedReactFlowProps | null },
-  }));
+const {
+  errorListenerRef,
+  useLiveblocksFlowMock,
+  screenToFlowPositionMock,
+  zoomInMock,
+  zoomOutMock,
+  fitViewMock,
+  useUndoMock,
+  useRedoMock,
+  useCanUndoMock,
+  useCanRedoMock,
+  reactFlowPropsRef,
+} = vi.hoisted(() => ({
+  errorListenerRef: { current: null as ErrorListenerCallback | null },
+  useLiveblocksFlowMock: vi.fn(),
+  screenToFlowPositionMock: vi.fn(),
+  zoomInMock: vi.fn(),
+  zoomOutMock: vi.fn(),
+  fitViewMock: vi.fn(),
+  useUndoMock: vi.fn(),
+  useRedoMock: vi.fn(),
+  useCanUndoMock: vi.fn(),
+  useCanRedoMock: vi.fn(),
+  reactFlowPropsRef: { current: null as CapturedReactFlowProps | null },
+}));
 
 vi.mock("@liveblocks/react/suspense", () => ({
   LiveblocksProvider: ({
@@ -60,6 +78,12 @@ vi.mock("@liveblocks/react/suspense", () => ({
   useErrorListener: (callback: ErrorListenerCallback) => {
     errorListenerRef.current = callback;
   },
+  // Spec 17's four Liveblocks room-history hooks — extending this mock
+  // surface the same way spec 16 extended it for `Position`/`MarkerType`.
+  useUndo: useUndoMock,
+  useRedo: useRedoMock,
+  useCanUndo: useCanUndoMock,
+  useCanRedo: useCanRedoMock,
 }));
 
 vi.mock("@liveblocks/react-flow", () => ({
@@ -68,7 +92,12 @@ vi.mock("@liveblocks/react-flow", () => ({
 
 vi.mock("@xyflow/react", () => ({
   ReactFlowProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  useReactFlow: () => ({ screenToFlowPosition: screenToFlowPositionMock }),
+  useReactFlow: () => ({
+    screenToFlowPosition: screenToFlowPositionMock,
+    zoomIn: zoomInMock,
+    zoomOut: zoomOutMock,
+    fitView: fitViewMock,
+  }),
   ReactFlow: (props: CapturedReactFlowProps & {
     children: ReactNode;
     nodes: unknown[];
@@ -90,7 +119,6 @@ vi.mock("@xyflow/react", () => ({
     );
   },
   Background: ({ variant }: { variant: string }) => <div data-testid="background" data-variant={variant} />,
-  MiniMap: () => <div data-testid="minimap" />,
   BackgroundVariant: { Lines: "lines", Dots: "dots", Cross: "cross" },
   ConnectionMode: { Strict: "strict", Loose: "loose" },
   // `canvas-node.tsx`/`canvas.tsx` reference `Position.*`/`MarkerType.*` at
@@ -118,6 +146,10 @@ beforeEach(() => {
     onEdgesChange,
     onConnect,
   });
+  useUndoMock.mockReturnValue(vi.fn());
+  useRedoMock.mockReturnValue(vi.fn());
+  useCanUndoMock.mockReturnValue(true);
+  useCanRedoMock.mockReturnValue(true);
 });
 
 describe("Canvas", () => {
@@ -136,7 +168,7 @@ describe("Canvas", () => {
     });
   });
 
-  it("wires useLiveblocksFlow's synced state into ReactFlow with loose connections, fitView, MiniMap, and a dot background", () => {
+  it("wires useLiveblocksFlow's synced state into ReactFlow with loose connections, fitView, and a dot background", () => {
     render(<Canvas roomId="project-123" />);
 
     expect(useLiveblocksFlowMock).toHaveBeenCalledWith({
@@ -150,8 +182,13 @@ describe("Canvas", () => {
     expect(reactFlow).toHaveAttribute("data-fit-view", "true");
     expect(reactFlow).toHaveAttribute("data-nodes-count", "0");
     expect(reactFlow).toHaveAttribute("data-edges-count", "0");
-    expect(screen.getByTestId("minimap")).toBeInTheDocument();
     expect(screen.getByTestId("background")).toHaveAttribute("data-variant", "dots");
+  });
+
+  it("no longer renders a MiniMap anywhere on the canvas", () => {
+    render(<Canvas roomId="project-123" />);
+
+    expect(screen.queryByTestId("minimap")).not.toBeInTheDocument();
   });
 
   it("shows a connection-error fallback instead of the canvas when a ROOM_CONNECTION_ERROR is reported", () => {
@@ -182,8 +219,61 @@ describe("Canvas", () => {
   it("renders the floating shape panel within the canvas's relative wrapper", () => {
     render(<Canvas roomId="project-123" />);
 
-    // 6 shapes per the spec: rectangle, diamond, circle, pill, cylinder, hexagon.
-    expect(screen.getAllByRole("button")).toHaveLength(6);
+    // 6 shape-panel buttons (rectangle, diamond, circle, pill, cylinder,
+    // hexagon) plus the 5 control-bar buttons (zoom out, fit view, zoom in,
+    // undo, redo) added in spec 17.
+    expect(screen.getAllByRole("button")).toHaveLength(11);
+  });
+
+  it("renders the canvas control bar wired to the real React Flow zoom methods and Liveblocks history hooks", () => {
+    const undo = vi.fn();
+    const redo = vi.fn();
+    useUndoMock.mockReturnValue(undo);
+    useRedoMock.mockReturnValue(redo);
+    useCanUndoMock.mockReturnValue(false);
+    useCanRedoMock.mockReturnValue(true);
+
+    render(<Canvas roomId="project-123" />);
+
+    const zoomInButton = screen.getByRole("button", { name: /zoom in/i });
+    const zoomOutButton = screen.getByRole("button", { name: /zoom out/i });
+    const fitViewButton = screen.getByRole("button", { name: /fit view/i });
+    const undoButton = screen.getByRole("button", { name: /undo/i });
+    const redoButton = screen.getByRole("button", { name: /redo/i });
+
+    fireEvent.click(zoomInButton);
+    fireEvent.click(zoomOutButton);
+    fireEvent.click(fitViewButton);
+    expect(zoomInMock).toHaveBeenCalledWith({ duration: expect.any(Number) });
+    expect(zoomOutMock).toHaveBeenCalledWith({ duration: expect.any(Number) });
+    expect(fitViewMock).toHaveBeenCalledWith({ duration: expect.any(Number) });
+
+    // canUndo is false, canRedo is true.
+    expect(undoButton).toBeDisabled();
+    expect(redoButton).not.toBeDisabled();
+
+    fireEvent.click(redoButton);
+    expect(redo).toHaveBeenCalledTimes(1);
+    fireEvent.click(undoButton);
+    expect(undo).not.toHaveBeenCalled();
+  });
+
+  it("wires the real useKeyboardShortcuts hook to the same zoom/undo/redo handlers as the control bar", () => {
+    const undo = vi.fn();
+    const redo = vi.fn();
+    useUndoMock.mockReturnValue(undo);
+    useRedoMock.mockReturnValue(redo);
+
+    render(<Canvas roomId="project-123" />);
+
+    fireEvent.keyDown(window, { key: "+" });
+    expect(zoomInMock).toHaveBeenCalledWith({ duration: expect.any(Number) });
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(undo).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
+    expect(redo).toHaveBeenCalledTimes(1);
   });
 
   it("registers the custom CanvasNode renderer for CANVAS_NODE_TYPE", () => {

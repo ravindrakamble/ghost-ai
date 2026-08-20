@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 17: Canvas Ergonomics — not yet started.
+- Phase 17: Canvas Ergonomics — Dev pass complete, awaiting QA.
 
 ## Current Goal
-- Analyst pass for feature spec 17 (Canvas Ergonomics) at `context/feature-specs/17-canvas-ergonomics.md`.
+- QA pass for feature spec 17 (Canvas Ergonomics) at `context/spec-status/17-canvas-ergonomics.md`.
 
 ## Completed
 
@@ -202,11 +202,19 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None.
+- Feature spec 17: Canvas Ergonomics
+  - `hooks/use-keyboard-shortcuts.ts` (new) — `useKeyboardShortcuts({ zoomIn, zoomOut, undo, redo })`, a single `window` `keydown` listener mirroring `CanvasControlBar`'s five actions (`+`/`=` zoom in, `-` zoom out, `Cmd/Ctrl+Z` undo, `Cmd/Ctrl+Shift+Z`/`Cmd/Ctrl+Y` redo), ignored when the event target or `document.activeElement` is an editable field (input/textarea/contenteditable) — the guard that keeps it from hijacking specs 14/16's inline label editing. Calls `preventDefault()` on every recognized shortcut.
+  - `components/editor/canvas-control-bar.tsx` (new) — `CanvasControlBar`: bottom-left pill toolbar, zoom out/fit view/zoom in then a `bg-surface-border` divider then undo/redo, all five actions and `canUndo`/`canRedo` passed in as props (no context). Undo/redo use the shadcn `Button`'s native `disabled` prop for the dimmed state.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` reads `zoomIn`/`zoomOut`/`fitView` from the existing `useReactFlow()` call plus Liveblocks' `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo` (`@liveblocks/react/suspense`), wraps zoom calls with a shared `{ duration: 200 }`, wires both `CanvasControlBar` and `useKeyboardShortcuts` off the same handlers, and removes `<MiniMap>` (and its import). No changes to drag/drop, node/edge creation, or the existing collaborative sync setup.
+  - `context/ui-context.md` (modified) — new "Canvas Control Bar" section; updated Floating Shape Panel's stale `MiniMap` reference.
+  - Tests: `hooks/use-keyboard-shortcuts.test.ts` (new, 11 tests), `components/editor/canvas-control-bar.test.tsx` (new, 6 tests), `components/editor/canvas.test.tsx` (extended — history-hook mock surface, zoom-method mock surface, `MiniMap` removal, control-bar/keyboard-shortcut wiring). 257/257 tests passing across 31 files (up from 236/29 at the end of spec 16).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - Diff confirmed scope-clean: only the files above plus their tests changed — `shape-panel.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, and `types/canvas.ts` untouched.
+  - Full pipeline trail (Dev Notes) in `context/spec-status/17-canvas-ergonomics.md`. Awaiting QA.
 
 ## Next Up
 
-- Analyst pass for feature spec 17 (Canvas Ergonomics) at `context/feature-specs/17-canvas-ergonomics.md`.
+- QA pass for feature spec 17 (Canvas Ergonomics).
 
 ## Open Questions
 
