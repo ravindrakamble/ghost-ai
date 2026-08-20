@@ -105,3 +105,93 @@ No skill from `.claude/skills/` applied here — this spec is pure React/Tailwin
 - `git diff spec/14-node-editing spec/15-nodes-color-toolbar` confirms `components/editor/canvas.tsx` and `components/editor/shape-panel.tsx` are untouched — no drag/drop, node-creation, or selection-logic changes, per this spec's Scope Limits.
 
 Implementation ready for QA at `context/spec-status/15-nodes-color-toolbar.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — pass, no output/errors.
+- `npx eslint .` — pass, 0 errors; 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/...` (unrelated `@next/next/no-head-element`), matches Dev Notes claim, no new warnings introduced by this spec's files.
+- `npx vitest run` — pass, 211/211 tests across 27 files, matches Dev Notes claim exactly.
+- `npx next build` — pass, Turbopack build + TypeScript check succeeded, all routes generated.
+
+### Acceptance criteria
+
+1. `NODE_COLORS` matches `ui-context.md`'s 8-pair table exactly (hex values + order) — PASS. Verified by reading both `types/canvas.ts` and `context/ui-context.md`'s table side by side; default pair reuses `DEFAULT_NODE_COLOR`/`DEFAULT_NODE_TEXT_COLOR` rather than duplicating hex literals. Covered by `types/canvas.test.ts`.
+2. Toolbar renders above a node only when `selected` — PASS. `canvas-node.tsx:129` — `{selected ? <NodeColorToolbar .../> : null}`. Covered by `canvas-node.test.tsx`'s "color toolbar" describe block (renders 8 when selected, none when not).
+3. Toolbar positioned above the node without overlapping — PASS. `absolute bottom-full left-1/2 -translate-x-1/2 mb-2` anchors the toolbar's bottom edge to the node's top edge with a visible gap.
+4. Exactly one swatch per color pair (8 total) — PASS. `NODE_COLORS.map(...)` in `node-color-toolbar.tsx`; tested directly.
+5. Active swatch (matching `data.color`) visually marked — PASS. `border-brand` + `aria-pressed` on the matching swatch; tested.
+6. Hover shows a subtle, tight (non-blurry) glow derived from the swatch's paired text color — PASS. `--swatch-glow` CSS custom property (set to `pair.textColor`) + `hover:shadow-[0_0_0_2px_var(--swatch-glow)]` — zero blur radius, fixed 2px spread. Verified the value is per-swatch, not a single static token.
+7. Click updates `data.color`/`data.textColor` together through the real `useUpdateCanvasNode()`/`onNodesChange` sync path, not local-only — PASS. Traced the full chain: `NodeColorToolbar` → `CanvasNode.handleColorSelect` → `useUpdateCanvasNode()` → `CanvasFlow.updateNodeData` (`canvas.tsx:164-173`) → `onNodesChange([{ type: "replace", ... }])`, the same Liveblocks-backed `onNodesChange` passed to `<ReactFlow>`. Not a local React Flow store mutation.
+8. Color change reflected immediately in both fill and label text, no server/API call — PASS. `ShapeVisual` receives `color`/`textColor` straight from `data`; no `fetch`/`app/api` call anywhere in the new code.
+9. Toolbar interactions don't start drag/pan — PASS. `nodrag nopan` present on the toolbar container; tested.
+10. No free-form color input anywhere — PASS. No `input[type=color]`, no hex field; explicitly tested (`queryAllByRole("textbox")` count 0, `input[type="color"]` null) in both `node-color-toolbar.test.tsx` and indirectly via component composition.
+11. Drag/drop and node-creation/selection logic unchanged — PASS. Independently reproduced `git diff spec/14-node-editing spec/15-nodes-color-toolbar -- components/editor/canvas.tsx` and `-- components/editor/shape-panel.tsx`: both empty. `selected` remains React Flow's own prop; no new selection mechanism introduced.
+12. `npm run build`/`tsc --noEmit`/`eslint` pass — PASS, see Mechanical gate above.
+
+All 12 acceptance criteria pass.
+
+### Architecture invariants
+
+- No long-running AI work introduced; this is pure client-side component state synced via existing Liveblocks path — consistent with invariant 1.
+- No metadata/blob storage touched — consistent with invariant 2.
+- No new mutation boundary requiring auth/ownership checks — this stays inside the existing Liveblocks room's collaborative state, same trust boundary as spec 14's label edits — consistent with invariant 3.
+- `node-color-toolbar.tsx` and `canvas-node.tsx` are `"use client"` — correctly requires browser interactivity (click handlers, hover) — consistent with invariant 4.
+- No template/schema changes — consistent with invariant 5. (Note: `CanvasNodeData.textColor` is now a required field; no starter templates exist yet in the codebase, so this doesn't currently create a load-time gap — see minor note below, not blocking.)
+
+### Standards compliance
+
+- No `any` anywhere in the diff.
+- No raw Tailwind color classes (`zinc-`/`slate-`/`gray-`) or hardcoded hex values inside `className` strings in the changed component files — grepped `node-color-toolbar.tsx`, `canvas-node.tsx`, `shape-visual.tsx`; only match was the token class `border-surface-border` (a legitimate token name containing "border-s...", not a raw color). The only hex literals live in `types/canvas.ts`'s `NODE_COLORS` data table, which is exactly where the spec says palette data belongs.
+- `components/ui/*` untouched — confirmed, no `components/ui` files in the diff stat.
+- `components/editor/canvas.tsx` and `components/editor/shape-panel.tsx` confirmed untouched via `git diff` (not just trusting Dev Notes) — matches this spec's Scope Limits and Dev's claim.
+- Test files follow the `*.test.tsx` convention, colocated with source, `jsdom` docblock present on component tests, per `code-standards.md`.
+
+### Error handling
+
+- `useUpdateCanvasNode()` returning `null` outside the provider is handled the same way as spec 14 (optional chaining `updateNodeData?.(...)`) — `handleColorSelect` in `canvas-node.tsx` uses the same `?.` pattern already established for label edits, so a toolbar click in an unprovisioned context silently no-ops rather than throwing. Consistent with existing precedent; no new failure mode introduced by this spec that isn't already handled the same way as the rest of `CanvasNode`.
+- No new external/untrusted input is introduced by this spec (swatch clicks only ever pass a `NodeColorPair` object pulled directly from the fixed `NODE_COLORS` array — never user-typed or externally-sourced), so `code-standards.md`'s "validate unknown external input at system boundaries" doesn't add new obligations here.
+
+### Housekeeping
+
+- `context/progress-tracker.md` updated accurately — "In Progress" section for spec 15 lists the real files touched, matches the actual diff; "Current Phase"/"Current Goal"/"Next Up" correctly reflect handoff to QA.
+- `context/ui-context.md` updated with the real `NODE_COLORS` constant reference and a new "Node Color Toolbar" convention section — verified against the actual diff, content matches implementation (positioning value, active/hover styling, dispatch mechanism).
+
+### Issues found
+
+None. No bugs and no spec gaps identified. Minor, non-blocking observation (not logged as an issue): `CanvasNodeData.textColor` is now a required field, and no starter-template canvas snapshots exist yet in the codebase to check for missing `textColor` values — this is correctly out of this spec's scope (Starter System Designs is a later spec per `architecture-context.md`) and not something Dev or Analyst need to act on now.
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Success-criteria fit
+
+`project-overview.md` doesn't name node coloring as a discrete success criterion, but this spec continues the same trajectory as specs 13 and 14: it makes the shared canvas (Success Criterion 2, "multiple users can collaborate in the same canvas simultaneously") a genuinely usable diagramming surface rather than a bare shape-drop target. Spec 13 gave shapes their correct geometry; spec 14 added resize and label editing; this spec adds the last commonly-needed at-rest visual attribute (color-coding by role/status) through the same collaborative-sync path spec 14 established — no new mechanism, no new trust boundary. It also indirectly de-risks Success Criteria 4/5 (AI-generated architecture, spec generation): a canvas where nodes can be visually distinguished by color is a more useful substrate for both AI-authored diagrams and for a human-readable Markdown spec derived from the graph later. This is a real, if incremental, product improvement — not a cosmetic-only add that merely satisfies the brief's letter.
+
+### Scope check (independently verified, not just trusting Dev/QA claims)
+
+Ran `git diff spec/14-node-editing spec/15-nodes-color-toolbar` directly:
+
+- **Diff stat** touches exactly: `types/canvas.ts`, `lib/canvas-shapes.ts` (additive only), `components/editor/shape-visual.tsx`, `components/editor/canvas-node.tsx`, `components/editor/node-color-toolbar.tsx` (new), `context/ui-context.md`, `context/progress-tracker.md`, `context/spec-status/15-nodes-color-toolbar.md`, and matching test files. `components/editor/canvas.tsx` and `components/editor/shape-panel.tsx` are **absent** from the diff stat — confirms drag/drop, node-creation, and selection logic are genuinely untouched, matching acceptance criterion 11 and this spec's own Scope Limits.
+- Read the full diffs of `types/canvas.ts`, `lib/canvas-shapes.ts`, `shape-visual.tsx`, `canvas-node.tsx`, and `node-color-toolbar.tsx` directly (not summaries). Confirmed: `NODE_COLORS` is genuinely new palette data (not a duplicate of an existing theme token — matches the Analyst brief's own grep-verified premise), `createDroppedNode`'s change is additive only, `ShapeVisual`'s `textColor` prop is optional with a safe default (so the shape-panel's label-less preview elements needed no change — verified `shape-panel.tsx` is byte-for-byte absent from the diff), and the toolbar component has no hex-input, no `<input type="color">`, and carries `nodrag nopan` — confirmed directly in the component source, not just the test file.
+- `shape-visual.tsx` being touched here is correctly *not* scope creep — the Analyst brief flagged this explicitly (Open Question #1) as required by this spec's own literal text ("the text automatically updates to its paired text color"), distinct from specs 13/14 which correctly left it alone for their narrower scope. This spec's edit is the minimal one (an optional prop replacing a hardcoded value) and doesn't touch shape geometry, selection styling, or anything else in that file.
+- No touches to `prisma/schema.prisma`, `app/api/*`, billing, permission tiers, or any other item on `project-overview.md`'s Out of Scope wall. No server call introduced (`data.textColor`/`data.color` flow entirely through the existing Liveblocks-synced `onNodesChange` path, same as spec 14's label edits) — matches acceptance criterion 8 and the brief's "no server calls" instruction.
+
+### progress-tracker.md accuracy
+
+The "In Progress" entry for spec 15 accurately lists the real files touched and matches the diff I independently reviewed above — no aspirational or partial claims. It correctly reflects what QA verified (all 12 acceptance criteria, all four mechanical gates, byte-level scope confirmation), not merely what Dev attempted. It will be moved to "Completed" as part of this review, per this spec's pipeline instructions, once the PR is opened below.
+
+### Rough edges considered and judged non-blocking
+
+- `CanvasNodeData.textColor` is now a required field with no starter-template canvas snapshots yet in the codebase to check against. QA logged this as a non-blocking observation; I agree — Starter System Designs is an explicitly later, separate feature area per `architecture-context.md`, and there's nothing today that could construct a `CanvasNodeData` missing `textColor` (both `createDroppedNode` and the type itself enforce it). This won't block that later spec's Analyst pass from accounting for it.
+- No live browser verification was possible in this pipeline (consistent with every canvas spec so far). Dev's recommended human smoke test (select a node, confirm the 8-swatch toolbar, click a non-default swatch, confirm live sync across two tabs, confirm hover glow is tight/non-blurry) is a reasonable pre-merge check for the human, not a blocker for this recommendation — same treatment given to specs 11-14.
+
+### Conclusion
+
+No changes requested. This spec is a clean, correctly-scoped, single-round pass — genuinely advances the canvas toward Success Criterion 2 without drifting into any Out of Scope territory, and the delivered functionality matches both the brief's letter and its underlying product intent (color-coding as a real diagramming affordance, not just a decorative toggle).
