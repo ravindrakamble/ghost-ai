@@ -3,12 +3,27 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 14: Node Editing — Analyst pass next.
+- Phase 15: Nodes Color Toolbar — Analyst brief next.
 
 ## Current Goal
-- Analyst brief for feature spec 14 (Node Editing).
+- Analyst brief for feature spec 15 (Nodes Color Toolbar).
 
 ## Completed
+
+- Feature spec 14: Node Editing
+  - `components/editor/canvas-node.tsx` (modified) — adds `@xyflow/react`'s `<NodeResizer>` (visible only when `selected`, min size from new `NODE_MIN_SIZE`, styled with `border-brand`/`bg-base` handles and a `border-surface-border` line — no raw hex) rendered as a sibling of `ShapeVisual`, after it in DOM order (so its `position: absolute` controls paint above the shape regardless of the CSS-shape-vs-SVG-shape branch's own `position`); adds double-click-to-edit (`useState` local `isEditing`) rendering a `<textarea>` in the same `children` slot `ShapeVisual` already centers, with `nodrag nopan` classes on the editable wrapper. Label changes dispatch on every keystroke through `useUpdateCanvasNode()`.
+  - `hooks/use-update-canvas-node.ts` (new) — `CanvasNodeUpdateContext` + `useUpdateCanvasNode()`, the mechanism a leaf `CanvasNode` uses to dispatch a label update back through `CanvasFlow`'s real `onNodesChange` (a `"replace"` `NodeChange`) without embedding a non-serializable callback in Liveblocks-synced `data` or mutating React Flow's internal store directly. Returns `null` outside the provider.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` now builds `updateNodeData` (looks up the current node by ID, merges the partial `data` update, dispatches `onNodesChange([{ id, type: "replace", item }])`) and provides it via `CanvasNodeUpdateContext.Provider` wrapping `<ReactFlow>`. No changes to `onDragOver`/`onDrop`/node-creation logic.
+  - `lib/canvas-shapes.ts` (modified, additive only) — added `NODE_MIN_SIZE = { width: 40, height: 40 }`, a flat floor (not per-shape) well below every `SHAPE_DEFAULT_SIZES` entry. `createDroppedNode`/ID generation/drop-position math confirmed untouched via `git diff`.
+  - `context/ui-context.md` (modified) — documented Node Resize (handle/line styling, `NODE_MIN_SIZE`) and Node Label Editing (textarea-overlay convention, live-per-keystroke sync mechanism) under Canvas.
+  - QA bugfix round: first QA pass found the editing `<textarea>` had no width containment and overflowed the node's shape boundary at small sizes (failing acceptance criterion 6), plus a minor double-click hit-target gap. Fixed on the same branch: the `<textarea>` gained `box-border w-full min-w-0 max-w-full`, and the `nodrag nopan` wrapper `<div>` gained `flex h-full w-full min-w-0 items-center justify-center` (previously unstyled, shrink-wrapping to content). No other files touched by the bugfix.
+  - Tests: `components/editor/canvas-node.test.tsx` gained resize-visibility and label-editing coverage (wrapped in `ReactFlowProvider` + `CanvasNodeUpdateContext.Provider`, now required since `<NodeResizer>`'s controls call `useStoreApi()` once visible); `hooks/use-update-canvas-node.test.tsx` (new); `lib/canvas-shapes.test.ts` gained a `NODE_MIN_SIZE` bounds check. 193/193 tests passing across 26 files (up from 180/25 at the end of spec 13).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass (both the initial pass and the bugfix round).
+  - `components/editor/shape-visual.tsx`, `components/editor/shape-panel.tsx`, and `types/canvas.ts` confirmed byte-for-byte untouched via `git diff spec/13-node-shape spec/14-node-editing` — satisfies the spec's Scope Limits (no shape-rendering, shape-panel, or dropped-node-creation changes).
+  - QA: FAIL on first pass (textarea overflow, minor double-click hit-target gap) → Dev fix → PASS on re-review. All 12 acceptance criteria independently re-verified from scratch on the re-review, not just the 2 bugfixed items; scope-limit compliance re-confirmed via `git diff` across the full branch including the bugfix commit.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec closes a real product gap toward Success Criterion 2 (multiple users collaborating in the same canvas) and the Core User Flow's "collaborators edit and refine the design" step — previously dropped nodes were static (correct shape/color from spec 13, but no resize or rename). Independently re-verified via `git diff spec/13-node-shape spec/14-node-editing` (not just trusting Dev/QA claims) that `shape-visual.tsx`, `shape-panel.tsx`, and `types/canvas.ts` are untouched, `lib/canvas-shapes.ts` is purely additive, and `canvas.tsx`'s drag/drop/node-creation path is unchanged — all four of this spec's own Scope Limits genuinely honored. One minor, honestly-disclosed rough edge (SVG-shape branch double-click hit target doesn't cover the node's full vertical extent, since closing it would require touching out-of-scope `ShapeVisual`) judged acceptable at this stage per `ai-workflow-rules.md`'s incremental philosophy — doesn't block a later spec from building on this correctly. No live browser verification possible in this pipeline (consistent with specs 11–13) — recommended human smoke test (resize each handle down to `NODE_MIN_SIZE` and each SVG shape's default, confirm no textarea overflow, confirm both resize and label edits are visible live in a second browser tab) before considering this fully proven, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #7](https://github.com/ravindrakamble/ghost-ai/pull/7) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/14-node-editing.md`.
 
 - Feature spec 13: Node Shape
   - `components/editor/shape-visual.tsx` (new) — shared shape-geometry component (`ShapeVisual`) consumed by both `canvas-node.tsx` and `shape-panel.tsx`'s drag preview: CSS `<div>` for rectangle/pill/circle, inline scaling `<svg viewBox="0 0 100 100" preserveAspectRatio="none">` for diamond/hexagon/cylinder. Border/stroke subtle at rest (`border-surface-border`/`var(--border-default)`), brand accent when selected (`border-brand`/`var(--accent-primary)`).
@@ -160,11 +175,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently — spec 13 (Node Shape) completed above, spec 14 (Node Editing) Analyst pass not yet started.
+- None currently.
 
 ## Next Up
 
-- Analyst pass on feature spec 14 (Node Editing).
+- Analyst brief for feature spec 15 (Nodes Color Toolbar).
 
 ## Open Questions
 

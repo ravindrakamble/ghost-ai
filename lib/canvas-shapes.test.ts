@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   CANVAS_DRAG_MIME_TYPE,
   CANVAS_SHAPES,
+  NODE_MIN_SIZE,
   SHAPE_DEFAULT_SIZES,
   createDroppedNode,
   generateNodeId,
@@ -25,6 +26,18 @@ describe("SHAPE_DEFAULT_SIZES", () => {
     expect(SHAPE_DEFAULT_SIZES.circle.width).toBe(SHAPE_DEFAULT_SIZES.circle.height)
     expect(SHAPE_DEFAULT_SIZES.diamond.width).toBeGreaterThan(SHAPE_DEFAULT_SIZES.circle.width)
     expect(SHAPE_DEFAULT_SIZES.diamond.height).toBeGreaterThan(SHAPE_DEFAULT_SIZES.circle.height)
+  })
+})
+
+describe("NODE_MIN_SIZE", () => {
+  it("is positive and strictly below every shape's default size", () => {
+    expect(NODE_MIN_SIZE.width).toBeGreaterThan(0)
+    expect(NODE_MIN_SIZE.height).toBeGreaterThan(0)
+    for (const shape of CANVAS_SHAPES) {
+      const size = SHAPE_DEFAULT_SIZES[shape]
+      expect(NODE_MIN_SIZE.width).toBeLessThan(size.width)
+      expect(NODE_MIN_SIZE.height).toBeLessThan(size.height)
+    }
   })
 })
 
