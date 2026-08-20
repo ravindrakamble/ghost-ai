@@ -33,7 +33,7 @@ export function StarterTemplatesModal({ open, onOpenChange, onImport }: StarterT
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-7xl rounded-3xl">
+      <DialogContent className="sm:max-w-5xl rounded-3xl">
         <DialogHeader>
           <DialogTitle className="text-copy-primary">Starter templates</DialogTitle>
           <DialogDescription className="text-copy-secondary">
