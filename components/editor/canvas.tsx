@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, type MouseEvent as ReactMouseEvent } from "react"
 import {
   Background,
   BackgroundVariant,
@@ -25,11 +25,14 @@ import {
   useRedo,
   useRoom,
   useUndo,
+  useUpdateMyPresence,
 } from "@liveblocks/react/suspense"
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
 import { CanvasControlBar } from "@/components/editor/canvas-control-bar"
 import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
+import { LiveCursors } from "@/components/editor/live-cursors"
+import { PresenceAvatars } from "@/components/editor/presence-avatars"
 import { ShapePanel, type OnDropShape } from "@/components/editor/shape-panel"
 import { StarterTemplatesModal } from "@/components/editor/starter-templates-modal"
 import type { CanvasTemplate } from "@/components/editor/starter-templates"
@@ -258,6 +261,20 @@ function CanvasError() {
  * Storage commit/broadcast instead of three. See the "Bugfix round" note
  * appended to `context/spec-status/18-starter-template.md` for the verified
  * source.
+ *
+ * Spec 19 (Presence Avatars & Cursor) adds `updateMyPresence` (Liveblocks'
+ * `useUpdateMyPresence()`, valid here for the same reason `useUndo`/`useRedo`
+ * already are — `CanvasFlow` sits inside `RoomProvider`) and wires two of
+ * React Flow's own real, named pane-level handlers — `onPaneMouseMove`/
+ * `onPaneMouseLeave` — to it, broadcasting the local pointer's flow-space
+ * position (via the same `screenToFlowPosition` already used for node
+ * drops) into the room's Presence `cursor` field, and clearing it to `null`
+ * on pane-leave. `flowToScreenPosition` (the same `useReactFlow()` call's
+ * other half) is threaded down to `<LiveCursors>` as a prop so it can
+ * convert other participants' stored cursor positions back to screen space.
+ * `<PresenceAvatars>`/`<LiveCursors>` render as further siblings of
+ * `<ReactFlow>`/`ShapePanel`/`CanvasControlBar`/`StarterTemplatesModal` —
+ * same convention, no new context. See spec 19's Analyst Brief.
  */
 function CanvasFlow({
   isTemplatesModalOpen,
@@ -274,12 +291,13 @@ function CanvasFlow({
     nodes: { initial: [] },
     edges: { initial: [] },
   })
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow()
+  const { screenToFlowPosition, flowToScreenPosition, zoomIn, zoomOut, fitView } = useReactFlow()
   const undo = useUndo()
   const redo = useRedo()
   const canUndo = useCanUndo()
   const canRedo = useCanRedo()
   const room = useRoom()
+  const updateMyPresence = useUpdateMyPresence()
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {
@@ -393,6 +411,31 @@ function CanvasFlow({
 
   useKeyboardShortcuts({ zoomIn: handleZoomIn, zoomOut: handleZoomOut, undo, redo })
 
+  /**
+   * Spec 19 (Presence Avatars & Cursor): broadcasts the local pointer's
+   * position through the room's Presence `cursor` field on every pane-level
+   * mouse move, and clears it back to `null` when the pointer leaves the
+   * pane — `onPaneMouseMove`/`onPaneMouseLeave` are React Flow's own real,
+   * named pane-level mouse handlers (verified at `node_modules/@xyflow/
+   * react/dist/esm/types/component-props.d.ts`), not a generic DOM
+   * `onMouseMove` passthrough. The position is stored in flow-space
+   * (`screenToFlowPosition`'s own output), not raw client coordinates, so a
+   * cursor renders at its real target point on the canvas for every viewer
+   * regardless of their own individual pan/zoom state — see spec 19's
+   * Analyst Brief, Concrete deliverables, and `@liveblocks/react-flow`'s own
+   * bundled `<Cursors />` reference implementation, which does the same.
+   */
+  const handlePaneMouseMove = useCallback(
+    (event: ReactMouseEvent) => {
+      updateMyPresence({ cursor: screenToFlowPosition({ x: event.clientX, y: event.clientY }) })
+    },
+    [updateMyPresence, screenToFlowPosition],
+  )
+
+  const handlePaneMouseLeave = useCallback(() => {
+    updateMyPresence({ cursor: null })
+  }, [updateMyPresence])
+
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
@@ -406,6 +449,8 @@ function CanvasFlow({
           edgeTypes={CANVAS_EDGE_TYPES}
           defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           connectionMode={ConnectionMode.Loose}
+          onPaneMouseMove={handlePaneMouseMove}
+          onPaneMouseLeave={handlePaneMouseLeave}
           fitView
         >
           <Background variant={BackgroundVariant.Dots} />
@@ -425,6 +470,8 @@ function CanvasFlow({
           onOpenChange={setIsTemplatesModalOpen}
           onImport={handleImportTemplate}
         />
+        <PresenceAvatars />
+        <LiveCursors flowToScreenPosition={flowToScreenPosition} />
       </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>
   )

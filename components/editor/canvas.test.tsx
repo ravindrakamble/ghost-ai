@@ -19,12 +19,15 @@ type CapturedReactFlowProps = {
   nodeTypes?: Record<string, unknown>;
   edgeTypes?: Record<string, unknown>;
   defaultEdgeOptions?: { type?: string; markerEnd?: unknown };
+  onPaneMouseMove?: (event: { clientX: number; clientY: number }) => void;
+  onPaneMouseLeave?: () => void;
 };
 
 const {
   errorListenerRef,
   useLiveblocksFlowMock,
   screenToFlowPositionMock,
+  flowToScreenPositionMock,
   zoomInMock,
   zoomOutMock,
   fitViewMock,
@@ -36,10 +39,17 @@ const {
   useRoomMock,
   roomBatchMock,
   reactFlowPropsRef,
+  useUpdateMyPresenceMock,
+  updateMyPresenceMock,
+  useOthersMock,
+  useOthersConnectionIdsMock,
+  useOtherMock,
+  useUserMock,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
   useLiveblocksFlowMock: vi.fn(),
   screenToFlowPositionMock: vi.fn(),
+  flowToScreenPositionMock: vi.fn(),
   zoomInMock: vi.fn(),
   zoomOutMock: vi.fn(),
   fitViewMock: vi.fn(),
@@ -56,6 +66,15 @@ const {
   roomBatchMock: vi.fn((callback: () => void) => callback()),
   useRoomMock: vi.fn(),
   reactFlowPropsRef: { current: null as CapturedReactFlowProps | null },
+  // Spec 19 (Presence Avatars & Cursor): `useUpdateMyPresence`'s own update
+  // function, plus the presence hooks `PresenceAvatars`/`LiveCursors`
+  // (rendered for real by `Canvas`, not mocked out) read from.
+  useUpdateMyPresenceMock: vi.fn(),
+  updateMyPresenceMock: vi.fn(),
+  useOthersMock: vi.fn(),
+  useOthersConnectionIdsMock: vi.fn(),
+  useOtherMock: vi.fn(),
+  useUserMock: vi.fn(),
 }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
@@ -96,20 +115,40 @@ vi.mock("@liveblocks/react/suspense", () => ({
   // Spec 18's bugfix round: `useRoom()` gives `handleImportTemplate` a real
   // `room.batch(...)` to coalesce its three mutations into one commit.
   useRoom: useRoomMock,
+  // Spec 19: `updateMyPresence` (`CanvasFlow`'s own pane-mouse-move/-leave
+  // handlers) and the presence hooks `PresenceAvatars`/`LiveCursors` read
+  // from directly — both real components render here, not mocked out, so
+  // this module's mock surface needs to cover what they call too.
+  useUpdateMyPresence: useUpdateMyPresenceMock,
+  useOthers: useOthersMock,
+  useOthersConnectionIds: useOthersConnectionIdsMock,
+  useOther: useOtherMock,
+  shallow: vi.fn(),
 }));
 
 vi.mock("@liveblocks/react-flow", () => ({
   useLiveblocksFlow: useLiveblocksFlowMock,
 }));
 
+vi.mock("@clerk/nextjs", () => ({
+  useUser: useUserMock,
+  UserButton: (props: Record<string, unknown>) => (
+    <div data-testid="user-button" data-appearance={JSON.stringify(props.appearance)} />
+  ),
+}));
+
 vi.mock("@xyflow/react", () => ({
   ReactFlowProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   useReactFlow: () => ({
     screenToFlowPosition: screenToFlowPositionMock,
+    flowToScreenPosition: flowToScreenPositionMock,
     zoomIn: zoomInMock,
     zoomOut: zoomOutMock,
     fitView: fitViewMock,
   }),
+  // `LiveCursors` (spec 19) also calls this directly — a no-op reactive
+  // return is enough here since this suite doesn't test pan/zoom behavior.
+  useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
   ReactFlow: (props: CapturedReactFlowProps & {
     children: ReactNode;
     nodes: unknown[];
@@ -181,6 +220,13 @@ beforeEach(() => {
   useCanUndoMock.mockReturnValue(true);
   useCanRedoMock.mockReturnValue(true);
   useRoomMock.mockReturnValue({ batch: roomBatchMock });
+  // Spec 19 defaults: no collaborators/cursors, a signed-in current user —
+  // individual tests override these to exercise PresenceAvatars/LiveCursors.
+  useUpdateMyPresenceMock.mockReturnValue(updateMyPresenceMock);
+  useOthersMock.mockImplementation((selector: (others: unknown[]) => unknown) => selector([]));
+  useOthersConnectionIdsMock.mockReturnValue([]);
+  useOtherMock.mockReturnValue(undefined);
+  useUserMock.mockReturnValue({ user: { id: "current-test-user" } });
 });
 
 describe("Canvas", () => {
@@ -469,6 +515,48 @@ describe("Canvas", () => {
       fireEvent.click(importButtons[0]);
 
       expect(setIsTemplatesModalOpen).toHaveBeenCalledWith(false);
+    });
+  });
+
+  describe("presence avatars and cursor (spec 19)", () => {
+    it("broadcasts the pane pointer position into Presence via onPaneMouseMove, converted through screenToFlowPosition", () => {
+      screenToFlowPositionMock.mockReturnValue({ x: 42, y: 99 });
+      renderCanvas();
+
+      reactFlowPropsRef.current?.onPaneMouseMove?.({ clientX: 500, clientY: 600 });
+
+      expect(screenToFlowPositionMock).toHaveBeenCalledWith({ x: 500, y: 600 });
+      expect(updateMyPresenceMock).toHaveBeenCalledWith({ cursor: { x: 42, y: 99 } });
+    });
+
+    it("clears the cursor to null via onPaneMouseLeave", () => {
+      renderCanvas();
+
+      reactFlowPropsRef.current?.onPaneMouseLeave?.();
+
+      expect(updateMyPresenceMock).toHaveBeenCalledWith({ cursor: null });
+    });
+
+    it("renders PresenceAvatars (the Clerk UserButton) as a sibling of ReactFlow", () => {
+      renderCanvas();
+
+      expect(screen.getByTestId("user-button")).toBeInTheDocument();
+    });
+
+    it("renders LiveCursors as a sibling of ReactFlow, converting a collaborator's stored cursor via flowToScreenPosition", () => {
+      useOthersConnectionIdsMock.mockReturnValue([2]);
+      useOtherMock.mockReturnValue({
+        id: "other-user",
+        name: "Other Person",
+        color: "#6457F9",
+        cursor: { x: 10, y: 20 },
+      });
+      flowToScreenPositionMock.mockReturnValue({ x: 111, y: 222 });
+
+      renderCanvas();
+
+      expect(flowToScreenPositionMock).toHaveBeenCalledWith({ x: 10, y: 20 });
+      expect(screen.getByText("Other Person")).toBeInTheDocument();
     });
   });
 });
