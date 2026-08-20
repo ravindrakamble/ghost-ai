@@ -20,7 +20,8 @@ describe("ShapePanel", () => {
 
     for (const shape of CANVAS_SHAPES) {
       const setData = vi.fn()
-      const dataTransfer = { setData, effectAllowed: "" }
+      const setDragImage = vi.fn()
+      const dataTransfer = { setData, setDragImage, effectAllowed: "" }
       fireEvent.dragStart(screen.getByTitle(SHAPE_LABELS[shape]), { dataTransfer })
 
       expect(setData).toHaveBeenCalledTimes(1)
@@ -29,5 +30,31 @@ describe("ShapePanel", () => {
       expect(JSON.parse(raw)).toEqual({ shape, ...SHAPE_DEFAULT_SIZES[shape] })
       expect(dataTransfer.effectAllowed).toBe("copy")
     }
+  })
+
+  it("passes a shape-correct, already-rendered preview element to setDragImage, offset by half its default size", () => {
+    render(<ShapePanel />)
+
+    for (const shape of CANVAS_SHAPES) {
+      const setDragImage = vi.fn()
+      const dataTransfer = { setData: vi.fn(), setDragImage, effectAllowed: "" }
+      fireEvent.dragStart(screen.getByTitle(SHAPE_LABELS[shape]), { dataTransfer })
+
+      expect(setDragImage).toHaveBeenCalledTimes(1)
+      const [element, xOffset, yOffset] = setDragImage.mock.calls[0] as [HTMLElement, number, number]
+      const size = SHAPE_DEFAULT_SIZES[shape]
+      expect(element).toBeInstanceOf(HTMLElement)
+      expect(element.style.width).toBe(`${size.width}px`)
+      expect(element.style.height).toBe(`${size.height}px`)
+      expect(xOffset).toBe(size.width / 2)
+      expect(yOffset).toBe(size.height / 2)
+    }
+  })
+
+  it("renders one off-screen preview element per shape, hidden from the accessibility tree", () => {
+    render(<ShapePanel />)
+    const hiddenContainer = document.querySelector('div[aria-hidden="true"][style*="-9999px"]')
+    expect(hiddenContainer).not.toBeNull()
+    expect(hiddenContainer?.children).toHaveLength(CANVAS_SHAPES.length)
   })
 })

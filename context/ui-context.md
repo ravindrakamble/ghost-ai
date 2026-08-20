@@ -81,6 +81,12 @@ Smooth-step path with an arrow marker. Default edge color: `#f8fafc`. Stroke wid
 - `cylinder` — database / storage
 - `hexagon` — external system / boundary
 
+Rendering, per spec 13 (`components/editor/shape-visual.tsx`, shared by `CanvasNode` and the shape panel's drag preview so both stay in sync):
+
+- `rectangle`/`pill`/`circle` are a plain CSS `<div>` — `rounded-xl` for rectangle, `rounded-full` for pill and circle (circle's 1:1 default size is what makes the roundness read as a circle, not a separate CSS trick).
+- `diamond`/`hexagon`/`cylinder` are an inline `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">` so the shape stretches to fill the node's actual `width`/`height` rather than clipping or floating at a fixed size. Geometry: diamond is a 4-point polygon (`50,2 98,50 50,98 2,50`), hexagon a flat-topped 6-point polygon (`25,2 75,2 98,50 75,98 25,98 2,50`), cylinder the standard database-drum idiom (a filled body path plus a top ellipse drawn over it). These coordinates are a Dev-level styling choice, not a pinned design reference.
+- Border/stroke: subtle (`--border-default`, via the `border-surface-border` token class on CSS shapes) at rest, brand accent (`--accent-primary`, via `border-brand`) when the node is selected (React Flow's `NodeProps.selected`). SVG shapes use the same two tokens via an inline `stroke` referencing the CSS custom property directly (`var(--border-default)`/`var(--accent-primary)`) rather than a hardcoded hex, since SVG `stroke` doesn't take a Tailwind class as directly as `border-*` does.
+
 ### Connection Handles
 
 Small white circular handles, hidden by default, revealed on node hover. Appear at all four sides of a node.
@@ -92,6 +98,8 @@ React Flow `<Background>` component. Canvas sits on the base background color.
 ### Floating Shape Panel
 
 Bottom-center pill-shaped toolbar for dragging new shapes onto the canvas (spec 12). Convention: `rounded-full` container (the standard way to get a true pill shape — the Border Radius scale has no dedicated "pill" entry), `bg-elevated` background with `border-surface-border`, matching the same floating-overlay visual language documented for sidebars above. Positioned via `absolute bottom-* left-1/2 -translate-x-1/2` inside the canvas's `relative` wrapper; does not overlap the default bottom-right `MiniMap`.
+
+Drag preview (spec 13): starting a drag from a shape button shows a cursor-attached ghost preview via the native `dataTransfer.setDragImage(element, xOffset, yOffset)` API — not a custom `mousemove`-tracked floating element. The panel keeps one always-mounted, off-screen preview `<div>` per shape (sized per `SHAPE_DEFAULT_SIZES`, rendered with the same `ShapeVisual` geometry `CanvasNode` uses), because `setDragImage` needs a real, already-rendered DOM node at the moment `dragstart` fires — state committed inside that same synchronous handler wouldn't exist in the DOM yet. The browser positions and removes the ghost automatically for the whole drag (drop or cancel), so no extra cleanup code is needed.
 
 ## Component Library
 

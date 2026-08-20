@@ -3,12 +3,24 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 13: Node Shape — not started.
+- Phase 14: Node Editing — Analyst pass next.
 
 ## Current Goal
-- Analyst pass on feature spec 13 (Node Shape).
+- Analyst brief for feature spec 14 (Node Editing).
 
 ## Completed
+
+- Feature spec 13: Node Shape
+  - `components/editor/shape-visual.tsx` (new) — shared shape-geometry component (`ShapeVisual`) consumed by both `canvas-node.tsx` and `shape-panel.tsx`'s drag preview: CSS `<div>` for rectangle/pill/circle, inline scaling `<svg viewBox="0 0 100 100" preserveAspectRatio="none">` for diamond/hexagon/cylinder. Border/stroke subtle at rest (`border-surface-border`/`var(--border-default)`), brand accent when selected (`border-brand`/`var(--accent-primary)`).
+  - `components/editor/canvas-node.tsx` (modified) — replaced the spec-12 placeholder (bordered rectangle for every shape) with `ShapeVisual`, wired to React Flow's real `NodeProps.selected`.
+  - `components/editor/shape-panel.tsx` (modified) — added a cursor-attached ghost drag preview via native `dataTransfer.setDragImage`, backed by 6 always-mounted, off-screen preview elements (one per shape, sized per `SHAPE_DEFAULT_SIZES`) so `setDragImage` always has an already-rendered DOM node at `dragstart`. Panel's own layout/buttons unchanged.
+  - `context/ui-context.md` (modified) — documented the shape-rendering rules and the drag-preview mechanism under Canvas.
+  - No changes to `lib/canvas-shapes.ts`, `types/canvas.ts`, or `canvas.tsx`'s drop/node-creation logic — confirmed empty diff, out of scope per the brief.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (180/180 across 25 files), `npx next build` all pass.
+  - QA: PASS, no bugs or spec gaps found. All 11 acceptance criteria independently re-verified against the code, including reading `shape-visual.tsx`/`canvas-node.tsx`/`shape-panel.tsx` in full (not just the diff) to confirm no fixed-pixel SVG dimensions and that `selected` is genuinely sourced from React Flow's real `NodeProps`. Byte-for-byte confirmation via `git diff` that `lib/canvas-shapes.ts`, `types/canvas.ts`, and `canvas.tsx` were untouched.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec closes a real product-quality gap toward Success Criterion 2 (collaborative canvas): previously every node shape rendered as an identical bordered rectangle, undermining the canvas's purpose as an architecture-diagramming surface where shape conveys role (decision/gateway, database/storage, external system). Also de-risks future Criteria 4/5 (AI-generated nodes, spec generation) by giving `data.shape` real visual meaning ahead of time. Scope check clean against `project-overview.md`'s Out of Scope wall and this spec's own Scope Limits (no shape-panel layout rebuild, no change to node creation, no resize/label editing, drag changes limited to the ghost preview) — confirmed at the byte level via diff. No live browser drag-and-drop verification possible in this pipeline — flagged as an acceptable rough edge, not blocking, recommended as a human smoke test (drag each of the 6 shapes, confirm the ghost preview matches the dropped node's shape/size, confirm the preview disappears on both drop and a cancelled drag) before considering this fully done.
+  - **PR not yet opened.** Branch `spec/13-node-shape` was pushed to `origin` (commit `04f7e7e`), but `gh pr create` was blocked by the review environment's auto-mode permission classifier (confirmed not a `gh auth`/tooling gap — `gh auth status` succeeded and a minimal test call was blocked identically). Human needs to open the PR against `main` manually (branch and commit are ready) or grant permission for this action; see "Next Up".
+  - Full pipeline trail in `context/spec-status/13-node-shape.md`.
 
 - Feature spec 12: Shape Panel
   - `lib/canvas-shapes.ts` (new) — shared, non-component logic: `CANVAS_SHAPES` (ordered list), `SHAPE_DEFAULT_SIZES` (per-shape default `{ width, height }` table), `SHAPE_LABELS`, `CANVAS_DRAG_MIME_TYPE`, `serializeShapeDragPayload`/`parseShapeDragPayload` (validates untrusted `dataTransfer` input at the drop boundary), `generateNodeId` (shape + timestamp + counter + a short random suffix to close a low-probability cross-client collision gap), `createDroppedNode`.
@@ -148,11 +160,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-_(none)_
+- None currently — spec 13 (Node Shape) completed above, spec 14 (Node Editing) Analyst pass not yet started.
 
 ## Next Up
 
-- Analyst pass on feature spec 13 (Node Shape).
+- Analyst pass on feature spec 14 (Node Editing).
 
 ## Open Questions
 
@@ -183,4 +195,3 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
 - Next.js 16.2.6, React 19.2.4, Tailwind v4, shadcn v4.
 - `components/ui/` files are generated — do not modify them.
 - Theme tokens live in `globals.css`; components consume via Tailwind utility names.
-</content>
