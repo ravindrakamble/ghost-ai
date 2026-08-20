@@ -107,3 +107,93 @@ Commands run, all passing:
 
 - No live browser/multiplayer verification (consistent with every prior canvas spec in this pipeline) — recommend a human smoke test: zoom in/out/fit-view buttons and their keyboard equivalents animate smoothly; undo/redo buttons and shortcuts correctly reflect Liveblocks room history across two tabs; typing in a node label or edge label textarea/input does not trigger any of the five shortcuts; no minimap renders anywhere.
 - Diff confirmed scope-clean: only `hooks/use-keyboard-shortcuts.{ts,test.ts}`, `components/editor/canvas-control-bar.{tsx,test.tsx}`, `components/editor/canvas.{tsx,test.tsx}`, and `context/ui-context.md` changed — `shape-panel.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, and `types/canvas.ts` are untouched.
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | Pass — no errors |
+| `npx eslint .` | Pass — 0 errors (1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/...`, unrelated to this spec) |
+| `npx next build` | Pass — compiles, all routes generated |
+| `npx vitest run` | Pass — 257/257 tests across 31 files |
+
+### Acceptance criteria checklist
+
+1. Pill-shaped control bar renders bottom-left, above the shape panel, not overlapping — **Pass**. `CanvasControlBar` uses `absolute bottom-24 left-6`; `ShapePanel` uses `absolute bottom-6 left-1/2 -translate-x-1/2`. With both toolbars at `size-9` icon buttons + `p-1.5` padding (~48px tall), shape panel occupies ~24–72px from viewport bottom, control bar occupies ~96–144px — a clear 24px gap, no overlap under any viewport width.
+2. Two groups separated by a thin divider (zoom out/fit view/zoom in, then undo/redo) — **Pass**. Verified in `canvas-control-bar.tsx` and its test (`.bg-surface-border` divider, exactly one, `aria-hidden`).
+3. Zoom in/out/fit view call the real React Flow instance's methods with a `duration` option — **Pass**. `handleZoomIn`/`handleZoomOut`/`handleFitView` in `canvas.tsx` call `zoomIn`/`zoomOut`/`fitView` from `useReactFlow()` with `{ duration: ZOOM_TRANSITION_DURATION_MS }` (200ms). Confirmed via `canvas.test.tsx`'s real-wiring test.
+4. Undo/redo call Liveblocks' `useUndo()`/`useRedo()` — **Pass**. Imported from `@liveblocks/react/suspense` in `CanvasFlow`, passed straight through to `CanvasControlBar` and `useKeyboardShortcuts`.
+5. Undo/redo disabled per `useCanUndo()`/`useCanRedo()` — **Pass**. `canUndo`/`canRedo` read in `CanvasFlow`, passed as props, drive the shadcn `Button`'s `disabled` prop.
+6. Disabled buttons visually dimmed — **Pass**. Relies on `buttonVariants`' existing `disabled:opacity-50`; no custom CSS added, `components/ui/button.tsx` untouched.
+7. `hooks/use-keyboard-shortcuts.ts` exports a hook taking zoom methods + undo/redo, listens on `window` — **Pass**.
+8. Five shortcuts wired correctly (`+`/`=` zoom in, `-` zoom out, `Cmd/Ctrl+Z` undo, `Cmd/Ctrl+Shift+Z` and `Cmd/Ctrl+Y` redo) — **Pass**. Verified by direct reading and by 11 passing unit tests covering both `Ctrl` and `Meta` variants.
+9. Shortcuts skipped when focus/target is an editable field — **Pass**. `isEditableElement` checks both `event.target` and `document.activeElement` for `INPUT`/`TEXTAREA`/`contenteditable`/`isContentEditable`; three distinct test scenarios cover this including the "activeElement editable but target differs" case.
+10. `<MiniMap>` removed, no minimap renders — **Pass**. Import and element both absent from `canvas.tsx`; confirmed via diff and by grep of the file.
+11. No changes to shape panel, node/edge rendering, or existing collaborative sync setup beyond reading the new hooks and removing `MiniMap` — **Pass**. `git diff spec/16-edge-behavior..spec/17-canvas-ergonomics --name-only` shows only `canvas-control-bar.{tsx,test.tsx}`, `use-keyboard-shortcuts.{ts,test.ts}`, `canvas.{tsx,test.tsx}`, `ui-context.md`, `progress-tracker.md`, and the spec-status file itself changed. `shape-panel.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, and `types/canvas.ts` are untouched.
+12. `npm run build` and the full gate (`tsc`, `eslint`, `vitest`) pass — **Pass**, see Mechanical gate above.
+
+### Architecture invariants
+
+No violations found. This is a client-side canvas UI change only — no new request handlers, no metadata/blob storage touched, no auth/mutation boundaries added. `"use client"` directives are present on both new files, consistent with the Hooks Convention and Client Components rule. New hook placed correctly at top-level `hooks/`.
+
+### Standards compliance
+
+- No `any` in changed files.
+- No raw Tailwind color classes (`zinc-`, `slate-`, `gray-`) or hex literals in changed files — grep confirms clean; divider and control bar use `border-surface-border`/`bg-surface-border`/`bg-elevated` tokens consistent with `ShapePanel`.
+- `components/ui/*` untouched — confirmed via diff.
+- Border radius scale respected (`rounded-full` for the pill, matching `ShapePanel`'s existing convention).
+
+### Error handling
+
+Not much applicable surface for this spec (pure UI ergonomics, no new API routes or data mutations). The one meaningful "failure mode" — nothing to undo/redo — is handled via `canUndo`/`canRedo`-driven `disabled` state, verified both in `canvas-control-bar.test.tsx` (disabled buttons don't fire their click handlers) and in `canvas.test.tsx`'s real-wiring test.
+
+### Housekeeping
+
+`context/progress-tracker.md` updated accurately: Phase 17 marked "Dev pass complete, awaiting QA," "In Progress" section lists the actual files/changes made, matching the real diff.
+
+### Issues found
+
+None. Implementation matches the brief on every acceptance criterion, mechanical gate is fully green, scope is clean, docs (`ui-context.md`, `progress-tracker.md`) were kept in sync, and test coverage is thorough (11 shortcut tests, 6 control-bar tests, 3 new + 2 updated canvas tests).
+
+## Handoff
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Product fit against `project-overview.md`
+
+This spec is a pure ergonomics/usability improvement layered on top of the collaborative canvas delivered by specs 11–16. It does not itself close a new Success Criterion, but it materially de-risks and strengthens **Success Criterion 2** ("multiple users can collaborate in the same canvas simultaneously") and the Core User Flow's "collaborators edit and refine the design" step: prior to this spec, the canvas had no way to zoom/fit the view except trackpad gestures, no visible undo/redo affordance despite Liveblocks history already being available, and a default `MiniMap` that `ui-context.md`'s own design language never called for. A multi-node/edge canvas (now populated by specs 12–16) is hard to navigate and easy to accidentally mis-edit without zoom controls and a visible, working undo. This is exactly the kind of incremental, non-flashy ergonomics work `ai-workflow-rules.md`'s incremental philosophy expects between larger feature specs — it doesn't move any single Success Criterion from 0 to 1, but it makes the collaborative surface genuinely usable rather than a demo.
+
+### Scope check
+
+Independently re-ran `git diff spec/16-edge-behavior..spec/17-canvas-ergonomics --stat` (this branch's actual parent, not `main`, per the task's own note) rather than trusting Dev/QA's claim. Confirmed only the expected files changed: `hooks/use-keyboard-shortcuts.{ts,test.ts}` (new), `components/editor/canvas-control-bar.{tsx,test.tsx}` (new), `components/editor/canvas.{tsx,test.tsx}` (modified), `context/ui-context.md` (modified), plus `context/progress-tracker.md` and this spec-status file. `shape-panel.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, and `types/canvas.ts` are byte-for-byte untouched — satisfies all four of this spec's own Scope Limits (no shape-panel change, no node/edge rendering change, no extra controls beyond the five named, no change to the collaborative sync setup beyond reading the four new Liveblocks history hooks).
+
+Read `canvas.tsx` and `canvas-control-bar.tsx` directly (not just Dev Notes/QA's description): `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo` are genuinely Liveblocks room-history hooks (`@liveblocks/react/suspense`), not a local-only mechanism; `zoomIn`/`zoomOut`/`fitView` are genuinely the real `useReactFlow()` instance's methods called with `{ duration: 200 }`; `<MiniMap>` and its import are genuinely gone; the control bar and shortcut hook are wired via plain props/arguments, not a new context, consistent with the brief's own Open Questions #4 recommendation and this codebase's established pattern (contexts reserved for leaf renderers with no other path back to `CanvasFlow`, per specs 14/16).
+
+No touches to any `project-overview.md` Out of Scope item (billing, enterprise permission tiers, versioned spec history, production object storage, mobile apps) — this spec doesn't come near any of them.
+
+### `progress-tracker.md` accuracy
+
+The "In Progress" entry for spec 17 (lines 205–213 prior to this review) accurately matches what QA actually verified: the same five files/hooks, the same 257/257 test count, the same scope-clean diff claim — this is not aspirational or partial, it matches the delivered and QA-passed code. I will move this entry to "Completed" (with the QA/PO trail summary and PR link) and advance "Current Phase"/"Next Up" to spec 18 as the final step of this review, per instructions.
+
+### Rough edges — acceptable at this stage
+
+- No live browser/multiplayer verification (consistent with every prior canvas spec 11–16) — Dev/QA both flag this and recommend the same human smoke test (zoom/fit-view/undo/redo buttons and their keyboard equivalents, two-tab Liveblocks history sync, typing in a node/edge label doesn't trigger shortcuts, no minimap anywhere). Not a blocker for this recommendation, consistent with how every prior canvas spec in this pipeline has been judged.
+- Fixed 200ms zoom-transition duration and `bottom-24`/`left-6` positioning constants are reasonable, documented Dev-level choices within the brief's own recommended ranges (Open Questions #2/#3) — not product decisions requiring escalation.
+- `hooks/use-keyboard-shortcuts.ts` (kebab-case) vs. the raw spec text's literal `hooks/useKeyboardShortcuts` — a reasonable, documented judgment call consistent with this codebase's established file-naming convention (kebab-case throughout `hooks/`), not a deviation from product intent.
+
+None of these would block spec 18 or later specs from building on this one correctly — the control bar and shortcut hook are additive, self-contained, and don't change any interface (`useLiveblocksFlow`, `onNodesChange`/`onEdgesChange`/`onConnect`, the node/edge data-update contexts) that a later spec would depend on.
+
+### Conclusion
+
+All 12 acceptance criteria hold up under independent re-verification. Scope is clean against both this spec's own Scope Limits and `project-overview.md`'s Out of Scope wall. `progress-tracker.md`'s in-progress record is honest and will be promoted to Completed as part of this sign-off.
+
+## Handoff
+
+Product Owner PASS — proceeding to PR creation and `progress-tracker.md` update.
