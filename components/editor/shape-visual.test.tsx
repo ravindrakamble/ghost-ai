@@ -49,6 +49,26 @@ describe("ShapeVisual", () => {
     expect(within(diamondContainer).getByText("Label")).toBeInTheDocument()
   })
 
+  it("defaults label text color to DEFAULT_NODE_TEXT_COLOR when no textColor prop is given", () => {
+    const { container: rectContainer } = render(<ShapeVisual shape="rectangle" color="#1F1F1F" />)
+    expect((rectContainer.firstElementChild as HTMLElement).style.color).toBe("rgb(237, 237, 237)")
+
+    const { container: svgContainer } = render(<ShapeVisual shape="hexagon" color="#1F1F1F" />)
+    expect((svgContainer.firstElementChild as HTMLElement).style.color).toBe("rgb(237, 237, 237)")
+  })
+
+  it("applies the given textColor prop to both CSS and SVG shape label containers", () => {
+    const { container: rectContainer } = render(
+      <ShapeVisual shape="rectangle" color="#10233D" textColor="#52A8FF" />,
+    )
+    expect((rectContainer.firstElementChild as HTMLElement).style.color).toBe("rgb(82, 168, 255)")
+
+    const { container: svgContainer } = render(
+      <ShapeVisual shape="hexagon" color="#10233D" textColor="#52A8FF" />,
+    )
+    expect((svgContainer.firstElementChild as HTMLElement).style.color).toBe("rgb(82, 168, 255)")
+  })
+
   it("defaults to the subtle border/stroke token and switches to the brand accent when selected", () => {
     const { container: restContainer } = render(<ShapeVisual shape="rectangle" color="#1F1F1F" />)
     expect((restContainer.firstElementChild as HTMLElement).className).toContain("border-surface-border")

@@ -20,15 +20,20 @@ import type { Edge, Node } from "@xyflow/react"
 export type NodeShape = "rectangle" | "diamond" | "circle" | "pill" | "cylinder" | "hexagon"
 
 /**
- * Data carried by a canvas node. `color` is expected to be one of
- * `ui-context.md`'s 8 node fill colors once the `NODE_COLORS` palette
- * constant is defined (deferred to whichever spec first builds the actual
- * node component — see Open Questions #5) — kept as `string` here rather
- * than a union so this type doesn't need to change when that happens.
+ * Data carried by a canvas node. `color`/`textColor` are expected to be one
+ * of `NODE_COLORS`' 8 paired fill/text colors (below), kept as plain
+ * `string` rather than a union of that constant's members so this type
+ * doesn't need to change if the palette itself ever does.
+ *
+ * `textColor` was added in spec 15 (Nodes Color Toolbar) — see that spec's
+ * Analyst Brief, Open Questions #1: without a real per-node `textColor`,
+ * `ShapeVisual` had no way to pair a node's label color with its fill when
+ * the fill changes via the color toolbar.
  */
 export interface CanvasNodeData extends Record<string, unknown> {
   label: string
   color: string
+  textColor: string
   shape: NodeShape
 }
 
@@ -67,3 +72,33 @@ export const DEFAULT_NODE_COLOR = "#1F1F1F"
  * precedent as `CURSOR_COLORS` (spec 10).
  */
 export const DEFAULT_NODE_TEXT_COLOR = "#EDEDED"
+
+/** One fill/text color pairing from `NODE_COLORS`. */
+export interface NodeColorPair {
+  color: string
+  textColor: string
+}
+
+/**
+ * The 8 predefined node fill/text color pairs, per `ui-context.md`'s Canvas
+ * > Node Color Palette table. Added in spec 15 (Nodes Color Toolbar) — the
+ * table previously existed only as documentation with no matching code
+ * constant (confirmed via grep against `app/globals.css`: none of these hex
+ * values exist as theme tokens today), so these are net-new values defined
+ * here rather than a reuse of existing CSS custom properties, per that
+ * spec's own instruction ("keep the palette in the canvas types/constants").
+ *
+ * The first entry intentionally reuses `DEFAULT_NODE_COLOR`/
+ * `DEFAULT_NODE_TEXT_COLOR` rather than duplicating their hex values, so the
+ * default pairing can't drift out of sync between the two constants.
+ */
+export const NODE_COLORS: readonly NodeColorPair[] = [
+  { color: DEFAULT_NODE_COLOR, textColor: DEFAULT_NODE_TEXT_COLOR }, // Neutral dark (default)
+  { color: "#10233D", textColor: "#52A8FF" }, // Blue
+  { color: "#2E1938", textColor: "#BF7AF0" }, // Purple
+  { color: "#331B00", textColor: "#FF990A" }, // Orange
+  { color: "#3C1618", textColor: "#FF6166" }, // Red
+  { color: "#3A1726", textColor: "#F75F8F" }, // Pink
+  { color: "#0F2E18", textColor: "#62C073" }, // Green
+  { color: "#062822", textColor: "#0AC7B4" }, // Teal
+]

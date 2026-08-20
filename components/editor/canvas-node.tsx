@@ -2,10 +2,11 @@
 
 import { useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from "react"
 import { NodeResizer, type NodeProps } from "@xyflow/react"
+import { NodeColorToolbar } from "@/components/editor/node-color-toolbar"
 import { ShapeVisual } from "@/components/editor/shape-visual"
 import { useUpdateCanvasNode } from "@/hooks/use-update-canvas-node"
 import { NODE_MIN_SIZE } from "@/lib/canvas-shapes"
-import { type CanvasNode as CanvasNodeType } from "@/types/canvas"
+import { type CanvasNode as CanvasNodeType, type NodeColorPair } from "@/types/canvas"
 
 /**
  * Custom node renderer registered for `CANVAS_NODE_TYPE`. Shape-correct
@@ -32,6 +33,15 @@ import { type CanvasNode as CanvasNodeType } from "@/types/canvas"
  * the same synced path rather than a local-only React Flow store mutation
  * or a non-serializable callback embedded in `data`. See spec 14's Analyst
  * Brief, Open Questions #1.
+ *
+ * Spec 15 (Nodes Color Toolbar) adds `<NodeColorToolbar>`, rendered only
+ * when `selected` — same convention as `<NodeResizer>` above — dispatching
+ * a swatch click's `{ color, textColor }` pair through the same
+ * `useUpdateCanvasNode()` mechanism, not a new one. `data.textColor` is
+ * threaded into `ShapeVisual` (rest-state label) and applied to the
+ * edit-mode `<textarea>` too, so the label doesn't flash to a different
+ * color when entering/leaving edit mode — see spec 15's Analyst Brief, Open
+ * Questions #2.
  */
 export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
   const [isEditing, setIsEditing] = useState(false)
@@ -57,6 +67,10 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
     }
   }
 
+  function handleColorSelect(pair: NodeColorPair) {
+    updateNodeData?.(id, { color: pair.color, textColor: pair.textColor })
+  }
+
   // Textarea mounts fresh each time editing starts (conditional render, not
   // a persistent hidden element) — a ref callback focuses it as soon as the
   // DOM node exists, without an extra effect or the `autofocus` attribute.
@@ -66,7 +80,7 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
 
   return (
     <>
-      <ShapeVisual shape={data.shape} color={data.color} selected={selected}>
+      <ShapeVisual shape={data.shape} color={data.color} textColor={data.textColor} selected={selected}>
         {/*
           `nodrag`/`nopan` — React Flow's own convention for interactive
           content inside a node (also used internally by `NodeResizer`'s own
@@ -86,7 +100,8 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
               onKeyDown={handleKeyDown}
               placeholder="Untitled"
               rows={1}
-              className="box-border w-full min-w-0 max-w-full resize-none bg-transparent text-center text-sm text-copy-primary outline-none placeholder:text-copy-faint"
+              style={{ color: data.textColor }}
+              className="box-border w-full min-w-0 max-w-full resize-none bg-transparent text-center text-sm outline-none placeholder:text-copy-faint"
             />
           ) : data.label ? (
             <span className="truncate">{data.label}</span>
@@ -111,6 +126,7 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
         handleClassName="!h-2.5 !w-2.5 !rounded-full !border !border-brand !bg-base"
         lineClassName="!border-surface-border"
       />
+      {selected ? <NodeColorToolbar activeColor={data.color} onSelect={handleColorSelect} /> : null}
     </>
   )
 }

@@ -27,12 +27,22 @@ import { DEFAULT_NODE_TEXT_COLOR, type NodeShape } from "@/types/canvas"
  *
  * Exact SVG coordinates (diamond/hexagon/cylinder) are this spec's own
  * recommendation, not a pinned design reference — see Open Questions #4.
+ *
+ * `textColor` (spec 15, Nodes Color Toolbar) replaces the previously
+ * hardcoded `DEFAULT_NODE_TEXT_COLOR` label color so a node's label
+ * automatically pairs with its fill once the color toolbar changes
+ * `data.color` — see spec 15's Analyst Brief, Open Questions #1. Kept
+ * optional, defaulting to `DEFAULT_NODE_TEXT_COLOR`, so the shape panel's
+ * drag-preview elements (which render no label content) don't need an
+ * unused prop threaded through.
  */
 
 interface ShapeVisualProps {
   shape: NodeShape
   /** Node fill color (`data.color`, or `DEFAULT_NODE_COLOR` for previews). */
   color: string
+  /** Label text color (`data.textColor`). Defaults to `DEFAULT_NODE_TEXT_COLOR`. */
+  textColor?: string
   /** Brighter border/stroke when true. Defaults to false (rest state). */
   selected?: boolean
   className?: string
@@ -51,7 +61,14 @@ function isCssShape(shape: NodeShape): boolean {
   return CSS_SHAPES.has(shape)
 }
 
-export function ShapeVisual({ shape, color, selected = false, className, children }: ShapeVisualProps) {
+export function ShapeVisual({
+  shape,
+  color,
+  textColor = DEFAULT_NODE_TEXT_COLOR,
+  selected = false,
+  className,
+  children,
+}: ShapeVisualProps) {
   if (isCssShape(shape)) {
     return (
       <div
@@ -61,7 +78,7 @@ export function ShapeVisual({ shape, color, selected = false, className, childre
           selected ? "border-brand" : "border-surface-border",
           className,
         )}
-        style={{ backgroundColor: color, color: DEFAULT_NODE_TEXT_COLOR }}
+        style={{ backgroundColor: color, color: textColor }}
       >
         {children}
       </div>
@@ -73,7 +90,7 @@ export function ShapeVisual({ shape, color, selected = false, className, childre
   return (
     <div
       className={cn("relative flex h-full w-full items-center justify-center", className)}
-      style={{ color: DEFAULT_NODE_TEXT_COLOR }}
+      style={{ color: textColor }}
     >
       <svg
         width="100%"

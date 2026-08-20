@@ -1,6 +1,7 @@
 import {
   CANVAS_NODE_TYPE,
   DEFAULT_NODE_COLOR,
+  DEFAULT_NODE_TEXT_COLOR,
   type CanvasNode,
   type NodeShape,
 } from "@/types/canvas"
@@ -141,8 +142,11 @@ export function generateNodeId(shape: NodeShape): string {
 
 /**
  * Builds the new `CanvasNode` to add on drop: empty label, the default node
- * color, and the dragged shape/size at the given (already flow-space)
- * position.
+ * fill/text color pairing, and the dragged shape/size at the given (already
+ * flow-space) position. `textColor` (spec 15) is set alongside `color` here
+ * so newly dropped nodes have a real paired value from creation rather than
+ * `undefined` — additive only, no change to ID generation or drop-position
+ * math.
  */
 export function createDroppedNode(
   payload: ShapeDragPayload,
@@ -157,6 +161,7 @@ export function createDroppedNode(
     data: {
       label: "",
       color: DEFAULT_NODE_COLOR,
+      textColor: DEFAULT_NODE_TEXT_COLOR,
       shape: payload.shape,
     },
   }
