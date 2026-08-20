@@ -71,58 +71,8 @@ export const SHAPE_LABELS: Record<NodeShape, string> = {
   hexagon: "Hexagon",
 }
 
-/**
- * Custom `dataTransfer` MIME type used to carry the drag payload from the
- * shape panel to the canvas drop handler. A dedicated type (rather than
- * `text/plain`) lets `onDragOver` check `event.dataTransfer.types` to
- * confirm the drag actually originates from a shape button before calling
- * `preventDefault()`.
- */
-export const CANVAS_DRAG_MIME_TYPE = "application/x-ghost-node-shape"
-
 export interface ShapeDragPayload extends ShapeSize {
   shape: NodeShape
-}
-
-function isNodeShape(value: unknown): value is NodeShape {
-  return typeof value === "string" && (CANVAS_SHAPES as readonly string[]).includes(value)
-}
-
-/** Builds the `dataTransfer` payload string for starting a shape drag. */
-export function serializeShapeDragPayload(shape: NodeShape): string {
-  const size = SHAPE_DEFAULT_SIZES[shape]
-  const payload: ShapeDragPayload = { shape, width: size.width, height: size.height }
-  return JSON.stringify(payload)
-}
-
-/**
- * Parses and validates a `dataTransfer` payload string read on drop.
- * Returns `null` for anything malformed or untrusted (unknown shape, missing
- * fields, non-numeric sizes) — external input read at a drop boundary must
- * be validated before it's trusted, per `code-standards.md`.
- */
-export function parseShapeDragPayload(raw: string): ShapeDragPayload | null {
-  if (!raw) return null
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-
-  if (typeof parsed !== "object" || parsed === null) return null
-  const candidate = parsed as Record<string, unknown>
-
-  if (!isNodeShape(candidate.shape)) return null
-  if (typeof candidate.width !== "number" || !Number.isFinite(candidate.width) || candidate.width <= 0) {
-    return null
-  }
-  if (typeof candidate.height !== "number" || !Number.isFinite(candidate.height) || candidate.height <= 0) {
-    return null
-  }
-
-  return { shape: candidate.shape, width: candidate.width, height: candidate.height }
 }
 
 let nodeIdCounter = 0

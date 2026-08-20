@@ -2,59 +2,108 @@
 import { describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { ShapePanel } from "./shape-panel"
-import { CANVAS_DRAG_MIME_TYPE, CANVAS_SHAPES, SHAPE_DEFAULT_SIZES, SHAPE_LABELS } from "@/lib/canvas-shapes"
+import { CANVAS_SHAPES, SHAPE_DEFAULT_SIZES, SHAPE_LABELS } from "@/lib/canvas-shapes"
+
+// jsdom does not implement `document.elementFromPoint` at all (not even as a
+// stub returning null), so it can't be `vi.spyOn`'d — it has to be assigned
+// directly. Real browsers always implement it; this is a test-environment
+// gap only.
+function mockElementFromPoint(element: Element | null) {
+  const mock = vi.fn().mockReturnValue(element)
+  document.elementFromPoint = mock
+  return mock
+}
 
 describe("ShapePanel", () => {
-  it("renders one draggable button per supported shape", () => {
-    render(<ShapePanel />)
+  it("renders one button per supported shape", () => {
+    render(<ShapePanel onDropShape={vi.fn()} />)
 
     for (const shape of CANVAS_SHAPES) {
-      const button = screen.getByTitle(SHAPE_LABELS[shape])
-      expect(button).toHaveAttribute("draggable", "true")
+      expect(screen.getByTitle(SHAPE_LABELS[shape])).toBeInTheDocument()
     }
     expect(screen.getAllByRole("button")).toHaveLength(CANVAS_SHAPES.length)
   })
 
-  it("sets the shape/size dataTransfer payload on dragstart, matching each shape's default size", () => {
-    render(<ShapePanel />)
+  it("calls onDropShape with the shape/size payload and drop position when released over the react-flow pane", () => {
+    const pane = document.createElement("div")
+    pane.className = "react-flow__pane"
+    document.body.appendChild(pane)
+    const elementFromPointSpy = mockElementFromPoint(pane)
 
     for (const shape of CANVAS_SHAPES) {
-      const setData = vi.fn()
-      const setDragImage = vi.fn()
-      const dataTransfer = { setData, setDragImage, effectAllowed: "" }
-      fireEvent.dragStart(screen.getByTitle(SHAPE_LABELS[shape]), { dataTransfer })
+      const onDropShape = vi.fn()
+      const { unmount } = render(<ShapePanel onDropShape={onDropShape} />)
 
-      expect(setData).toHaveBeenCalledTimes(1)
-      const [mimeType, raw] = setData.mock.calls[0] as [string, string]
-      expect(mimeType).toBe(CANVAS_DRAG_MIME_TYPE)
-      expect(JSON.parse(raw)).toEqual({ shape, ...SHAPE_DEFAULT_SIZES[shape] })
-      expect(dataTransfer.effectAllowed).toBe("copy")
+      fireEvent.pointerDown(screen.getByTitle(SHAPE_LABELS[shape]), { clientX: 10, clientY: 20 })
+      fireEvent.pointerUp(window, { clientX: 300, clientY: 400 })
+
+      expect(onDropShape).toHaveBeenCalledTimes(1)
+      expect(onDropShape).toHaveBeenCalledWith(
+        { shape, ...SHAPE_DEFAULT_SIZES[shape] },
+        { x: 300, y: 400 },
+      )
+
+      unmount()
     }
+
+    elementFromPointSpy.mockRestore()
+    pane.remove()
   })
 
-  it("passes a shape-correct, already-rendered preview element to setDragImage, offset by half its default size", () => {
-    render(<ShapePanel />)
+  it("does not call onDropShape when released outside the react-flow pane", () => {
+    const outsideElement = document.createElement("div")
+    document.body.appendChild(outsideElement)
+    const elementFromPointSpy = mockElementFromPoint(outsideElement)
 
-    for (const shape of CANVAS_SHAPES) {
-      const setDragImage = vi.fn()
-      const dataTransfer = { setData: vi.fn(), setDragImage, effectAllowed: "" }
-      fireEvent.dragStart(screen.getByTitle(SHAPE_LABELS[shape]), { dataTransfer })
+    const onDropShape = vi.fn()
+    render(<ShapePanel onDropShape={onDropShape} />)
 
-      expect(setDragImage).toHaveBeenCalledTimes(1)
-      const [element, xOffset, yOffset] = setDragImage.mock.calls[0] as [HTMLElement, number, number]
-      const size = SHAPE_DEFAULT_SIZES[shape]
-      expect(element).toBeInstanceOf(HTMLElement)
-      expect(element.style.width).toBe(`${size.width}px`)
-      expect(element.style.height).toBe(`${size.height}px`)
-      expect(xOffset).toBe(size.width / 2)
-      expect(yOffset).toBe(size.height / 2)
-    }
+    fireEvent.pointerDown(screen.getByTitle(SHAPE_LABELS.rectangle), { clientX: 10, clientY: 20 })
+    fireEvent.pointerUp(window, { clientX: 300, clientY: 400 })
+
+    expect(onDropShape).not.toHaveBeenCalled()
+
+    elementFromPointSpy.mockRestore()
+    outsideElement.remove()
   })
 
-  it("renders one off-screen preview element per shape, hidden from the accessibility tree", () => {
-    render(<ShapePanel />)
-    const hiddenContainer = document.querySelector('div[aria-hidden="true"][style*="-9999px"]')
-    expect(hiddenContainer).not.toBeNull()
-    expect(hiddenContainer?.children).toHaveLength(CANVAS_SHAPES.length)
+  it("does not call onDropShape when the drag is cancelled", () => {
+    const onDropShape = vi.fn()
+    render(<ShapePanel onDropShape={onDropShape} />)
+
+    fireEvent.pointerDown(screen.getByTitle(SHAPE_LABELS.rectangle), { clientX: 10, clientY: 20 })
+    fireEvent.pointerCancel(window)
+    fireEvent.pointerUp(window, { clientX: 300, clientY: 400 })
+
+    expect(onDropShape).not.toHaveBeenCalled()
+  })
+
+  it("shows a cursor-following ghost preview only while a drag is in progress", () => {
+    const pane = document.createElement("div")
+    pane.className = "react-flow__pane"
+    document.body.appendChild(pane)
+    const elementFromPointSpy = mockElementFromPoint(pane)
+
+    render(<ShapePanel onDropShape={vi.fn()} />)
+
+    expect(document.querySelector('div[aria-hidden="true"]')).toBeNull()
+
+    fireEvent.pointerDown(screen.getByTitle(SHAPE_LABELS.circle), { clientX: 10, clientY: 20 })
+    let ghost = document.querySelector('div[aria-hidden="true"]') as HTMLElement | null
+    expect(ghost).not.toBeNull()
+    expect(ghost?.style.width).toBe(`${SHAPE_DEFAULT_SIZES.circle.width}px`)
+    expect(ghost?.style.left).toBe("10px")
+    expect(ghost?.style.top).toBe("20px")
+
+    fireEvent.pointerMove(window, { clientX: 55, clientY: 66 })
+    ghost = document.querySelector('div[aria-hidden="true"]') as HTMLElement | null
+    expect(ghost?.style.left).toBe("55px")
+    expect(ghost?.style.top).toBe("66px")
+
+    fireEvent.pointerUp(window, { clientX: 55, clientY: 66 })
+    expect(document.querySelector('div[aria-hidden="true"]')).toBeNull()
+
+    elementFromPointSpy.mockRestore()
+    pane.remove()
   })
 })

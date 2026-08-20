@@ -1,16 +1,10 @@
 "use client"
 
-import { useRef, type DragEvent, type MutableRefObject } from "react"
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { Circle, Cylinder, Diamond, Hexagon, Pill, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ShapeVisual } from "@/components/editor/shape-visual"
-import {
-  CANVAS_DRAG_MIME_TYPE,
-  CANVAS_SHAPES,
-  SHAPE_DEFAULT_SIZES,
-  SHAPE_LABELS,
-  serializeShapeDragPayload,
-} from "@/lib/canvas-shapes"
+import { CANVAS_SHAPES, SHAPE_DEFAULT_SIZES, SHAPE_LABELS, type ShapeDragPayload } from "@/lib/canvas-shapes"
 import { DEFAULT_NODE_COLOR, type NodeShape } from "@/types/canvas"
 
 const SHAPE_ICONS: Record<NodeShape, typeof Square> = {
@@ -22,109 +16,128 @@ const SHAPE_ICONS: Record<NodeShape, typeof Square> = {
   hexagon: Hexagon,
 }
 
-/** Holds one already-rendered preview `<div>` per shape, keyed by shape name. */
-type PreviewRefs = MutableRefObject<Partial<Record<NodeShape, HTMLDivElement>>>
+/** Screen-space (`clientX`/`clientY`) position a shape was released at. */
+export interface ShapeDropPosition {
+  x: number
+  y: number
+}
+
+/** Called once a dragged shape is released over the React Flow canvas. */
+export type OnDropShape = (payload: ShapeDragPayload, position: ShapeDropPosition) => void
+
+export interface ShapePanelProps {
+  onDropShape: OnDropShape
+}
 
 /**
  * Floating pill-shaped toolbar at the bottom-center of the canvas. Each
- * button is a native HTML5 drag source: starting a drag sets a
- * `dataTransfer` payload (shape name + default size) that `canvas.tsx`'s
- * `onDrop` handler reads to create a new node. No drag-and-drop library is
- * used — see spec 12's Analyst Brief, Dependencies.
+ * button starts a `pointerdown`-tracked drag rather than native HTML5
+ * `draggable`/`dragstart` — a human smoke test of spec 12/13's original
+ * native-drag implementation found it unreliably failed to *start* for
+ * several shapes (repeated attempts needed for rectangle/circle/pill/hexagon,
+ * while diamond/cylinder began on the first try every time), a known general
+ * weak spot of the native DnD API rather than a per-shape logic bug — the
+ * drop logic itself was always correct for every shape. Tracking the whole
+ * gesture through plain `pointermove`/`pointerup` listeners on `window`
+ * sidesteps native DnD's session-initiation step entirely.
  *
- * Positioning/visual language (`rounded-full`, `bg-elevated`/
- * `border-surface-border`) follows `ui-context.md`'s documented
- * floating-overlay pattern since no prior "pill toolbar" convention exists
- * yet — see spec 12's Analyst Brief, Open Questions #1.
- *
- * Spec 13 adds a cursor-attached ghost drag preview via the native
- * `dataTransfer.setDragImage` API — see spec 13's Analyst Brief, Open
- * Questions #1 and #2. The panel's own layout/buttons are unchanged.
+ * A drop is only accepted when the pointer is released over React Flow's own
+ * `.react-flow__pane` element (checked via `document.elementFromPoint`) —
+ * releasing over the shape panel itself, the control bar, or outside the
+ * canvas is a no-op, the same gating `onDragOver`'s `preventDefault` used to
+ * provide for native drag.
  */
-export function ShapePanel() {
-  const previewRefs = useRef<Partial<Record<NodeShape, HTMLDivElement>>>({})
-
+export function ShapePanel({ onDropShape }: ShapePanelProps) {
   return (
     <div className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2">
       <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-surface-border bg-elevated p-1.5 shadow-lg">
         {CANVAS_SHAPES.map((shape) => (
-          <ShapeButton key={shape} shape={shape} previewRefs={previewRefs} />
+          <ShapeButton key={shape} shape={shape} onDropShape={onDropShape} />
         ))}
       </div>
-      <ShapeDragPreviews previewRefs={previewRefs} />
     </div>
   )
 }
 
-function ShapeButton({ shape, previewRefs }: { shape: NodeShape; previewRefs: PreviewRefs }) {
+function ShapeButton({ shape, onDropShape }: { shape: NodeShape; onDropShape: OnDropShape }) {
   const Icon = SHAPE_ICONS[shape]
   const label = SHAPE_LABELS[shape]
+  const [isDragging, setIsDragging] = useState(false)
+  const [ghostPosition, setGhostPosition] = useState<ShapeDropPosition | null>(null)
 
-  function handleDragStart(event: DragEvent<HTMLButtonElement>) {
-    event.dataTransfer.setData(CANVAS_DRAG_MIME_TYPE, serializeShapeDragPayload(shape))
-    event.dataTransfer.effectAllowed = "copy"
-
-    const previewElement = previewRefs.current[shape]
-    if (previewElement) {
-      const size = SHAPE_DEFAULT_SIZES[shape]
-      event.dataTransfer.setDragImage(previewElement, size.width / 2, size.height / 2)
-    }
+  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    setIsDragging(true)
+    setGhostPosition({ x: event.clientX, y: event.clientY })
   }
 
+  // Listeners live on `window`, not the button, so the gesture keeps
+  // tracking no matter where the pointer travels — attached only while a
+  // drag from this button is in progress, torn down as soon as it ends.
+  useEffect(() => {
+    if (!isDragging) return
+
+    function handlePointerMove(event: PointerEvent) {
+      setGhostPosition({ x: event.clientX, y: event.clientY })
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      const dropTarget = document.elementFromPoint(event.clientX, event.clientY)
+      if (dropTarget?.closest(".react-flow__pane")) {
+        const size = SHAPE_DEFAULT_SIZES[shape]
+        onDropShape({ shape, width: size.width, height: size.height }, { x: event.clientX, y: event.clientY })
+      }
+      setIsDragging(false)
+      setGhostPosition(null)
+    }
+
+    function handlePointerCancel() {
+      setIsDragging(false)
+      setGhostPosition(null)
+    }
+
+    window.addEventListener("pointermove", handlePointerMove)
+    window.addEventListener("pointerup", handlePointerUp)
+    window.addEventListener("pointercancel", handlePointerCancel)
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("pointerup", handlePointerUp)
+      window.removeEventListener("pointercancel", handlePointerCancel)
+    }
+  }, [isDragging, shape, onDropShape])
+
   return (
-    <Button
-      variant="ghost"
-      size="icon-lg"
-      draggable
-      onDragStart={handleDragStart}
-      title={label}
-      aria-label={`Drag to add a ${label.toLowerCase()} node`}
-    >
-      <Icon />
-    </Button>
+    <>
+      <Button
+        variant="ghost"
+        size="icon-lg"
+        onPointerDown={handlePointerDown}
+        title={label}
+        aria-label={`Drag to add a ${label.toLowerCase()} node`}
+      >
+        <Icon />
+      </Button>
+      {ghostPosition ? <DragGhost shape={shape} position={ghostPosition} /> : null}
+    </>
   )
 }
 
-/**
- * One always-mounted, off-screen preview element per shape, sized per
- * `SHAPE_DEFAULT_SIZES` and rendered with the same `ShapeVisual` geometry
- * `CanvasNode` uses (so the ghost preview matches the node that will
- * actually be created on drop).
- *
- * `setDragImage` needs a real, already-rendered DOM element the moment
- * `dragstart` fires — a shape/size committed via React state inside that
- * same synchronous event handler would not yet exist in the DOM (state
- * updates are async), so the browser would snapshot stale or default
- * content. Keeping one correctly-shaped element per shape mounted
- * persistently avoids that gap entirely — `dragstart` just hands the
- * already-correct element straight to `setDragImage`. See spec 13's
- * Analyst Brief, Open Questions #2.
- *
- * Positioned off-screen via a large negative `transform` translation, not
- * `display: none` — some browsers won't snapshot a `display: none` element
- * for `setDragImage`.
- */
-function ShapeDragPreviews({ previewRefs }: { previewRefs: PreviewRefs }) {
+/** Cursor-attached preview shown while a shape is being dragged, centered on the pointer. */
+function DragGhost({ shape, position }: { shape: NodeShape; position: ShapeDropPosition }) {
+  const size = SHAPE_DEFAULT_SIZES[shape]
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed left-0 top-0"
-      style={{ transform: "translate(-9999px, -9999px)" }}
+      className="pointer-events-none fixed z-50 opacity-80"
+      style={{
+        left: position.x,
+        top: position.y,
+        width: size.width,
+        height: size.height,
+        transform: "translate(-50%, -50%)",
+      }}
     >
-      {CANVAS_SHAPES.map((shape) => {
-        const size = SHAPE_DEFAULT_SIZES[shape]
-        return (
-          <div
-            key={shape}
-            ref={(element) => {
-              if (element) previewRefs.current[shape] = element
-            }}
-            style={{ width: size.width, height: size.height }}
-          >
-            <ShapeVisual shape={shape} color={DEFAULT_NODE_COLOR} />
-          </div>
-        )
-      })}
+      <ShapeVisual shape={shape} color={DEFAULT_NODE_COLOR} />
     </div>
   )
 }

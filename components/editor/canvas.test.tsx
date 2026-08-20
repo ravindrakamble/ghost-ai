@@ -4,7 +4,6 @@ import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Canvas } from "./canvas";
-import { CANVAS_DRAG_MIME_TYPE, serializeShapeDragPayload } from "@/lib/canvas-shapes";
 import { CANVAS_EDGE_TYPE, CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
 
 // `Canvas` wires together three real Liveblocks/React Flow packages that
@@ -19,8 +18,6 @@ type CapturedReactFlowProps = {
   nodeTypes?: Record<string, unknown>;
   edgeTypes?: Record<string, unknown>;
   defaultEdgeOptions?: { type?: string; markerEnd?: unknown };
-  onDragOver?: (event: unknown) => void;
-  onDrop?: (event: unknown) => void;
 };
 
 const {
@@ -292,43 +289,24 @@ describe("Canvas", () => {
     expect(reactFlowPropsRef.current?.defaultEdgeOptions?.markerEnd).toBeTruthy();
   });
 
-  it("allows a drop when dragover carries the shape MIME type", () => {
-    render(<Canvas roomId="project-123" />);
-
-    const preventDefault = vi.fn();
-    const dataTransfer = { types: [CANVAS_DRAG_MIME_TYPE], dropEffect: "" };
-    reactFlowPropsRef.current?.onDragOver?.({ preventDefault, dataTransfer });
-
-    expect(preventDefault).toHaveBeenCalledTimes(1);
-    expect(dataTransfer.dropEffect).toBe("copy");
-  });
-
-  it("ignores dragover for a drag that isn't a shape payload", () => {
-    render(<Canvas roomId="project-123" />);
-
-    const preventDefault = vi.fn();
-    reactFlowPropsRef.current?.onDragOver?.({
-      preventDefault,
-      dataTransfer: { types: ["text/plain"], dropEffect: "" },
-    });
-
-    expect(preventDefault).not.toHaveBeenCalled();
-  });
-
-  it("adds a new node via onNodesChange at the dropped screen position, converted through screenToFlowPosition", () => {
+  it("adds a new node via onNodesChange when a shape is pointer-dragged and released over the canvas pane, converted through screenToFlowPosition", () => {
     render(<Canvas roomId="project-123" />);
     screenToFlowPositionMock.mockReturnValue({ x: 42, y: 99 });
 
-    const preventDefault = vi.fn();
-    const raw = serializeShapeDragPayload("rectangle");
-    reactFlowPropsRef.current?.onDrop?.({
-      preventDefault,
-      clientX: 500,
-      clientY: 600,
-      dataTransfer: { getData: () => raw },
-    });
+    const pane = document.createElement("div");
+    pane.className = "react-flow__pane";
+    document.body.appendChild(pane);
+    // jsdom does not implement `document.elementFromPoint` at all, so it
+    // can't be `vi.spyOn`'d — assign it directly. Real browsers always
+    // implement it; this is a test-environment gap only.
+    const elementFromPointSpy = vi.fn().mockReturnValue(pane);
+    document.elementFromPoint = elementFromPointSpy;
 
-    expect(preventDefault).toHaveBeenCalledTimes(1);
+    const rectangleButton = screen.getByRole("button", { name: /rectangle/i });
+    fireEvent.pointerDown(rectangleButton, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(window, { clientX: 500, clientY: 600 });
+
+    expect(elementFromPointSpy).toHaveBeenCalledWith(500, 600);
     expect(screenToFlowPositionMock).toHaveBeenCalledWith({ x: 500, y: 600 });
     expect(onNodesChange).toHaveBeenCalledTimes(1);
 
@@ -342,18 +320,26 @@ describe("Canvas", () => {
       height: 80,
       data: { label: "", color: DEFAULT_NODE_COLOR, shape: "rectangle" },
     });
+
+    elementFromPointSpy.mockRestore();
+    pane.remove();
   });
 
-  it("does not add a node when the dropped payload is missing or malformed", () => {
+  it("does not add a node when the shape is released outside the canvas pane", () => {
     render(<Canvas roomId="project-123" />);
 
-    reactFlowPropsRef.current?.onDrop?.({
-      preventDefault: vi.fn(),
-      clientX: 0,
-      clientY: 0,
-      dataTransfer: { getData: () => "" },
-    });
+    const outsideElement = document.createElement("div");
+    document.body.appendChild(outsideElement);
+    const elementFromPointSpy = vi.fn().mockReturnValue(outsideElement);
+    document.elementFromPoint = elementFromPointSpy;
+
+    const rectangleButton = screen.getByRole("button", { name: /rectangle/i });
+    fireEvent.pointerDown(rectangleButton, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(window, { clientX: 0, clientY: 0 });
 
     expect(onNodesChange).not.toHaveBeenCalled();
+
+    elementFromPointSpy.mockRestore();
+    outsideElement.remove();
   });
 });
