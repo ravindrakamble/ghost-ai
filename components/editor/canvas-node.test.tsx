@@ -72,6 +72,17 @@ function rerenderNode(
   )
 }
 
+/**
+ * Spec 16 wraps `ShapeVisual` (plus the four connection handles) in a new
+ * `group relative` `<div>` so hover-driven handle visibility doesn't require
+ * touching `ShapeVisual` itself — `container.firstElementChild` is now that
+ * wrapper, not `ShapeVisual`'s own root, so tests that need `ShapeVisual`'s
+ * root element go one level deeper.
+ */
+function getShapeRoot(container: HTMLElement): HTMLElement {
+  return container.firstElementChild!.firstElementChild as HTMLElement
+}
+
 describe("CanvasNode", () => {
   it("renders the label when present", () => {
     renderNode(makeProps({ label: "My Service" }))
@@ -85,7 +96,7 @@ describe("CanvasNode", () => {
 
   it("applies the node's fill color and the documented default text color on the rectangle's bordered container", () => {
     const { container } = renderNode(makeProps({ label: "X", color: "#10233D" }))
-    const shapeRoot = container.firstElementChild as HTMLElement
+    const shapeRoot = getShapeRoot(container)
     expect(shapeRoot.style.backgroundColor).toBe("rgb(16, 35, 61)")
     expect(shapeRoot.style.color).toBe("rgb(237, 237, 237)")
   })
@@ -110,12 +121,12 @@ describe("CanvasNode", () => {
 
   it("uses a visibly brighter border color when selected (CSS shape)", () => {
     const { rerender, container } = renderNode(makeProps({ shape: "rectangle" }, false))
-    const restDiv = container.firstElementChild as HTMLElement
+    const restDiv = getShapeRoot(container)
     expect(restDiv.className).toContain("border-surface-border")
     expect(restDiv.className).not.toContain("border-brand")
 
     rerenderNode(rerender, makeProps({ shape: "rectangle" }, true))
-    const selectedDiv = container.firstElementChild as HTMLElement
+    const selectedDiv = getShapeRoot(container)
     expect(selectedDiv.className).toContain("border-brand")
     expect(selectedDiv.className).not.toContain("border-surface-border")
   })
@@ -132,13 +143,41 @@ describe("CanvasNode", () => {
 
   it("gives rectangle rounded-xl and pill/circle rounded-full", () => {
     const { container: rectContainer } = renderNode(makeProps({ shape: "rectangle" }))
-    expect((rectContainer.firstElementChild as HTMLElement).className).toContain("rounded-xl")
+    expect(getShapeRoot(rectContainer).className).toContain("rounded-xl")
 
     const { container: pillContainer } = renderNode(makeProps({ shape: "pill" }))
-    expect((pillContainer.firstElementChild as HTMLElement).className).toContain("rounded-full")
+    expect(getShapeRoot(pillContainer).className).toContain("rounded-full")
 
     const { container: circleContainer } = renderNode(makeProps({ shape: "circle" }))
-    expect((circleContainer.firstElementChild as HTMLElement).className).toContain("rounded-full")
+    expect(getShapeRoot(circleContainer).className).toContain("rounded-full")
+  })
+
+  describe("connection handles", () => {
+    it("renders one handle per side, hidden at rest with a hover-fade class", () => {
+      const { container } = renderNode(makeProps())
+      const handles = container.querySelectorAll(".react-flow__handle")
+      expect(handles).toHaveLength(4)
+      handles.forEach((handle) => {
+        expect(handle.className).toContain("opacity-0")
+        expect(handle.className).toContain("group-hover:opacity-100")
+      })
+    })
+
+    it("gives each handle a distinct id for its side", () => {
+      const { container } = renderNode(makeProps())
+      const ids = Array.from(container.querySelectorAll(".react-flow__handle")).map((handle) =>
+        handle.getAttribute("data-handleid"),
+      )
+      expect(new Set(ids)).toEqual(new Set(["top", "right", "bottom", "left"]))
+    })
+
+    it("wraps ShapeVisual and the handles in a shared hover group", () => {
+      const { container } = renderNode(makeProps())
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.className).toContain("group")
+      expect(wrapper.contains(getShapeRoot(container))).toBe(true)
+      expect(wrapper.querySelectorAll(".react-flow__handle")).toHaveLength(4)
+    })
   })
 
   describe("resize", () => {
@@ -248,7 +287,7 @@ describe("CanvasNode", () => {
       const { container } = renderNode(
         makeProps({ label: "X", color: bluePair.color, textColor: bluePair.textColor }),
       )
-      const shapeRoot = container.firstElementChild as HTMLElement
+      const shapeRoot = getShapeRoot(container)
       expect(shapeRoot.style.color).toBe("rgb(82, 168, 255)") // #52A8FF
     })
 

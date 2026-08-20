@@ -70,7 +70,13 @@ The table above is implemented as a real, exported constant — `NODE_COLORS: re
 
 ### Edge Style
 
-Smooth-step path with an arrow marker. Default edge color: `#f8fafc`. Stroke width is thin — edges are visually secondary to nodes.
+Implemented in `components/editor/canvas-edge.tsx` (spec 16, Edge Behavior) — the first spec to consume `CanvasEdgeData`/`CANVAS_EDGE_TYPE` (defined in spec 11). Registered as `edgeTypes={{ [CANVAS_EDGE_TYPE]: CanvasEdge }}` in `canvas.tsx`, with `defaultEdgeOptions` (`type: CANVAS_EDGE_TYPE`, an arrow `markerEnd`) so edges created via dragging a handle-to-handle connection (`onConnect`) use the custom renderer and marker from creation, not React Flow's default `bezier` edge.
+
+- Routing: right-angle/smooth-step path via `@xyflow/react`'s `getSmoothStepPath` (never a hand-rolled routing algorithm). The label position (`EdgeLabelRenderer`, below) uses that same call's own returned `labelX`/`labelY` (the path's real midpoint), never a manually computed one.
+- Color: rest state uses the same subtle `var(--border-default)` token `ShapeVisual` uses for an unselected node border; hovered-or-selected ("bright") uses the same brand-accent `var(--accent-primary)` token used for a selected node border — one shared "bright" state for both hover and selection, not a three-tier system (spec 16's Analyst Brief, Open Questions #2). Stroke width is fixed (not widened on hover/selected) — only color changes, the same rest/selected convention `ShapeVisual`'s own border already follows.
+- Hit area: `<BaseEdge>`'s own `interactionWidth` (default 20px) already renders a wider, `strokeOpacity: 0` sibling path alongside the thin visible one — the standard React Flow technique for "easier to click without increasing visible thickness." No separate hand-rolled invisible path.
+- Marker: an arrow (`MarkerType.ArrowClosed`), fixed color (`var(--text-secondary)`), not hover/selected-tracking — React Flow resolves `markerEnd` into a static per-edge SVG `<marker>` def from the edge's own persisted data, not a per-render style, so making it track hover state would need a hand-rolled marker instead of React Flow's own marker system (spec 16's Analyst Brief, Open Questions #5, a minor recommendation, not a literal requirement).
+- Label editing: double-clicking anywhere on the edge (the line itself, or an existing label) opens inline editing — an `<input>` inside `EdgeLabelRenderer`, positioned at the path's own `labelX`/`labelY`, same double-click-to-edit convention as Node Label Editing below. Updates dispatch on every keystroke through `hooks/use-update-canvas-edge.ts`'s `CanvasEdgeUpdateContext` (provided by `CanvasFlow`, mirroring `CanvasNodeUpdateContext`) — a real `onEdgesChange([{ type: "replace", ... }])` call, not a local-only mutation or a non-serializable callback embedded in `data`. Blur, `Enter`, and `Escape` all just exit edit mode (the value is already synced live by then). A saved label renders as a small `rounded-full`/`bg-elevated`/`border-surface-border` pill badge; while editing with no label yet, the input's own `placeholder` shows a faint (`placeholder:text-copy-faint`) hint instead — an edge at rest with no label renders no label content at all, not an empty hint. The label's interactive elements carry `nodrag nopan` so clicking, selecting, or typing there never starts a node drag or canvas pan.
 
 ### Node Shapes
 
@@ -108,6 +114,8 @@ The toolbar shows exactly one swatch button per `NODE_COLORS` pair (8 total, `ro
 ### Connection Handles
 
 Small white circular handles, hidden by default, revealed on node hover. Appear at all four sides of a node.
+
+Implemented in `components/editor/canvas-node.tsx` (spec 16, Edge Behavior) — four `@xyflow/react` `Handle` components, one per `Position` (`Top`/`Right`/`Bottom`/`Left`), styled `bg-copy-primary` (near-white fill) with a `border-base` (dark) border, `opacity-0` at rest with `group-hover:opacity-100` (the node's own root wraps `ShapeVisual` and the four handles in a `group relative` `<div>` so hover-driven visibility doesn't require touching `ShapeVisual` itself — the one explicitly permitted exception to spec 16's "don't redesign the node renderer" Scope Limit). Each handle is `type="source"` — with `connectionMode={ConnectionMode.Loose}` already set on `<ReactFlow>` (spec 11), Loose mode's own connection-validity check only requires the two endpoints not be the exact same handle, regardless of `type`, so a single handle per side (not a stacked source+target pair) already supports dragging a connection from any handle to any other handle (spec 16's Analyst Brief, Open Questions #4).
 
 ### Canvas Background
 

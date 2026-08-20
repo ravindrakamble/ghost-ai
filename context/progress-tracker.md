@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 16: Edge Behavior — not yet started.
+- Phase 16: Edge Behavior — implemented, awaiting QA.
 
 ## Current Goal
-- Analyst brief for feature spec 16 (Edge Behavior).
+- QA review of feature spec 16 (Edge Behavior) at `context/spec-status/16-edge-behavior.md`.
 
 ## Completed
 
@@ -189,11 +189,19 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently.
+- Feature spec 16: Edge Behavior
+  - `hooks/use-update-canvas-edge.ts` (new) — `CanvasEdgeUpdateContext`/`useUpdateCanvasEdge()`, the edge-scoped mirror of spec 14's `hooks/use-update-canvas-node.ts`, so the leaf `CanvasEdge` renderer can dispatch label edits back through `CanvasFlow`'s real `onEdgesChange`.
+  - `components/editor/canvas-edge.tsx` (new) — `CanvasEdge`, the custom edge renderer for `CANVAS_EDGE_TYPE` (first consumer of `CanvasEdgeData`, defined in spec 11, never rendered until now). Right-angle/smooth-step routing via `getSmoothStepPath`, `BaseEdge`, `EdgeLabelRenderer` positioned at the path's own `labelX`/`labelY`; dimmed-at-rest (`var(--border-default)`) / brightened-on-hover-or-selected (`var(--accent-primary)`) stroke; `BaseEdge`'s own `interactionWidth` (default 20px) provides the enlarged hit area; double-click-to-edit label with pill-badge (saved) / faint-hint-while-editing-empty / nothing-at-rest states, dispatched via `useUpdateCanvasEdge()` on every keystroke, `nodrag nopan` on interactive elements.
+  - `components/editor/canvas-node.tsx` (modified) — added four `Handle` components (one per side), wrapped with `ShapeVisual` in a new `group relative` `<div>` for hover-driven fade-in (the brief's one permitted exception to "don't redesign the node renderer"). Single `type="source"` handle per side, verified sufficient under `ConnectionMode.Loose` by reading `@xyflow/system`'s `isValidHandle` source.
+  - `components/editor/canvas.tsx` (modified) — registers `edgeTypes={{ [CANVAS_EDGE_TYPE]: CanvasEdge }}` and `defaultEdgeOptions` (`type: CANVAS_EDGE_TYPE`, arrow `markerEnd`) on `<ReactFlow>`; adds `updateEdgeData`/`CanvasEdgeUpdateContext.Provider` alongside the existing node one. No drag/drop/node-creation changes.
+  - `context/ui-context.md` (modified) — Edge Style section rewritten from aspirational/doc-only to the real implementation; Connection Handles section gained an implementation paragraph.
+  - Tests: `hooks/use-update-canvas-edge.test.tsx` (new), `components/editor/canvas-edge.test.tsx` (new, 19 tests), `components/editor/canvas-node.test.tsx` (extended, handle presence/hover/ids), `components/editor/canvas.test.tsx` (extended — `edgeTypes`/`defaultEdgeOptions` wiring, plus `Position`/`MarkerType` added to its existing `@xyflow/react` mock since both are now dereferenced at module scope). 236/236 tests passing across 29 files (up from 211/27 at the end of spec 15).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - Full pipeline trail in `context/spec-status/16-edge-behavior.md`.
 
 ## Next Up
 
-- Analyst brief for feature spec 16 (Edge Behavior).
+- QA review, then Product Owner review, of feature spec 16 (Edge Behavior).
 
 ## Open Questions
 
