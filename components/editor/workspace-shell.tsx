@@ -26,10 +26,19 @@ interface WorkspaceShellProps {
  * from the Share button's `onClick` — a real event handler — instead of a
  * `useEffect` watching the dialog's `open` prop, which
  * `react-hooks/set-state-in-effect` flags as a cascading-render pattern.
+ *
+ * `isTemplatesModalOpen`/`setIsTemplatesModalOpen` (spec 18) are threaded
+ * down as `Canvas` props — the same direction `roomId` already flows — since
+ * the starter templates modal itself is rendered by `CanvasFlow`
+ * (`components/editor/canvas.tsx`), the only place the real import
+ * mechanism (`nodes`/`edges`/`onNodesChange`/`onEdgesChange`/`fitView`)
+ * lives. `WorkspaceShell` only owns the open/close boolean, mirroring
+ * `isShareOpen` above.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
   const [isShareOpen, setIsShareOpen] = useState(false)
+  const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false)
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
@@ -45,9 +54,14 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
         isAiSidebarOpen={isAiSidebarOpen}
         onToggleAiSidebar={() => setIsAiSidebarOpen((prev) => !prev)}
         onOpenShare={handleOpenShare}
+        onOpenTemplates={() => setIsTemplatesModalOpen(true)}
       />
       <div className="relative flex flex-1 overflow-hidden">
-        <Canvas roomId={project.id} />
+        <Canvas
+          roomId={project.id}
+          isTemplatesModalOpen={isTemplatesModalOpen}
+          setIsTemplatesModalOpen={setIsTemplatesModalOpen}
+        />
         <AiSidebarPlaceholder isOpen={isAiSidebarOpen} />
       </div>
       <ShareDialog

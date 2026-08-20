@@ -4,6 +4,7 @@ import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Canvas } from "./canvas";
+import { CANVAS_TEMPLATES } from "./starter-templates";
 import { CANVAS_EDGE_TYPE, CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
 
 // `Canvas` wires together three real Liveblocks/React Flow packages that
@@ -31,6 +32,7 @@ const {
   useRedoMock,
   useCanUndoMock,
   useCanRedoMock,
+  onDeleteMock,
   reactFlowPropsRef,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
@@ -43,6 +45,7 @@ const {
   useRedoMock: vi.fn(),
   useCanUndoMock: vi.fn(),
   useCanRedoMock: vi.fn(),
+  onDeleteMock: vi.fn(),
   reactFlowPropsRef: { current: null as CapturedReactFlowProps | null },
 }));
 
@@ -132,6 +135,23 @@ const onNodesChange = vi.fn();
 const onEdgesChange = vi.fn();
 const onConnect = vi.fn();
 
+/**
+ * Every existing test in this file predates spec 18's `isTemplatesModalOpen`/
+ * `setIsTemplatesModalOpen` props — this helper supplies safe defaults
+ * (modal closed, a fresh spy setter) so those tests don't each need
+ * updating, while spec 18's own tests can override either prop directly.
+ */
+function renderCanvas(overrides: Partial<Parameters<typeof Canvas>[0]> = {}) {
+  const props = {
+    roomId: "project-123",
+    isTemplatesModalOpen: false,
+    setIsTemplatesModalOpen: vi.fn(),
+    ...overrides,
+  };
+  render(<Canvas {...props} />);
+  return props;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   errorListenerRef.current = null;
@@ -142,6 +162,7 @@ beforeEach(() => {
     onNodesChange,
     onEdgesChange,
     onConnect,
+    onDelete: onDeleteMock,
   });
   useUndoMock.mockReturnValue(vi.fn());
   useRedoMock.mockReturnValue(vi.fn());
@@ -151,7 +172,7 @@ beforeEach(() => {
 
 describe("Canvas", () => {
   it("connects LiveblocksProvider/RoomProvider to the given room with the full Presence shape", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     expect(screen.getByTestId("liveblocks-provider")).toHaveAttribute(
       "data-auth-endpoint",
@@ -166,7 +187,7 @@ describe("Canvas", () => {
   });
 
   it("wires useLiveblocksFlow's synced state into ReactFlow with loose connections, fitView, and a dot background", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     expect(useLiveblocksFlowMock).toHaveBeenCalledWith({
       suspense: true,
@@ -183,13 +204,13 @@ describe("Canvas", () => {
   });
 
   it("no longer renders a MiniMap anywhere on the canvas", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     expect(screen.queryByTestId("minimap")).not.toBeInTheDocument();
   });
 
   it("shows a connection-error fallback instead of the canvas when a ROOM_CONNECTION_ERROR is reported", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     expect(screen.getByTestId("react-flow")).toBeInTheDocument();
     expect(errorListenerRef.current).not.toBeNull();
@@ -203,7 +224,7 @@ describe("Canvas", () => {
   });
 
   it("ignores non-connection errors and keeps rendering the canvas", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     act(() => {
       errorListenerRef.current?.({ context: { type: "CREATE_THREAD_ERROR" } });
@@ -214,7 +235,7 @@ describe("Canvas", () => {
   });
 
   it("renders the floating shape panel within the canvas's relative wrapper", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     // 6 shape-panel buttons (rectangle, diamond, circle, pill, cylinder,
     // hexagon) plus the 5 control-bar buttons (zoom out, fit view, zoom in,
@@ -230,7 +251,7 @@ describe("Canvas", () => {
     useCanUndoMock.mockReturnValue(false);
     useCanRedoMock.mockReturnValue(true);
 
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     const zoomInButton = screen.getByRole("button", { name: /zoom in/i });
     const zoomOutButton = screen.getByRole("button", { name: /zoom out/i });
@@ -261,7 +282,7 @@ describe("Canvas", () => {
     useUndoMock.mockReturnValue(undo);
     useRedoMock.mockReturnValue(redo);
 
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     fireEvent.keyDown(window, { key: "+" });
     expect(zoomInMock).toHaveBeenCalledWith({ duration: expect.any(Number) });
@@ -274,14 +295,14 @@ describe("Canvas", () => {
   });
 
   it("registers the custom CanvasNode renderer for CANVAS_NODE_TYPE", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     expect(reactFlowPropsRef.current?.nodeTypes).toHaveProperty(CANVAS_NODE_TYPE);
     expect(Object.keys(reactFlowPropsRef.current?.nodeTypes ?? {})).toEqual([CANVAS_NODE_TYPE]);
   });
 
   it("registers the custom CanvasEdge renderer for CANVAS_EDGE_TYPE and defaults new edges to it with an arrow marker", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     expect(reactFlowPropsRef.current?.edgeTypes).toHaveProperty(CANVAS_EDGE_TYPE);
     expect(Object.keys(reactFlowPropsRef.current?.edgeTypes ?? {})).toEqual([CANVAS_EDGE_TYPE]);
@@ -290,7 +311,7 @@ describe("Canvas", () => {
   });
 
   it("adds a new node via onNodesChange when a shape is pointer-dragged and released over the canvas pane, converted through screenToFlowPosition", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
     screenToFlowPositionMock.mockReturnValue({ x: 42, y: 99 });
 
     const pane = document.createElement("div");
@@ -326,7 +347,7 @@ describe("Canvas", () => {
   });
 
   it("does not add a node when the shape is released outside the canvas pane", () => {
-    render(<Canvas roomId="project-123" />);
+    renderCanvas();
 
     const outsideElement = document.createElement("div");
     document.body.appendChild(outsideElement);
@@ -341,5 +362,83 @@ describe("Canvas", () => {
 
     elementFromPointSpy.mockRestore();
     outsideElement.remove();
+  });
+
+  describe("starter templates import (spec 18)", () => {
+    it("does not render the starter templates modal when isTemplatesModalOpen is false", () => {
+      renderCanvas({ isTemplatesModalOpen: false });
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("renders the starter templates modal, with one card per CANVAS_TEMPLATES entry, when isTemplatesModalOpen is true", () => {
+      renderCanvas({ isTemplatesModalOpen: true });
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: /import/i })).toHaveLength(CANVAS_TEMPLATES.length);
+    });
+
+    it("clearing then adding: clicking Import calls onDelete with the current nodes/edges and onNodesChange/onEdgesChange with one 'add' change per template item", () => {
+      const existingNode = {
+        id: "existing-node",
+        type: CANVAS_NODE_TYPE,
+        position: { x: 0, y: 0 },
+        width: 160,
+        height: 80,
+        data: { label: "Existing", color: DEFAULT_NODE_COLOR, textColor: "#EDEDED", shape: "rectangle" },
+      };
+      const existingEdge = { id: "existing-edge", type: CANVAS_EDGE_TYPE, source: "a", target: "b", data: {} };
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [existingNode],
+        edges: [existingEdge],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+
+      renderCanvas({ isTemplatesModalOpen: true });
+
+      const target = CANVAS_TEMPLATES[0];
+      const importButtons = screen.getAllByRole("button", { name: /import/i });
+      fireEvent.click(importButtons[0]);
+
+      // Removal goes through `onDelete` (see canvas.tsx's docblock — the
+      // brief's literal `{ type: "remove" }` NodeChange/EdgeChange sketch is
+      // a verified no-op in the installed `@liveblocks/react-flow` version).
+      expect(onDeleteMock).toHaveBeenCalledTimes(1);
+      expect(onDeleteMock).toHaveBeenCalledWith({ nodes: [existingNode], edges: [existingEdge] });
+
+      expect(onNodesChange).toHaveBeenCalledTimes(1);
+      const [nodeChanges] = onNodesChange.mock.calls[0] as [Array<{ type: string; item: unknown }>];
+      expect(nodeChanges).toHaveLength(target.nodes.length);
+      expect(nodeChanges.every((change) => change.type === "add")).toBe(true);
+      expect(nodeChanges.map((change) => change.item)).toEqual(target.nodes);
+
+      expect(onEdgesChange).toHaveBeenCalledTimes(1);
+      const [edgeChanges] = onEdgesChange.mock.calls[0] as [Array<{ type: string; item: unknown }>];
+      expect(edgeChanges).toHaveLength(target.edges.length);
+      expect(edgeChanges.every((change) => change.type === "add")).toBe(true);
+      expect(edgeChanges.map((change) => change.item)).toEqual(target.edges);
+    });
+
+    it("calls fitView after importing a template", () => {
+      renderCanvas({ isTemplatesModalOpen: true });
+
+      const importButtons = screen.getAllByRole("button", { name: /import/i });
+      fireEvent.click(importButtons[0]);
+
+      expect(fitViewMock).toHaveBeenCalledWith({ duration: expect.any(Number) });
+    });
+
+    it("closes the modal via setIsTemplatesModalOpen after importing a template", () => {
+      const setIsTemplatesModalOpen = vi.fn();
+      renderCanvas({ isTemplatesModalOpen: true, setIsTemplatesModalOpen });
+
+      const importButtons = screen.getAllByRole("button", { name: /import/i });
+      fireEvent.click(importButtons[0]);
+
+      expect(setIsTemplatesModalOpen).toHaveBeenCalledWith(false);
+    });
   });
 });
