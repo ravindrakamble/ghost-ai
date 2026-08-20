@@ -196,3 +196,105 @@ Commands run, all passing:
 
 - Still no live browser/manual verification available in this pipeline. The Issue 1 fix is reasoned through CSS flex-layout mechanics (documented above) rather than confirmed by rendering; recommended smoke test (in addition to the original spec's resize/edit smoke test): shrink a node down to `NODE_MIN_SIZE` (40×40) and to each SVG-shape's default (hexagon 140×100, cylinder 100×120), double-click to edit, and visually confirm the textarea stays within the shape's boundary rather than spilling out.
 - The SVG-shape branch's double-click hit target still doesn't cover the node's full vertical extent (see Issue 2 fix notes above) — a `ShapeVisual`-level change would be needed to fully close that gap, which is out of this spec's scope.
+
+## QA Report — Re-review (bugfix round, commit 1e3dc7b)
+
+**Overall verdict: PASS**
+
+This is a re-pass of the original FAIL. Both previously-reported bugs were re-verified by reading `components/editor/canvas-node.tsx` directly (not just Dev's claim), and all 12 acceptance criteria were re-checked from scratch, not just the 2 bugfixed items.
+
+### Mechanical gate
+
+Independently reproduced on branch `spec/14-node-editing`, commit `1e3dc7b`:
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit` | PASS - no errors |
+| `npx eslint .` | PASS - 0 errors, 1 pre-existing unrelated warning in `.agents/skills/clerk-tanstack-patterns/...` |
+| `npx vitest run` | PASS - 193/193 tests, 26 files |
+| `npx next build` | PASS - compiles, route manifest generated, no errors |
+
+Matches Dev Notes claims exactly.
+
+### Bugfix verification (the 2 previously-failed items)
+
+1. **Textarea overflow (Issue 1, was blocking).** Confirmed in `components/editor/canvas-node.tsx`: the `nodrag nopan` wrapper `<div>` (line 76-79) now carries `flex h-full w-full min-w-0 items-center justify-center`, and the `<textarea>` (line 80-90) now carries `box-border w-full min-w-0 max-w-full` alongside its existing classes. Reasoned through both `ShapeVisual` branches (read `components/editor/shape-visual.tsx` in full, confirmed untouched):
+   - CSS-shape branch (rectangle/pill/circle): the wrapper is a direct flex item of `ShapeVisual` own `flex h-full w-full items-center justify-center` root div. `min-w-0` on the textarea (itself a flex item of the wrapper) overrides the flex automatic-minimum-size default (which otherwise resolves to the textarea own min-content size - the browser ~20-col intrinsic width that caused the original overflow), letting the whole chain shrink to the node real box. This is the standard, well-established "flex item plus text input overflow" fix pattern, not a novel technique.
+   - SVG-shape branch (diamond/hexagon/cylinder): the wrapper sits one level deeper (inside `ShapeVisual` own `relative z-10 px-3` intermediate div, itself a flex item of the outer flex container). The wrapper is itself `display: flex`, so the textarea is still a direct flex item of something flex-managed, and `min-w-0` on the textarea still overrides its automatic minimum contribution - which propagates up correctly since the wrapper own intrinsic min-content size (relevant to the outer flex container automatic minimum sizing of the intermediate `px-3` div) is now computed from the flex-min-sized textarea rather than its old unbounded intrinsic width.
+   Verdict: the fix is real and technically sound in both rendering branches, not just claimed. No live browser session was available to visually confirm pixel-perfect containment (consistent with this pipeline standing "no interactive browser session" limitation, honestly disclosed again in the bugfix Dev Notes) - recommend the human smoke test Dev Notes already calls out (shrink to `NODE_MIN_SIZE` 40x40 and to each SVG shape default, double-click to edit, confirm no visual overflow) before this is considered fully proven, but the CSS reasoning is correct and this is not a blocking gap for a re-pass.
+
+2. **Double-click hit target (Issue 2, was minor/non-blocking).** Confirmed the same wrapper `<div>` change (`flex h-full w-full ...`) widens the hit target from the old shrink-wrapped-to-text box to the wrapper filled area. For the CSS-shape branch this now covers the node full interior (both width and height, since the wrapper `h-full` resolves against `ShapeVisual` own already-full-height root). For the SVG-shape branch the fix is partial by design and honestly documented: width is fixed (the intermediate `px-3` div now sizes to the available node width instead of shrink-wrapping to the old oversized textarea), but height is not, because that div parent uses `items-center` (not `stretch`) and `ShapeVisual` is correctly out of scope to touch. This partial-fix framing matches exactly what the original QA report classified as minor/non-blocking, and Dev notes disclose the remaining gap rather than overclaiming a full fix - acceptable as-is, not a new bug.
+
+### Acceptance criteria (re-verified from scratch, all 12)
+
+1. Selected node shows resize handles, unselected does not - PASS. `isVisible={selected}` on `<NodeResizer>` (line 108); test-covered.
+2. Dragging a resize handle updates width/height through `onNodesChange` - PASS (code/library-level verification only; no live browser session available, consistent with prior specs documented limitation). `nodeId={id}` correctly wired; no custom resize logic that could diverge from `NodeResizer` own `onNodesChange`-based dispatch.
+3. Cannot resize below a defined minimum - PASS. `NODE_MIN_SIZE = { width: 40, height: 40 }` in `lib/canvas-shapes.ts` (confirmed unchanged since the original pass via `git diff bfb4e56 1e3dc7b`), passed as `minWidth`/`minHeight`; bounds-checked in `lib/canvas-shapes.test.ts`.
+4. Resize handles subtle, token-based - PASS. `handleClassName`/`lineClassName` use `border-brand`, `bg-base`, `border-surface-border` - confirmed these map to `--accent-primary`/`--bg-base`/`--border-default` CSS custom properties in `app/globals.css` (`@theme inline` block, lines ~47-57), not raw Tailwind palette classes or hex.
+5. Double-click node center/label area opens inline editing - PASS, hit-target now meaningfully wider per the bugfix verification above (full coverage in CSS-shape branch, width-only improvement in SVG-shape branch, both acceptable per the original QA own framing).
+6. Textarea shown directly over label in the same centered position, no layout shift - PASS (was FAIL). Confirmed via the CSS reasoning above; the textarea and its wrapper now both carry width-containment (`w-full`/`max-w-full`/`box-border`) and the `min-w-0` overrides needed to actually make that containment take effect, resolving the original overflow bug.
+7. Placeholder text in same centered position at rest and while editing - PASS, unchanged from original pass. `Untitled` shown both as the at-rest `<span>` and the textarea `placeholder`, same `children` slot `ShapeVisual` centers.
+8. Typing updates label through the existing sync flow - PASS, unchanged. `canvas.tsx` `updateNodeData` (confirmed untouched via `git diff bfb4e56 1e3dc7b`) dispatches a real `onNodesChange` `"replace"` change built from `useLiveblocksFlow` live `nodes`, not a local-only mutation or non-serializable callback in `data`.
+9. Editing closes on blur or Escape - PASS, unchanged; test-covered (`onBlur`, `handleKeyDown` `Escape` branch, lines 53-58, 85).
+10. Text interactions do not trigger node drag/pan - PASS, unchanged. `nodrag nopan` classes present on the wrapper at all times (rest and editing); test-covered (`toContain` assertions still valid against the now-longer class string).
+11. Shape rendering, shape panel, drag preview, dropped-node creation unchanged from spec 13 - PASS, independently re-verified via `git diff bfb4e56 1e3dc7b -- components/editor/shape-visual.tsx components/editor/shape-panel.tsx lib/canvas-shapes.ts` (empty diff across the full spec-14 branch, including the bugfix commit) and `git diff 04f7e7e 1e3dc7b -- lib/canvas-shapes.ts` (only the additive `NODE_MIN_SIZE` constant; `createDroppedNode`/`generateNodeId`/drop-position math untouched).
+12. `npx tsc --noEmit`/`npx eslint .`/`npm run build` pass - PASS, see Mechanical gate above.
+
+### Architecture invariants
+
+No violations. No long-running AI work introduced, no metadata/blob storage boundary touched, no auth/ownership mutation surface added. `CanvasNode`/`CanvasFlow` remain client components as before.
+
+### Standards compliance
+
+- No raw Tailwind color classes (`zinc-`, `slate-`) or hex values in the diff - `grep -nE "zinc-|slate-|#[0-9a-fA-F]{3,6}"` against `canvas-node.tsx`, `canvas.tsx`, `use-update-canvas-node.ts`, `lib/canvas-shapes.ts` returned no matches.
+- No `any` usage introduced.
+- `components/ui/*` untouched.
+- `git diff bfb4e56 1e3dc7b` confirms the bugfix commit touched only `components/editor/canvas-node.tsx`, `context/progress-tracker.md`, and `context/spec-status/14-node-editing.md` - no scope creep into any other file.
+
+### Housekeeping
+
+`context/progress-tracker.md` accurately reflects the bugfix round: the "In Progress" section for spec 14 documents both the original QA-failed state and the specific classes added in the fix, matching the actual diff. Ready to be moved to "Completed" pending this PASS.
+
+### Issues
+
+None. Both previously-reported bugs are genuinely fixed, not just claimed - verified by reading the actual CSS classes and reasoning through both `ShapeVisual` render branches, not by trusting Dev Notes alone. No new issues found across all 12 acceptance criteria.
+
+One non-blocking observation carried forward from Dev own honest disclosure (not a new finding): the SVG-shape branch double-click hit target still does not cover the node full vertical extent (bounded by `ShapeVisual` `items-center`, which is correctly out of scope to change here). This was already classified as minor/non-blocking in the original QA pass and remains so - not a blocker for this re-pass.
+
+QA passed - ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Success-criteria fit
+
+Reviewed against `context/project-overview.md`'s Success Criteria and Core User Flow. This spec's primary relevance is Success Criterion 2 ("Multiple users can collaborate in the same canvas simultaneously") and Core User Flow step 7 ("Collaborators edit and refine the design"). Prior to this spec, canvas nodes created in spec 12/13 were static once dropped — correct shape and color, but no way to resize them to fit a diagram's layout or rename them beyond whatever label they were created with. That's a real product gap for a "collaborative refine" step, not a cosmetic one: a system-design canvas where nodes can't be resized or relabeled doesn't meaningfully support "refine the architecture." This spec closes that gap, and does so through the same synced `onNodesChange` path the rest of the canvas already depends on (confirmed by reading `canvas.tsx`'s `updateNodeData` and `canvas-node.tsx`'s `NodeResizer` wiring directly, not just trusting Dev/QA's claims) — so both resize and label edits are genuinely live/multiplayer, not local-only, which is the substantive part of Criterion 2 this spec touches. This is a genuine product-intent match, not just a mechanically-passing box-tick.
+
+No other Success Criteria (1, 3, 4, 5, 6) are implicated by this spec's scope, and none of them are undermined by it.
+
+### Scope verification (independently confirmed via `git diff`, not just Dev/QA claims)
+
+Ran `git diff spec/13-node-shape spec/14-node-editing` myself:
+
+- `components/editor/shape-visual.tsx`, `components/editor/shape-panel.tsx`, `types/canvas.ts` — empty diff, byte-for-byte untouched. Satisfies the spec's Scope Limits "don't change shape rendering" and "don't change the shape panel or drag preview."
+- `lib/canvas-shapes.ts` — purely additive: one new `NODE_MIN_SIZE` constant plus its doc comment. `createDroppedNode`, `generateNodeId`, and drop-position math are unchanged. Satisfies "don't change how dropped nodes are created."
+- `components/editor/canvas.tsx` — read the diff directly: `handleDragOver`/`handleDrop` (node-creation path) are byte-for-byte unchanged; the only addition is `updateNodeData` (a `useCallback` that looks up a node by id, merges a `data` patch, and dispatches a real `onNodesChange` `"replace"` change) and a `CanvasNodeUpdateContext.Provider` wrapping `<ReactFlow>`. This is exactly the "one piece of real design work" the brief called out, confined to the editing/sync mechanism — not creation or drag/drop.
+- `components/editor/canvas-node.tsx` — read in full. `NodeResizer` is a sibling of `ShapeVisual`, not nested inside it; the double-click/textarea editing lives in `ShapeVisual`'s existing `children` slot. No shape-geometry logic was added or moved into this file.
+
+All four of this spec's own Scope Limits ("don't change shape rendering," "don't change the shape panel or drag preview," "don't change how dropped nodes are created," "keep this focused on resize and label editing only") are genuinely honored, and nothing here crosses into `project-overview.md`'s Out of Scope wall (no billing, permission tiers, spec-history/versioning, storage migration, or mobile work — none of which this spec's text goes anywhere near).
+
+### Rough edges — assessed as acceptable at this stage, not blocking
+
+- **SVG-shape branch double-click hit target doesn't cover the node's full vertical extent** (bounded by `ShapeVisual`'s `items-center`, correctly left untouched per this spec's own scope limits). Both Dev and QA disclosed this honestly across both rounds rather than overclaiming a full fix, and it doesn't corrupt data or block a later spec from building on this one correctly — a future spec that touches `ShapeVisual` (e.g. connection handles) can close it then. Consistent with `ai-workflow-rules.md`'s incremental philosophy (small, verifiable increments; not every rough edge needs to block the current unit).
+- **No live browser/manual verification of drag-resize or double-click-edit** — the same disclosed limitation carried across specs 11–14 (no interactive browser session available in this pipeline). The Issue 1 (textarea overflow) fix was verified by Dev and independently re-verified by QA through CSS flex-layout reasoning across both `ShapeVisual` render branches, not by rendering it — sound reasoning, but still short of a visual confirmation. Recommending the same human smoke test Dev/QA both already call out (resize each of the 8 handles down to `NODE_MIN_SIZE` and to each SVG shape's default; double-click to edit and confirm no textarea overflow; confirm both are visible live in a second browser tab) before this is considered fully proven in a real browser — not a blocker for this recommendation, consistent with how specs 11–13 were also passed with this same caveat.
+
+### `progress-tracker.md` accuracy
+
+At the time of this review, `progress-tracker.md` still listed spec 14 under "In Progress" reflecting the state after the QA bugfix round, before the QA re-review pass (which happened in this same branch's working tree, uncommitted until now). That was accurate for its moment but is now stale relative to the QA PASS captured above. As the agent responsible for this file's "Completed" transitions, I'm moving spec 14 to "Completed" with a summary pulled from Dev Notes (both rounds) and QA's final re-review verdict, and advancing "Current Phase"/"Next Up" to spec 15 (Nodes Color Toolbar) — see the corresponding tracker update accompanying this review.
+
+### Escalation
+
+Not needed. QA's own bugfix loop (round 1 FAIL → Dev fix → round 2 PASS) already resolved the one product-relevant question (textarea containment/layout-shift, acceptance criterion 6) before this reached me; nothing here required sending back to the Analyst. This is a round 1 Product Owner review with no escalation.
+
+This PASS is a recommendation that this spec is ready for the human's final review — not a statement that Node Editing is live or approved for production.
