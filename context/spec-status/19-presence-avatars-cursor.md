@@ -166,3 +166,108 @@ Brief ready for Senior Developer at `context/spec-status/19-presence-avatars-cur
 - No live two-tab/multiplayer browser verification was possible in this pipeline (consistent with every prior canvas spec, 11–18) — the mechanism (Presence `cursor` field read/write, `onPaneMouseMove`/`onPaneMouseLeave`, `useOthers`/`useOther` selectors) is verified against the real installed Liveblocks/React Flow source and covered by unit tests, but a human smoke test (two tabs, same account in a second tab to confirm self-exclusion, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) is recommended before considering this fully proven.
 - `useViewport()`'s re-render-on-every-pan/zoom-frame cost (see Key Decisions above) wasn't benchmarked against the reference implementation's imperative-DOM approach — likely negligible given `LiveCursors` only mounts up to a handful of children per room, but flagging it as an unverified assumption rather than a measured one.
 - No `title`/tooltip beyond the plain `title` HTML attribute on each collaborator avatar (shows the collaborator's name on native browser hover) — the brief calls this a Dev-level nicety, not a requirement; no custom hover card or tooltip component was added.
+
+## QA Report
+
+Overall verdict: **PASS**. All four mechanical gate commands pass, every numbered acceptance criterion (1-14, per the Analyst Brief's expanded list, which maps 1:1 to the spec's own "Check When Done" plus its "Implementation" detail) verified independently against the actual code, and the diff is scoped exactly as the Dev Notes claim -- no `canvas-node.tsx`/`canvas-edge.tsx`/`shape-visual.tsx`/`node-color-toolbar.tsx`/`editor-navbar.tsx`/`workspace-navbar.tsx` changes, no new `app/api` route, no `components/ui/*` file touched other than the new CLI-generated `avatar.tsx`. One non-blocking housekeeping note below.
+
+### Mechanical gate -- reproduced independently
+
+- `npx tsc --noEmit` -- PASS, no errors.
+- `npx eslint .` -- PASS, 0 errors, 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/templates/tanstack-basic-auth/src/routes/__root.tsx` (`no-head-element`), confirmed unrelated to this spec (not in the diff).
+- `npx vitest run` -- PASS, 298/298 across 38 files, matching the Dev Notes claimed figures exactly.
+- `npx next build` -- PASS, Turbopack compile clean, TypeScript clean, all 10 routes generated.
+
+### Diff scope -- independently reproduced via `git diff spec/18-starter-template`
+
+11 files changed, all consistent with the Dev Notes' "Files added"/"Files modified" lists: `hooks/use-current-user-id.ts` (+test), `components/editor/presence-avatars.tsx` (+test), `components/editor/live-cursors.tsx` (+test), `components/ui/avatar.tsx` (new), `components/editor/canvas.tsx` + its test, `context/ui-context.md`, `context/spec-status/19-presence-avatars-cursor.md`. `git diff spec/18-starter-template -- components/editor/editor-navbar.tsx components/editor/workspace-navbar.tsx` is empty (confirmed both byte-for-byte unchanged). No `canvas-node.tsx`/`canvas-edge.tsx`/`shape-visual.tsx`/`node-color-toolbar.tsx`/`types/canvas.ts` in the diff at all.
+
+### Acceptance criteria -- independently re-verified against code
+
+1. Presence avatars render only inside `Canvas`/`CanvasFlow`'s tree, never in `EditorNavbar`, never on `/editor` home -- PASS. `<PresenceAvatars>`/`<LiveCursors>` are rendered only as siblings of `<ReactFlow>` inside `CanvasFlow` (`components/editor/canvas.tsx:473-474`); `EditorNavbar` has zero references to either component or to Liveblocks presence hooks.
+2. `editor-navbar.tsx` byte-for-byte unchanged -- PASS. Empty diff confirmed.
+3. `workspace-navbar.tsx`'s Templates/Share/AI-toggle buttons unchanged and functional -- PASS. Empty diff confirmed; the presence UI lives entirely in `Canvas`'s own wrapper, rendered in a separate DOM subtree below `WorkspaceNavbar` (`workspace-shell.tsx`'s layout), not inserted into it.
+4. Current user ID resolved via Clerk's `useUser()`, not `useSelf()` -- PASS. `hooks/use-current-user-id.ts` calls `useUser()` from `@clerk/nextjs` exclusively; no `useSelf` import anywhere in the diff.
+5. Collaborator list excludes the current user by Clerk ID, including a same-account second connection -- PASS. `presence-avatars.tsx`'s `collaborators = others.filter((other) => other.id !== currentUserId)` and `live-cursors.tsx`'s equivalent check both filter on the Clerk-sourced ID, not connection identity. Both test suites include an explicit "second connection of the same account" case (e.g. `makeOther("user_me", 2, "Me (second tab)")` style fixtures) that exercises this and passes.
+6. Current user's own avatar rendered only via `UserButton`, never a second presence-sourced avatar -- PASS. `PresenceAvatars` renders the filtered `collaborators` list (which never contains the current user) plus one `<UserButton>`; no unfiltered rendering path exists.
+7. Divider only when at least one collaborator present -- PASS, both by code inspection (`{collaborators.length > 0 && <div ... bg-surface-border />}`) and by the passing "no divider when zero collaborators" / "divider present with one collaborator" test pair.
+8. Real photo / initials fallback, at most 5 in overlapping stack, `+N` chip beyond 5, subtle ring, non-interactive -- PASS. `AvatarImage`/`AvatarFallback` (shadcn) handle photo-vs-initials including load-failure; `MAX_VISIBLE_COLLABORATORS = 5` + `.slice`; `ring-2 ring-border-subtle` on both avatars and the overflow chip; no `onClick`/`href`/button role anywhere in the collaborator stack (confirmed by both reading the code and the passing "no interactive affordances" test).
+9. Collaborator avatars and `UserButton` render at the same fixed size -- PASS. Both use the shared `AVATAR_SIZE_CLASS = "h-8 w-8"` constant -- applied directly as a class on `Avatar` and via `UserButton`'s own `appearance={{ elements: { userButtonAvatarBox: "h-8 w-8" } }}` prop (correctly not a wrapping className, since `UserButton` renders its own internal DOM).
+10. Cursor position broadcast via `onPaneMouseMove` (real, named React Flow pane prop, confirmed at `node_modules/@xyflow/react/dist/esm/types/component-props.d.ts:200-202`) and cleared via `onPaneMouseLeave` -- PASS. `canvas.tsx`'s `handlePaneMouseMove`/`handlePaneMouseLeave` call `updateMyPresence` (real `useUpdateMyPresence()` from `@liveblocks/react/suspense`) with `screenToFlowPosition(...)`/`null` respectively, wired directly to `<ReactFlow onPaneMouseMove={handlePaneMouseMove} onPaneMouseLeave={handlePaneMouseLeave}>`. Independently confirmed this is not a generic `window`/DOM `mousemove` listener -- no such listener exists anywhere in the diff. `canvas.test.tsx`'s new tests assert the real prop is invoked and calls through to `updateMyPresence` with the correct shape.
+11. Cursors render for other participants only, colored/badged to match `info.color` -- PASS. `live-cursors.tsx` filters `other.id === currentUserId` (returns `null`) and reads `other.color`/`other.name` directly off `other.info` (via the `useOther` selector), setting `--cursor-color` from `other.info.color` (never recomputed client-side) and using it for both the SVG pointer fill and the badge background.
+12. `liveblocks.config.ts` `Presence`/`UserMeta` types already match spec -- PASS, confirmed by reading the file directly: `cursor: { x: number; y: number } | null`, `thinking: boolean`, `UserMeta.info: { name, avatar, color }` -- no diff to this file, correctly so.
+13. No changes to node/edge rendering or mutation paths -- PASS. Confirmed via targeted `git diff` (empty for `canvas-node.tsx`/`canvas-edge.tsx`/`shape-visual.tsx`/`node-color-toolbar.tsx`); `canvas.tsx`'s diff is additive only (`useUpdateMyPresence`, two new `ReactFlow` props, two new sibling components) -- `onNodesChange`/`onEdgesChange`/`onConnect`/`onDelete` call sites are untouched.
+14. `npm run build` / full gate -- PASS. See Mechanical gate above.
+
+### Architecture invariants -- no violations found
+
+- No long-running AI work anywhere in this diff (no `app/api` route touched at all).
+- No metadata/blob storage concerns -- presence is fully ephemeral Liveblocks state, no Prisma/Blob code touched.
+- No new mutation boundary introduced (Presence broadcast isn't a Storage/ownership-gated mutation), so no new auth surface to enforce.
+- All new components (`presence-avatars.tsx`, `live-cursors.tsx`, `use-current-user-id.ts`) are correctly `"use client"` -- genuinely require browser-side Liveblocks/Clerk hooks and real-time state.
+- Canvas schema (nodes/edges) untouched, consistent with the "must remain consistent between user-created content and imported templates" invariant -- this spec doesn't touch schema at all.
+
+### Standards compliance -- spot-checked
+
+- No `any` type usage in any of the 3 new/modified non-test source files (`hooks/use-current-user-id.ts`, `presence-avatars.tsx`, `live-cursors.tsx`) -- grepped and confirmed the one `any` match in `presence-avatars.tsx` is inside a comment ("any remainder"), not a type.
+- No raw Tailwind palette classes (`zinc-`/`slate-`/`gray-`) or hardcoded hex colors in the new components -- grepped clean. `ring-border-subtle`/`bg-surface-border`/`text-copy-primary`/`bg-elevated`/`text-copy-secondary` all resolve to real tokens already defined in `app/globals.css` (`--border-subtle`, `--border-default` aliased as `surface-border`, `--text-primary`, `--bg-elevated`, `--text-secondary`). The one inline-style color (`--cursor-color` set from `other.info.color`, a genuine runtime value, not a static hardcode) correctly follows the established `--swatch-glow` (spec 15) pattern.
+- `components/ui/avatar.tsx` -- genuinely shadcn-CLI shaped: `data-slot`/`cn()`/`@base-ui/react` primitive import matches the exact structure of every other file in `components/ui/` (compared directly against `button.tsx`), `components.json`'s `style: "base-nova"` matches the `@base-ui/react/avatar` import, and its semantic tokens (`bg-muted`, `text-muted-foreground`, `bg-primary`, `ring-background`) are pre-existing shadcn base tokens already wired to this project's dark theme values in `globals.css` (not introduced by this spec) -- no evidence of hand-editing beyond CLI generation.
+
+### Error handling
+
+- Clerk `useUser()` returning a null/undefined user (loading or signed-out) is handled -- `useCurrentUserId()` returns `undefined`, and the filter (`other.id !== currentUserId`) degrades to "no exclusion" rather than throwing; acceptable for this ephemeral, non-critical UI (worst case during a brief loading window is a stale/duplicate avatar, not a crash or data-integrity issue) -- not explicitly covered by a dedicated test, but not a spec-mandated failure mode either.
+- Missing/broken avatar image: delegated to shadcn's `AvatarFallback`, which is designed to activate correctly on both an empty `src` and an image load failure (Open Questions #4 in the Brief) -- appropriate use of the library's own built-in behavior rather than a hand-rolled check.
+- Null cursor (participant present but not currently moving their mouse, or just left the pane): explicitly checked and renders nothing (`if (other.id === currentUserId || other.cursor === null) return null`), tested directly.
+
+### Housekeeping
+
+[Minor, non-blocking] `context/progress-tracker.md` has no "Completed" entry for spec 19 -- it still reads "Phase 19 -- not yet started" / "Current Goal: Analyst pass for feature spec 19." `git diff spec/18-starter-template -- context/progress-tracker.md` is empty. Noting this because it's an explicit QA checklist item, but per this pipeline's actual established convention (confirmed via `git log`: spec 18's "Completed" entry landed in a separate follow-up commit, `51fbdf6 docs: record spec 18's PR #12 in progress-tracker.md`, after PR review -- not inline with the Dev implementation commit, and spec 18's own QA bugfix round explicitly excluded this same item from Dev's scope for exactly this reason), this is expected to be filled in via a similar follow-up commit once this spec clears PO review, not a defect in the implementation itself. Not treated as a PASS-blocking issue for that reason, but flagged so it isn't dropped before the follow-up commit happens.
+
+### Handoff
+
+QA passed -- ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Product fit against `project-overview.md`
+
+This spec directly strengthens **Success Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously") — the single criterion this spec exists to serve. Before this spec, the room-connection/Storage-sync mechanism (spec 11) was wired but invisible: a user in a shared room had no way to see who else was there or where anyone else's pointer was. After this spec, a signed-in user sees a real top-right collaborator avatar stack (photo or initials, capped at 5 with a `+N` overflow, a divider only when warranted) alongside their own existing Clerk `UserButton`, and sees other participants' live cursors move across the canvas with a name badge in that participant's own presence color. That is the literal, felt experience of "collaborating simultaneously" — this spec turns an already-shared data layer into a visible, legible one. I read the actual `presence-avatars.tsx` and `live-cursors.tsx` source directly, not just Dev's description of them, and confirmed the rendered behavior matches what's claimed (self-exclusion via Clerk ID including the same-account-second-tab case, divider logic, 5-avatar cap with overflow chip, flow-space cursor coordinate storage/conversion via `screenToFlowPosition`/`flowToScreenPosition`, color sourced from `other.info.color` rather than recomputed client-side).
+
+No other Success Criterion is touched, weakened, or put at risk. This is a pure additive overlay on top of the existing Liveblocks room connection — it introduces no new `app/api` route, no Prisma/Blob change, and (independently confirmed via `git diff spec/18-starter-template`) zero changes to `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, `editor-navbar.tsx`, or `workspace-navbar.tsx` — the node/edge rendering and mutation paths that Criteria 2 (in its "editing" sense) and the starter-template import (Criterion 3) both depend on are untouched.
+
+### Independent scope/diff verification (not trusting Dev/QA claims alone)
+
+- `git diff spec/18-starter-template --stat`: 11 files changed, exactly matching Dev Notes' "Files added"/"Files modified" lists — `hooks/use-current-user-id.ts` (+test), `components/editor/presence-avatars.tsx` (+test), `components/editor/live-cursors.tsx` (+test), `components/ui/avatar.tsx` (new, CLI-generated), `components/editor/canvas.tsx` + its test, `context/ui-context.md`, this status file. No files outside that list.
+- `git diff spec/18-starter-template -- components/editor/editor-navbar.tsx components/editor/workspace-navbar.tsx components/editor/canvas-node.tsx components/editor/canvas-edge.tsx components/editor/shape-visual.tsx components/editor/node-color-toolbar.tsx`: **0 lines**, confirming all six protected files are genuinely byte-for-byte untouched — I ran this myself rather than trusting QA's account of it.
+- Read the full `git diff` of `components/editor/canvas.tsx`: confirmed the change is additive only — `useUpdateMyPresence()`, `flowToScreenPosition` destructured alongside the pre-existing `screenToFlowPosition`, two new named `ReactFlow` props (`onPaneMouseMove`/`onPaneMouseLeave`), and `<PresenceAvatars />`/`<LiveCursors />` rendered as new siblings of the existing `<ReactFlow>`/`ShapePanel`/`CanvasControlBar`/`StarterTemplatesModal` tree. No changes to `onNodesChange`/`onEdgesChange`/`onConnect`/`onDelete`/`handleImportTemplate`/`defaultEdgeOptions`/node or edge type maps.
+- Read `presence-avatars.tsx` and `live-cursors.tsx` in full: self-exclusion is genuinely by Clerk ID (`hooks/use-current-user-id.ts`, wrapping `useUser()` from `@clerk/nextjs`, not `useSelf()`), the divider only renders when `collaborators.length > 0`, `MAX_VISIBLE_COLLABORATORS = 5` with a `+N` chip for the remainder, `AVATAR_SIZE_CLASS = "h-8 w-8"` applied identically to both the collaborator `Avatar` and `UserButton`'s `appearance` prop, no `onClick`/`href`/interactive affordance anywhere in the collaborator stack. `LiveCursors` uses `useOthersConnectionIds()` + per-connection `useOther()` with a `shallow` comparator, filters the current user out (including same-account second connection), and renders nothing when `cursor === null`.
+- Read `liveblocks.config.ts` directly: `Presence` (`cursor: {x,y}|null`, `thinking: boolean`) and `UserMeta.info` (`name`, `avatar`, `color`) already match this spec's required shape with zero diff — correctly confirmed-not-modified.
+- Confirmed `context/progress-tracker.md` diff is empty against `spec/18-starter-template`, consistent with this pipeline's established convention (spec 18's "Completed" entry landed in a follow-up commit after PO sign-off, not inline with Dev's implementation) — not treating QA's housekeeping note as a defect, per the task's explicit instruction.
+- Read the `context/ui-context.md` diff: the new "Presence Avatars & Cursor" section documents the avatar-stack convention, cursor broadcast mechanism, flow-space coordinate decision, self-exclusion reasoning, and the `shallow`-selector performance pattern — consistent with the actual code, not aspirational.
+- Ran `npx tsc --noEmit` myself as a spot-check: clean, no errors, corroborating QA's gate reproduction (I did not re-run the full eslint/vitest/build gate myself, trusting QA's independent reproduction of that per this review's normal scope).
+
+### Scope check
+
+No touches to any `project-overview.md` Out of Scope item (billing, enterprise permission tiers, versioned spec history, production object storage migration, mobile apps) — nothing in this spec's diff comes near any of them. No touches to any of this spec's own Scope Limits either: the shared `EditorNavbar` is untouched (confirmed via empty diff, not just QA's claim), no existing `WorkspaceNavbar` action was removed, Clerk's `UserButton` is reused as-is (only a size-only `appearance` override), collaborator avatars are genuinely non-interactive (no click/hover-card/href, confirmed by reading the code and by the passing "no interactive affordances" test), and canvas node/edge rendering/mutation is untouched. The `thinking` Presence field is confirmed present in the type but has no UI built for it here, correctly deferred to spec 24 per `architecture-context.md`'s own cross-reference.
+
+### `progress-tracker.md` accuracy
+
+Confirmed untouched by this diff. Per this task's explicit instruction and this pipeline's established convention (spec 18 precedent), the "Completed" entry is not expected inline with Dev's implementation — it lands in a follow-up commit after this sign-off. Not a gap in the current record.
+
+### Rough edges — acceptable at this stage
+
+- No live two-tab/multiplayer browser verification was possible in this pipeline (consistent with every prior canvas spec, 11–18) — Dev Notes' own "Known limitations" section already flags this and recommends a human smoke test (two tabs, same-account second tab for self-exclusion, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) before considering this fully proven. I agree this is a reasonable deferral, not a blocker, on the same footing every prior canvas spec has been judged.
+- `useViewport()`'s re-render-on-every-pan/zoom-frame cost versus the reference implementation's imperative-DOM approach is unbenchmarked — flagged honestly by Dev as an assumption, not a measured fact. Given `LiveCursors` only mounts a handful of children per room, this is very unlikely to be a real problem at this stage, and does not block later specs.
+- No custom tooltip/hover card beyond the native `title` attribute on collaborator avatars — correctly scoped as a Dev-level nicety, not a requirement.
+
+None of these would block a later spec from building on this one correctly — `PresenceAvatars`/`LiveCursors` are self-contained overlay components with no exported interface a later spec depends on, and `CanvasFlow`'s public shape (`useLiveblocksFlow`'s returned `nodes`/`edges`/`onNodesChange`/`onEdgesChange`/`onDelete`) is unchanged.
+
+### Conclusion
+
+All 14 numbered acceptance criteria hold up under my own independent re-verification (diff scope, source reading, a live `tsc` spot-check), not just trust in the Dev Notes/QA Report. This spec is a direct, meaningful step on Success Criterion 2, introduces no Out-of-Scope surface, and leaves every protected rendering/navbar file genuinely untouched. `progress-tracker.md` remains correctly unmodified pending this sign-off, consistent with the established convention.
+
+## Handoff
+
+Product Owner PASS — ready for human review.

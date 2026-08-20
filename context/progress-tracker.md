@@ -3,12 +3,27 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 19: Presence Avatars & Cursor — not yet started.
+- Phase 20: AI Sidebar Shell — not yet started.
 
 ## Current Goal
-- Analyst pass for feature spec 19 (Presence Avatars & Cursor) at `context/feature-specs/19-presence-avatars-cursor.md`.
+- Analyst pass for feature spec 20 (AI Sidebar Shell) at `context/feature-specs/20-ai-sidebar-shell.md`.
 
 ## Completed
+
+- Feature spec 19: Presence Avatars & Cursor
+  - `hooks/use-current-user-id.ts` (new) — `useCurrentUserId()` wrapping Clerk's `useUser()` (first use of this hook in the codebase), the single shared source both new presence components filter on. Returns `undefined` while loading/signed-out — the self-exclusion filter degrades to "no exclusion" rather than throwing.
+  - `components/editor/presence-avatars.tsx` (new) — `PresenceAvatars`: top-right collaborator avatar stack (shadcn `Avatar`/`AvatarImage`/`AvatarFallback`, photo-or-initials, `useOthers()` with a `shallow` selector) filtered by Clerk ID (not Liveblocks' own others/self split — explicitly also excludes a second tab of the same account) + the existing Clerk `UserButton` for the current user, joined by a `bg-surface-border` divider shown only when at least one collaborator exists. Capped at 5 visible (`MAX_VISIBLE_COLLABORATORS`) with a `+N` overflow chip, `ring-border-subtle` ring, shared `AVATAR_SIZE_CLASS = "h-8 w-8"` applied to both the collaborator avatars and `UserButton` (via its own `appearance` prop, since `UserButton` renders its own internal DOM a wrapping className can't reach). Fully non-interactive (no `onClick`/`href`).
+  - `components/editor/live-cursors.tsx` (new) — `LiveCursors`: renders other participants' cursors only (same Clerk-ID self-exclusion, including same-account second tab), via `useOthersConnectionIds()` + per-connection `useOther(..., shallow)` so one participant's cursor move doesn't re-render every other cursor. Colored pointer + name badge sourced directly from `other.info.color`/`other.info.name` (never recomputed client-side — already resolved server-side by spec 10's `getCursorColor` at Liveblocks-auth time) via a `--cursor-color` CSS custom property, same pattern as spec 15's `--swatch-glow`. `aria-hidden`, renders nothing for a `null` cursor.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` gains `useUpdateMyPresence()` wired to React Flow's real, named `onPaneMouseMove`/`onPaneMouseLeave` props (not a generic DOM listener — verified against `@xyflow/react`'s own prop types), broadcasting/clearing the room's Presence `cursor` field in **flow-space coordinates** (via the existing `screenToFlowPosition`) so a cursor's rendered position stays correct under each individual viewer's own pan/zoom, converted back on render via `flowToScreenPosition` (threaded down to `LiveCursors` as a prop, matching `CanvasControlBar`/`ShapePanel`'s existing "parent already has the mechanism, pass it down" convention). Renders `<PresenceAvatars />`/`<LiveCursors />` as further siblings of `<ReactFlow>`/`ShapePanel`/`CanvasControlBar`/`StarterTemplatesModal` — no new context, no node/edge/mutation-path changes.
+  - `components/ui/avatar.tsx` (new, via `npx shadcn add avatar`, not hand-written) — solves photo-vs-initials fallback (including image *load failure*, not just an empty `avatar` string) for free via shadcn's built-in `AvatarFallback` behavior.
+  - `context/ui-context.md` (modified) — new "Presence Avatars & Cursor" section (avatar-stack convention, `onPaneMouseMove`/`onPaneMouseLeave` broadcast mechanism, flow-space coordinate-storage decision, Clerk-ID self-exclusion reasoning, `shallow`-selector performance pattern).
+  - Deliberate, flagged-non-required embellishment: each `LiveCursor` also calls `useViewport()` purely for pan/zoom reactivity, so another participant's rendered cursor doesn't go stale during the *local* user's own pan/zoom between that participant's presence updates — a full-re-render alternative to `@liveblocks/react-flow`'s own imperative-DOM approach, judged reasonable at this scope and unbenchmarked (flagged, not measured).
+  - Tests: `hooks/use-current-user-id.test.ts`, `components/editor/presence-avatars.test.tsx`, `components/editor/live-cursors.test.tsx` (all new), `components/editor/canvas.test.tsx` (extended — new `describe("presence avatars and cursor (spec 19)")` block plus an extended mock surface for `useUpdateMyPresence`/`useOthers`/`useOthersConnectionIds`/`useOther`/`shallow`/Clerk's `useUser`/`UserButton`/`flowToScreenPosition`/`useViewport`). 298/298 tests passing across 38 files (up from 280/35 at the end of spec 18).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 14 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced. Confirmed via `git diff spec/18-starter-template` that `editor-navbar.tsx`, `workspace-navbar.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, and `node-color-toolbar.tsx` are byte-for-byte untouched, and that `liveblocks.config.ts` genuinely needed no changes (already matched this spec's required `Presence`/`UserMeta` shape from spec 10).
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is the direct mechanism behind Success Criterion 2 ("multiple users can collaborate in the same canvas simultaneously") going from an invisible, already-wired room connection (spec 11) to a visible, legible one — collaborator avatars and live cursors. Independently re-verified via `git diff spec/18-starter-template` (this branch's real parent) — not just trusting Dev/QA claims — that all six protected rendering/navbar files are genuinely untouched, read `presence-avatars.tsx`/`live-cursors.tsx`/`canvas.tsx`'s diff/`liveblocks.config.ts` directly rather than trusting their account, and ran `npx tsc --noEmit` itself as a spot-check. No touches to any `project-overview.md` Out of Scope item or this spec's own Scope Limits. No live browser/multiplayer verification possible in this pipeline (consistent with specs 11–18) — recommended human smoke test (two tabs, a same-account second tab to confirm self-exclusion, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) before considering this fully proven, not a blocker for this recommendation.
+  - **PR not yet opened** — human's call on branch/base (this branch stacks on `spec/18-starter-template`, which is itself unmerged). See "Next Up".
+  - Full pipeline trail in `context/spec-status/19-presence-avatars-cursor.md`.
 
 - Feature spec 18: Starter Template
   - `components/editor/starter-templates.ts` (new) — `CanvasTemplate` type (`{ id, name, description, nodes: CanvasNode[], edges: CanvasEdge[] }`), `templateNode()`/`templateEdge()` authoring helpers, and `CANVAS_TEMPLATES` (3 templates — microservices, cicd-pipeline, event-driven-system, 6–7 nodes each) — static human-readable IDs (not `generateNodeId()`), every color/textColor pair a real `NODE_COLORS` entry, every shape/size a real `CANVAS_SHAPES`/`SHAPE_DEFAULT_SIZES` entry, shapes chosen for documented "character" (hexagon for gateways/event buses, cylinder for databases/registries, diamond for a CI/CD quality gate, pill for services).
@@ -233,11 +248,13 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- Analyst pass for feature spec 19 (Presence Avatars & Cursor) at `context/feature-specs/19-presence-avatars-cursor.md`.
+- Analyst pass for feature spec 20 (AI Sidebar Shell) at `context/feature-specs/20-ai-sidebar-shell.md`.
+- Human review/merge of spec 19's PR (once opened) and the still-open PRs for specs 12–18.
 
 ## Open Questions
 
 - Spec 18's no-confirmation-dialog posture on the destructive template-import clear — Product Owner accepted it for this stage but flagged that Liveblocks undo doesn't fully cover the multiplayer case (a second collaborator's own just-made edits could be lost without their own prompt). Recommended as a candidate follow-up (lightweight confirmation, or gating it when other collaborators are present), not a blocker for spec 19+.
+- Spec 19's live two-tab/multiplayer behavior (self-exclusion with a real second tab, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) has not been verified in a real browser — recommended as a human smoke test before spec 20+ builds further on this presence mechanism, not a blocker.
 
 ## Deferred — Production Hardening (after spec 29)
 
