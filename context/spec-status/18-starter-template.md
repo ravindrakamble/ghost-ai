@@ -240,3 +240,265 @@ Net effect: `fitView()`'s own queuing mechanism is self-correcting regardless of
 - The 3-separate-mutation removal/add sequence (see "Deviation from the brief's exact code sketch" above) means a collaborator watching the canvas live during another user's import could, in principle, see a brief empty-canvas frame between the `onDelete` commit and the `onNodesChange`/`onEdgesChange` "add" commits, rather than one perfectly atomic swap. Flagged as a known, disclosed limitation of this library version rather than silently accepted — not fixable without a hand-rolled Storage mutation outside the `useLiveblocksFlow` API, which acceptance criterion 7 rules out. No live two-tab verification was possible in this pipeline (consistent with every prior canvas spec); recommend a human smoke test importing a template while a second tab is open on the same room.
 - Per the brief's Open Questions #3 (already accepted there as out of scope for this spec): two collaborators importing different templates at nearly the same moment is a genuine multiplayer race not addressed here.
 - No on-canvas-creation auto-import entry point (Open Questions #7 / Out-of-scope callouts) — only the navbar-button path was built, per the brief's own scope.
+
+## QA Report
+
+Overall verdict: FAIL -- see Issue 1 (a genuine, verifiably fixable bug in the clear-then-add atomicity the brief explicitly required) and Issue 2 (housekeeping). All 11 numbered acceptance criteria pass on their literal text; the FAIL is driven by a deeper look at the Concrete Deliverables section explicit "no transient empty-canvas frame" requirement (which this QA pass was specifically asked to re-verify given the mechanism deviation) plus a real process gap.
+
+### Mechanical gate -- reproduced independently
+
+- `npx tsc --noEmit` -- PASS, no errors.
+- `npx eslint .` -- PASS, 0 errors, 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx`, confirmed unrelated to this spec.
+- `npx vitest run --no-file-parallelism` -- PASS, 279/279 across 35 files (85.8s), matching the Dev Notes claimed figures exactly.
+- `npx vitest run` (default parallelism, reproduced twice) -- flaky as described in the Dev Notes: run 1 passed clean (279/279); run 2 failed 4 files on timeout (`node-color-toolbar.test.tsx`, `workspace-navbar.test.tsx`, `canvas-control-bar.test.tsx`, `shape-panel.test.tsx`), run 3 failed 5 files including `workspace-navbar.test.tsx` again. Correction to the Dev Notes: the claim that none of the timing-out files are files this spec touches does not hold up under repeated runs -- `workspace-navbar.test.tsx`, a new file added by this spec, timed out in both of the failing repro runs here. That said, the underlying diagnosis is correct and independently confirmed: the specific set of failing files is different and effectively random each run, `--no-file-parallelism` gives a clean deterministic 279/279 every time, and this exact class of environment/jsdom-setup-cost timeout flakiness is already documented for prior, unrelated specs (see `context/spec-status/13-node-shape.md` QA section, same root cause). Not a regression introduced by this spec -- informational correction only, no Dev action required.
+- `npx next build` -- PASS, Turbopack, all routes compiled.
+
+### Two flagged claims -- independently verified against real installed source, not trusted
+
+1. `{ type: "remove" }` is a no-op in `applyNodeChanges`/`applyEdgeChanges`; `onDelete` is the real removal channel -- CONFIRMED. Read `node_modules/@liveblocks/react-flow/dist/lib/flow.js` lines 9-109 (`applyNodeChanges`/`applyEdgeChanges`, both `case "remove": break`) and lines 184-200 (the real `onDelete` `useMutation` implementation, `nodesMap.delete`/`edgesMap.delete` against Storage). The excerpt in the Dev Notes matches the real source verbatim. `OnDelete<N, E>` signature (`{ nodes: N[]; edges: E[] }`) is correctly typed via the library own exported type (`node_modules/@liveblocks/react-flow/dist/index.d.ts` line 123) -- confirmed no `any` cast needed, `tsc --noEmit` is clean.
+
+2. `fitView()` can be called synchronously with no rAF/effect/microtask deferral, because of internal `fitViewQueued`/`StoreUpdater` deferral -- CONFIRMED. Read `node_modules/@xyflow/react/dist/esm/index.js`: `fitView` (line ~1208) only does `store.setState({ fitViewQueued: true, ... })` and returns a promise; `setNodes` (line ~3396) checks `if (fitViewQueued && nodesInitialized) resolveFitView()`; `StoreUpdater` (line ~271) is a `useEffect` that re-runs `setNodes(props.nodes)` on every `nodes` prop reference change. Also read `node_modules/@xyflow/system/dist/esm/index.js` `adoptUserNodes` (line ~1624): `nodesInitialized` requires every node measured width/height, correctly undefined on the first pass for newly-added nodes, so `fitViewQueued` stays true until a later `setNodes` call reports the template new nodes as genuinely measured. The conclusion in the Dev Notes is accurate.
+
+### Acceptance criteria -- independently re-verified against code
+
+1. `starter-templates.ts` exports `CanvasTemplate` plus `CANVAS_TEMPLATES` (at least 3, each with id/name/description/nodes/edges) -- PASS. 3 templates (microservices, cicd-pipeline, event-driven-system), 6-7 nodes each.
+2. Every node shape/color pair is a real `NodeShape`/`NODE_COLORS` entry -- PASS. Cross-checked the `const [DEFAULT, BLUE, PURPLE, ORANGE, , , GREEN, TEAL] = NODE_COLORS` destructure against `types/canvas.ts` actual array order (Default, Blue, Purple, Orange, Red, Pink, Green, Teal at indices 0-7) -- the two skipped slots (4, 5 = Red, Pink) and the resulting GREEN/TEAL bindings are correct. All shapes used (circle/hexagon/pill/cylinder/rectangle/diamond) are real `CANVAS_SHAPES` members with real `SHAPE_DEFAULT_SIZES` entries.
+3. Modal opens as dialog, cards in scrollable grid with name/description/preview/Import -- PASS. `starter-templates-modal.tsx` verified directly.
+4. Preview: fixed viewport, bounds from node positions (not hardcoded), edges as straight lines between centers, nodes via real shape/color, no React Flow instance -- PASS. `getTemplateBounds` computes from node position/width/height; no `@xyflow/react` import anywhere in `starter-template-preview.tsx` (grepped, confirmed absent); edges render as plain `<line>` between `nodeCenter()` results; nodes render via `<rect>`/`<circle>`/transformed `<g><polygon>/<path>`.
+5. Import click calls `onImport(template)` then closes -- PASS. Verified in `starter-templates-modal.tsx` and its ordering test.
+6. Navbar button opens modal -- PASS. `workspace-navbar.tsx` LayoutTemplate-icon button calls `onOpenTemplates`, which flows to `workspace-shell.tsx` `setIsTemplatesModalOpen(true)`, then to `Canvas`/`CanvasFlow` props, then to `StarterTemplatesModal` `open` prop.
+7. Clear plus add both go through the existing `onNodesChange`/`onEdgesChange` change-dispatch mechanism -- PASS on substance (removal correctly uses `onDelete`, the verified-correct half of the same `useLiveblocksFlow` API, not a local-only path; adds use the standard `{ type: "add", item }` path). See Issue 1 below for a related atomicity gap that the design intent behind this criterion, from the Concrete Deliverables text, does not fully satisfy.
+8. Only the template node/edge IDs remain, no leftovers -- PASS. Verified via `canvas.test.tsx` dispatch-shape test and the `onDelete({ nodes, edges })` then `onNodesChange`(add-only) then `onEdgesChange`(add-only) sequence.
+9. `fitView` called after import, frames new bounds -- PASS. See claim 2 verification above; `fitView({ duration: 200 })` genuinely lands on the new diagram regardless of exact call timing.
+10. No changes to `canvas-node.tsx`/`canvas-edge.tsx`/`shape-visual.tsx`/`node-color-toolbar.tsx` -- PASS. `git diff 7500eed -- components/editor/canvas-node.tsx components/editor/canvas-edge.tsx components/editor/shape-visual.tsx components/editor/node-color-toolbar.tsx` independently reproduced as empty (0 lines).
+11. `npm run build` plus full gate -- PASS. See Mechanical gate above.
+
+### Issues
+
+[Bug -> Dev] Issue 1 -- The clear-then-add sequence does not actually avoid the transient empty-canvas frame the brief explicitly required, and a fix is available without violating acceptance criterion 7.
+
+The brief Concrete Deliverables text states plainly: Removes and adds are batched into one array per call (not two separate `onNodesChange` calls) so collaborators do not see a transient empty-canvas frame between the clear and the repopulate. The Dev Notes / Known Limitations section discloses that the actual implementation (`onDelete({ nodes, edges })`, then a separate `onNodesChange` add-only call, then a separate `onEdgesChange` add-only call -- 3 sequential calls, each independently wrapped in its own `room.batch()` via `useMutation`) reintroduces exactly this race for remote collaborators, and states this is not fixable without a hand-rolled Storage mutation outside the `useLiveblocksFlow` API, which acceptance criterion 7 rules out.
+
+This claim is incorrect. The `@liveblocks/core` `batch()` implementation was verified directly (`node_modules/@liveblocks/core/dist/index.js`, function `batch2`, ~line 13245):
+
+```
+function batch2(callback) {
+  if (context.activeBatch) {
+    return callback();   // nested batch calls just run inline, no new flush
+  }
+  ...
+  try {
+    returnValue = callback();
+  } finally {
+    ...
+    if (currentBatch.ops.length > 0) {
+      dispatchOps(currentBatch.ops);   // ops from ALL nested batch() calls
+    }                                   // accumulate here and flush ONCE
+    notify(currentBatch.updates);
+    flushNowOrSoon();
+  }
+  return returnValue;
+}
+```
+
+Batch nesting is explicitly supported and documented (`node_modules/@liveblocks/core/dist/index.d.ts` ~line 2414: "Nesting batches is supported."; `Room.batch<T>(fn: () => T): T` is public API on the `Room` type, ~line 4198). `useMutation` own implementation (`node_modules/@liveblocks/react/dist/chunk-JMMTB4CU.js`, `useMutation_withRoomContext`) already wraps every call in `room.batch(() => callback(...))` -- so `onDelete`, `onNodesChange`, and `onEdgesChange` each independently start and end their own top-level batch today, producing 3 separate `dispatchOps` calls (3 separate Storage commits/broadcasts) instead of 1.
+
+Wrapping the three existing calls in an outer `room.batch()`, obtained via `useRoom()` (already exported by `@liveblocks/react/suspense`, the same module `canvas.tsx` already imports `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo` from, so no new dependency), would cause all three nested `useMutation` calls to join that single outer batch and flush exactly once:
+
+```
+const room = useRoom()
+// ...
+const handleImportTemplate = useCallback((template: CanvasTemplate) => {
+  room.batch(() => {
+    onDelete({ nodes, edges })
+    onNodesChange(nodeChanges)
+    onEdgesChange(edgeChanges)
+  })
+  fitView({ duration: ZOOM_TRANSITION_DURATION_MS })
+}, [nodes, edges, onNodesChange, onEdgesChange, onDelete, fitView, room])
+```
+
+This still dispatches exclusively through `onDelete`/`onNodesChange`/`onEdgesChange`, the same `useLiveblocksFlow`-returned mutations acceptance criterion 7 requires, so it does not hand-roll a Storage mutation outside the API and does not cross any scope limit. It genuinely resolves the explicit atomicity requirement in the brief instead of just disclosing it as unfixed.
+
+What to fix: wrap the three mutation calls in `handleImportTemplate` with `room.batch(...)` (via `useRoom()` from `@liveblocks/react/suspense`), update the `canvas.tsx` docblock/comments and the `context/ui-context.md` Starter Templates section to reflect the corrected atomic sequence, and update the Known Limitations note (the remaining, still-legitimate limitation is only the cross-collaborator different-template race already flagged in Open Questions #3, not this one). `canvas.test.tsx` will need a `useRoom` mock added to its hoisted mock surface, and ideally a test asserting `room.batch` is called around all three mutations (or, at minimum, that behavior is otherwise unchanged).
+
+[Bug -> Dev] Issue 2 -- `context/progress-tracker.md` was not updated.
+
+`git diff 7500eed -- context/progress-tracker.md` is empty. The file still reads "Current Phase: Phase 18 -- not yet started" and "Current Goal: Analyst pass for feature spec 18," with no Completed entry for spec 18 actual Dev work, contradicting the explicit instruction in `AGENTS.md` (Update `context/progress-tracker.md` after each meaningful implementation change) and this pipeline own established convention -- every prior spec 05-17 has a full narrative Completed entry (files added/modified, gate results, QA/PO summaries once available). This is pure housekeeping, not a functional bug, but it is an explicit checklist item (#6) and a repeated, consistent convention across every prior spec in this codebase.
+
+### Minor, non-blocking observations
+
+- The vitest-flakiness claim in the Dev Notes (that none of the timing-out files are files this spec touches) is not fully accurate -- see Mechanical gate above -- but the underlying environment-flakiness diagnosis is correct and does not need a Dev fix.
+
+## Handoff
+
+QA failed -- see issues above. Routing to Dev for both: Issue 1 (the batching/atomicity fix in `canvas.tsx`, with corresponding doc/test updates) and Issue 2 (`context/progress-tracker.md` housekeeping). No Analyst involvement needed -- both issues are code/process fixes, not ambiguities in the brief.
+
+## Dev Notes — Bugfix round
+
+Scope of this round: Issue 1 only (the `room.batch(...)` atomicity fix). Issue 2 (`progress-tracker.md`) was explicitly excluded by the orchestrator for this round — every prior spec's "mark completed" `progress-tracker.md` update lands in a separate commit after QA+PO sign-off (e.g. spec 17's `69b4dba` is separate from its `71ac064` feat commit), not in the Dev bugfix commit, so it is intentionally left untouched here.
+
+### Files changed
+
+- `components/editor/canvas.tsx` — `useRoom` added to the existing `@liveblocks/react/suspense` import (alongside `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo`, no new dependency). `CanvasFlow` now calls `const room = useRoom()`. `handleImportTemplate` builds `nodeChanges`/`edgeChanges` first, then wraps the three mutation calls — `onDelete({ nodes, edges })`, `onNodesChange(nodeChanges)`, `onEdgesChange(edgeChanges)` — in `room.batch(() => { ... })`; `fitView(...)` remains a separate, synchronous call immediately after the batch (unaffected by this fix — its own safety was already verified via source in the original Dev Notes and QA pass). `room` added to `handleImportTemplate`'s `useCallback` dependency array. Docblocks updated (the spec-18 docblock above `CanvasFlow` and `handleImportTemplate`'s own docblock) to describe the batched sequence instead of the disclosed 3-separate-mutation limitation.
+- `components/editor/canvas.test.tsx` — added `useRoomMock`/`roomBatchMock` to the hoisted mock surface (`roomBatchMock` mirrors `@liveblocks/core`'s real `batch()` behavior by just invoking its callback synchronously) and mocked `useRoom` in the `@liveblocks/react/suspense` mock. `beforeEach` now sets `useRoomMock.mockReturnValue({ batch: roomBatchMock })`. Added one new test ("bugfix round: wraps onDelete/onNodesChange/onEdgesChange in a single room.batch(...) call...") asserting `roomBatchMock` is called exactly once and that all three mutations' first invocation happens after (not before) that batch call, via `mock.invocationCallOrder`. The pre-existing "clearing then adding" dispatch-shape test needed no changes — its assertions on call counts/args are unaffected by adding an outer batch wrapper around calls that were already being made.
+- `context/ui-context.md` — the Starter Templates section's "Import mechanism" paragraph rewritten to describe the `room.batch(...)` wrapping and why it's necessary (nested `useMutation`-internal batches don't coalesce on their own; `@liveblocks/core`'s `batch()` is reentrant, so only an explicit outer `room.batch(...)` around all three calls merges them into one commit).
+- `context/spec-status/18-starter-template.md` — this section.
+
+### The fix
+
+QA's Issue 1 diagnosis was independently re-confirmed before implementing: `node_modules/@liveblocks/core/dist/index.js`'s `batch()` (referenced there as `batch2`) checks `context.activeBatch` and, if already inside a batch, just runs the callback inline rather than starting a new flush — i.e. nested `batch()` calls fold into whichever batch is already active, and `node_modules/@liveblocks/core/dist/index.d.ts` documents "Nesting batches is supported." `useMutation` (`@liveblocks/react`) already wraps every call in its own `room.batch(...)`, so `onDelete`, `onNodesChange`, and `onEdgesChange` — three separate `useMutation`-returned functions — were each opening and closing their own top-level batch, producing 3 separate Storage commits/broadcasts. Introducing one *outer* `room.batch(() => { onDelete(...); onNodesChange(...); onEdgesChange(...) })` in `handleImportTemplate` means all three inner `useMutation` calls now find `context.activeBatch` already set and fold into the outer batch instead, so the whole clear-then-add sequence flushes once.
+
+```ts
+const handleImportTemplate = useCallback(
+  (template: CanvasTemplate) => {
+    const nodeChanges: NodeChange<CanvasNodeAlias>[] = template.nodes.map((node) => ({
+      type: "add" as const,
+      item: node,
+    }))
+    const edgeChanges: EdgeChange<CanvasEdgeAlias>[] = template.edges.map((edge) => ({
+      type: "add" as const,
+      item: edge,
+    }))
+
+    room.batch(() => {
+      onDelete({ nodes, edges })
+      onNodesChange(nodeChanges)
+      onEdgesChange(edgeChanges)
+    })
+
+    fitView({ duration: ZOOM_TRANSITION_DURATION_MS })
+  },
+  [nodes, edges, onNodesChange, onEdgesChange, onDelete, fitView, room],
+)
+```
+
+`room` comes from `useRoom()`, already exported by `@liveblocks/react/suspense` — the same module `CanvasFlow` already imports `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo` from, so this is genuinely no new dependency. The fix still dispatches exclusively through `onDelete`/`onNodesChange`/`onEdgesChange`, the same `useLiveblocksFlow`-returned mutations acceptance criterion 7 requires — `room.batch(...)` only changes how many Storage commits those three calls produce, not which API performs the mutation, so it doesn't hand-roll a Storage mutation outside `useLiveblocksFlow` and doesn't cross acceptance criterion 7's boundary.
+
+### Why this closes the transient-empty-canvas gap
+
+Before this fix: `onDelete` flushed and broadcast its own Storage update (canvas now empty in Storage), then, in a separate commit, `onNodesChange` flushed the template's nodes, then, in a third separate commit, `onEdgesChange` flushed the template's edges. A remote collaborator subscribed to the same room could receive and render the intermediate state after the first commit and before the second — a real, observable empty-canvas frame.
+
+After this fix: all three mutations execute inside one `room.batch(...)` call. Per the verified `batch()` source, ops from all three nested `useMutation` calls accumulate into the same `currentBatch.ops` array and are dispatched via a single `dispatchOps(currentBatch.ops)` call only once the outermost `batch()` callback returns — so Storage is updated and broadcast exactly once, with the delete and both adds already applied together. There is no intermediate commit a collaborator's subscription could observe between the clear and the repopulate; the empty-canvas state never exists as a distinct, broadcastable Storage snapshot. This directly satisfies the Concrete Deliverables text's explicit requirement ("Removes and adds are batched into one array per call... so collaborators don't see a transient empty-canvas frame between the clear and the repopulate") in substance, using the correct mechanism for this library version (one outer `room.batch(...)` around the two-call-minimum `onDelete`+`onNodesChange`+`onEdgesChange` sequence this version's API actually requires) rather than the brief's literal single-array-per-call sketch, which — per the original Dev Notes and QA's independent source verification — doesn't work at all in the installed `@liveblocks/react-flow` version.
+
+`fitView(...)` is intentionally left outside the batch (it's a React Flow viewport method, not a Liveblocks Storage mutation — batching it would have no effect and isn't required for atomicity).
+
+### Known limitations (updated)
+
+- The cross-collaborator different-template race (two collaborators importing different templates at nearly the same moment) remains an acknowledged, out-of-scope multiplayer edge case per the brief's own Open Questions #3 — unrelated to and unaffected by this fix.
+- The prior "3 separate mutations, transient empty-canvas frame" limitation noted in the original Dev Notes' Known Limitations section is superseded by this fix and no longer applies.
+- No live two-tab verification was possible in this pipeline (consistent with every prior canvas spec) — the fix is verified via reading `@liveblocks/core`'s real `batch()` source (both this round and independently by QA beforehand) rather than an observed browser session. Recommend a human smoke test importing a template while a second tab is open on the same room, watching specifically for whether the canvas ever renders empty mid-import.
+
+### Gate results (bugfix round)
+
+- `npx tsc --noEmit` — pass, no errors.
+- `npx eslint .` — pass, 0 errors, same 1 pre-existing unrelated warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx`.
+- `npx vitest run --no-file-parallelism` — 280/280 passing across 35 files (97.3s) — 279 pre-existing plus the 1 new batching test.
+- `npx next build` — pass, Turbopack, all routes compiled.
+
+### Untouched-files confirmation
+
+Only `components/editor/canvas.tsx`, `components/editor/canvas.test.tsx`, `context/ui-context.md`, and `context/spec-status/18-starter-template.md` were touched this round. `context/progress-tracker.md` was deliberately left untouched per the orchestrator's explicit instruction for this round (see scope note above).
+
+## QA Re-Review — Bugfix round
+
+Overall verdict: **PASS**. Independently re-verified all five items the orchestrator asked for; the Dev Notes' claims hold up against the real installed source, the diff is exactly as scoped, and the full gate reproduces clean.
+
+### 1. Reentrant-batch claim — independently verified against real installed source
+
+Read `node_modules/@liveblocks/core/dist/index.js` directly (not trusted from the Dev Notes' excerpt):
+
+- `batch2(callback)` (~line 13245): `if (context.activeBatch) { return callback(); }` — a nested call, when a batch is already active, runs the callback inline and returns immediately, with no new `activeBatch` object created and no independent flush. Only the outermost call creates `context.activeBatch`, runs the callback in a `try`, and in the `finally` block calls `dispatchOps(currentBatch.ops)` once (only if `currentBatch.ops.length > 0`), then `notify(...)` and `flushNowOrSoon()` once.
+- Confirmed *where* ops actually land during a nested call: `onDispatch(ops, ...)` (~line 11935) does `if (context.activeBatch) { for (const op of ops) context.activeBatch.ops.push(op); ... }`. Since a nested `batch2()` call never replaces `context.activeBatch` with a new object, this push target is the *same* outer batch object for all three nested `useMutation` calls — i.e., ops from `onDelete`, `onNodesChange`, and `onEdgesChange` genuinely accumulate into one array, not three.
+- Confirmed the nesting actually happens in practice: `node_modules/@liveblocks/react/dist/chunk-JMMTB4CU.js`'s `useMutation_withRoomContext` (~line 4285) wraps every call as `room.batch(() => callback(...))` — so `onDelete`/`onNodesChange`/`onEdgesChange`, each a `useMutation`-returned function, each independently call `room.batch()` when invoked. When invoked from inside `handleImportTemplate`'s outer `room.batch(() => { onDelete(...); onNodesChange(...); onEdgesChange(...) })`, each of these inner `room.batch()` calls hits the `context.activeBatch` truthy branch and folds in.
+
+Net: the claim is correct exactly as stated — a nested `batch()` call folds into `context.activeBatch` rather than flushing independently, so the outer `room.batch(...)` in `handleImportTemplate` produces exactly one `dispatchOps` call covering all three mutations' ops. Not taken on trust — read the source directly, and additionally confirmed empirically (see Item 4 below) that reverting the fix makes the new test fail while every other test stays green, which is only possible if the batching genuinely changes runtime behavior the test can observe.
+
+### 2. `canvas.tsx` diff scope — confirmed
+
+`git diff -- components/editor/canvas.tsx` (working tree vs. HEAD, i.e. the bugfix round's actual diff) shows exactly: `useRoom` added to the existing `@liveblocks/react/suspense` import, `const room = useRoom()` added inside `CanvasFlow`, `room` added to `handleImportTemplate`'s dependency array, and the three mutation calls (`onDelete({ nodes, edges })`, `onNodesChange(nodeChanges)`, `onEdgesChange(edgeChanges)`) moved inside `room.batch(() => { ... })`. `fitView({ duration: ZOOM_TRANSITION_DURATION_MS })` remains its own statement immediately after the `room.batch(...)` call, outside the batch callback — correct, since `fitView` is a React Flow viewport method, not a Liveblocks Storage mutation, and batching it would have no effect. Docblocks were updated to match. No other logic in the file changed (diff is otherwise limited to these lines).
+
+### 3. Full gate — reproduced independently, all green
+
+- `npx tsc --noEmit` — PASS, no errors.
+- `npx eslint .` — PASS, 0 errors, 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/templates/tanstack-basic-auth/src/routes/__root.tsx` (`@next/next/no-head-element`), unrelated to this spec — matches the Dev Notes exactly.
+- `npx vitest run --no-file-parallelism` — PASS, 280/280 across 35 files (97.0s) — matches the Dev Notes' claimed figures.
+- `npx next build` — PASS, Turbopack, all routes compiled, no new dynamic/static classification issues.
+
+### 4. New test — genuinely asserts the batching behavior, verified by reverting the fix
+
+Read the new test (`components/editor/canvas.test.tsx`, "bugfix round: wraps onDelete/onNodesChange/onEdgesChange in a single room.batch(...) call..."): it asserts `roomBatchMock` is called exactly once, and that `onDeleteMock`/`onNodesChange`/`onEdgesChange`'s first `invocationCallOrder` are each greater than `roomBatchMock`'s own `invocationCallOrder`, i.e. the three mutations actually run as part of the batch callback's execution, not before `room.batch(...)` is invoked. The hoisted `roomBatchMock: vi.fn((callback) => callback())` mirrors real `batch()` behavior (synchronous inline invocation) closely enough for this to be a meaningful ordering check, not a rubber-stamp mock.
+
+Not taken on faith — independently reverted just the fix (`git stash push -- components/editor/canvas.tsx`, i.e. back to the pre-batch 3-separate-mutation version from the original Dev Notes round) and reran `components/editor/canvas.test.tsx` in isolation: the new test failed (`expected "vi.fn()" to be called 1 times, but got 0 times` on the `roomBatchMock` assertion) while the other 17 tests in the file stayed green, confirming the test fails specifically and only against the unfixed code, not everything. Restored the fix afterward (`git stash pop`) and confirmed `canvas.tsx` matches the intended fix again.
+
+One minor, non-blocking observation: the ordering assertions (`invocationCallOrder[0]` comparisons) would not catch a contrived implementation that calls `room.batch(() => {})` with an empty callback and then invokes the three mutations directly afterward in the same synchronous handler — such code would still pass both assertions despite not actually coalescing anything. This is not a real gap in this review, since the actual `canvas.tsx` source was independently read and confirmed to call the three mutations genuinely inside the batch callback (Item 2 above); flagging only as a theoretical test-strictness note for future reference, not something requiring a Dev fix.
+
+### 5. `progress-tracker.md` — confirmed still untouched
+
+`git status --short context/progress-tracker.md` returns nothing — no modification. Consistent with the orchestrator's explicit instruction that this round is scoped to Issue 1 only, and every prior spec's "mark completed" `progress-tracker.md` update lands in a separate commit after QA+PO sign-off, not bundled into the Dev bugfix round. Confirmed via `git diff --stat` (working tree vs. HEAD) that only the 4 expected files changed: `components/editor/canvas.tsx`, `components/editor/canvas.test.tsx`, `context/spec-status/18-starter-template.md`, `context/ui-context.md`.
+
+### Conclusion
+
+Issue 1 from the original QA Report is genuinely resolved: the reentrant-batch mechanism is real (verified against source, not summary), `handleImportTemplate` wraps all three Liveblocks mutations in one `room.batch(...)` with `fitView` correctly left outside it, the full gate is clean, the new test meaningfully distinguishes fixed from unfixed code (empirically confirmed by reverting), and `progress-tracker.md` remains untouched as intentionally scoped. No further Dev action needed for Issue 1. Issue 2 (`progress-tracker.md` housekeeping) remains open per the original QA Report, deferred by design to a separate post-sign-off commit — not a blocker for this round's verdict.
+
+## Handoff
+
+QA re-review PASSED. Routing to Product Owner for sign-off, per this pipeline's usual flow once QA passes. Issue 2 (`progress-tracker.md` "mark completed" update) should still land in its own commit after Product Owner sign-off, matching every prior spec's convention (e.g. spec 17's `69b4dba`, separate from its `71ac064` feat commit).
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Product fit against `project-overview.md`
+
+This spec is a direct, literal hit on **Success Criterion 3** ("A user can import a prebuilt starter design into the canvas") and the Core User Flow's step 4 ("User optionally imports a starter system design template into the canvas"). Before this spec, no starter-template mechanism existed anywhere in the codebase; after it, a signed-in user in a project's canvas can open a navbar-triggered modal, see three genuinely distinct, meaningfully-authored templates (microservices, CI/CD pipeline, event-driven system — each with sensible shape choices: `hexagon` for gateways/event buses, `cylinder` for databases/artifact registries/analytics stores, `diamond` for a CI quality gate, `pill` for services), preview each as a real diagram (not a placeholder image), and import one into the live, Liveblocks-synced canvas. I read `components/editor/starter-templates.ts` directly, not just Dev's description of it — the three templates are real, structurally sound content (positions read as an actual laid-out diagram, not an arbitrary grid; every edge's `source`/`target` resolves to a real node in the same template), not filler.
+
+This also indirectly strengthens **Success Criterion 2** (multiple users collaborating in the same canvas simultaneously): the QA-forced bugfix (wrapping `onDelete`/`onNodesChange`/`onEdgesChange` in one `room.batch(...)`) is specifically what prevents a remote collaborator from observing a transient empty-canvas frame mid-import — a genuine multiplayer correctness fix, not cosmetic. I independently re-read the final `canvas.tsx` (not just the Dev Notes' excerpt) and confirmed `handleImportTemplate` matches exactly what both Dev Notes and QA describe: the three mutations inside `room.batch(...)`, `fitView` correctly left outside it.
+
+No Success Criteria are weakened or put at risk by this spec — it adds a new, isolated import mechanism on a change-dispatch path (`onNodesChange`/`onEdgesChange`/`onDelete`) every prior canvas spec already established, without touching node/edge rendering (Criterion 2's foundation) or any AI/spec-generation surface (Criteria 4/5).
+
+### Independent scope/diff verification (not trusting Dev/QA claims)
+
+Ran `git diff 7500eed -- components/editor/canvas-node.tsx components/editor/canvas-edge.tsx components/editor/shape-visual.tsx components/editor/node-color-toolbar.tsx` (against this branch's real parent, `fix/shape-panel-pointer-drag`'s tip — not `main`) across the *entire* branch, including the still-uncommitted bugfix-round changes in the working tree: **empty, 0 lines**. All four protected rendering files are genuinely byte-for-byte untouched.
+
+Ran `git diff 7500eed --stat` across the same full range (initial commit `16a737a` plus the working-tree bugfix-round diff): the touched-file list is exactly what Dev Notes and QA describe — five new files (`starter-templates.ts`, `starter-template-preview.tsx`, `starter-templates-modal.tsx`, plus their three sibling test files and `workspace-navbar.test.tsx`), three modified wiring files (`workspace-navbar.tsx`, `workspace-shell.tsx`, `canvas.tsx`), their corresponding test files, `context/ui-context.md`, and this status file. No `app/api` route, no `prisma/schema.prisma` change, no new dependency in `package.json` — confirmed via `git diff 7500eed -- app prisma` (empty) and by reading `canvas.tsx`'s import list directly (`useRoom` added to an *existing* `@liveblocks/react/suspense` import, not a new package). `context/progress-tracker.md` is confirmed untouched (`git diff 7500eed -- context/progress-tracker.md` empty), correctly deferred to this review per this pipeline's own convention (Dev only ever marks "In Progress"; PO promotes to "Completed" after PR creation).
+
+Read `components/editor/canvas.tsx` in full (not just the diff): `handleImportTemplate`'s docblock and body match the Dev Notes/QA claims verbatim — `onDelete`/`onNodesChange`/`onEdgesChange` genuinely execute inside `room.batch(() => { ... })`, `fitView({ duration: ZOOM_TRANSITION_DURATION_MS })` is a separate statement immediately after, outside the batch. I did not just trust the QA re-review's "Item 2" diff-scope confirmation — I independently re-derived the same conclusion from the file itself.
+
+Also confirmed `components/editor/starter-templates.ts` directly against Concrete Deliverable requirements: `CanvasTemplate` matches the brief's literal interface, IDs are static human-readable strings (not `generateNodeId()`-shaped), every `templateNode()` call sources its color pair from a `NODE_COLORS`-destructured binding and its size from `SHAPE_DEFAULT_SIZES[shape]` — no invented colors, shapes, or sizes.
+
+Reviewed the `context/ui-context.md` diff directly: the new "Starter Templates" section documents the modal/preview/import mechanism, the `onDelete`-vs-`{type:"remove"}` deviation, and the `room.batch(...)` fix rationale — consistent with the code, not aspirational.
+
+### Scope check
+
+No touches to any `project-overview.md` Out of Scope item (billing, enterprise permission tiers, versioned spec history, production object storage migration, mobile apps) — this spec doesn't come near any of them. No touches to any of this spec's own Out-of-scope callouts either: no template-saving UI, no custom/user-authored template CRUD, no new `app/api` route or Prisma model for templates (confirmed via diff above — `architecture-context.md`'s "resolved by template ID at import time... do not require a separate database record" is satisfied exactly as written, by a plain `.ts` array), and no on-canvas-creation auto-import prompt (only the navbar-button path was built, matching the brief's own reading of `architecture-context.md`'s permissive "at any time" wording).
+
+### The no-confirmation-dialog judgment call (Open Question 6) — my own view, flagged for the human
+
+I formed an independent view on this rather than deferring entirely to the Analyst's recommendation. On balance, I agree **no confirmation dialog is an acceptable posture for this stage**, for reasons beyond what the brief already gave:
+
+- The import action is already gated behind two deliberate clicks (open the Templates modal, then click a specific card's Import button) — it is not a single stray click on the primary canvas surface, unlike, say, an accidental key press.
+- Liveblocks undo (spec 17) is a real, working recovery mechanism for the *local* case (the importing user's own accidental click), not a hypothetical — I confirmed `useUndo`/`useRedo` are genuinely wired to `CanvasControlBar` and keyboard shortcuts in this same file.
+- Unlike Delete Project (which destroys a project record, its collaborators' access, and its specs permanently, with no undo path at all), a template import only overwrites the *current* room's canvas content — a fundamentally lower-stakes, more-recoverable action, so a different confirmation posture for it is not obviously inconsistent product design, just a different one.
+
+That said, I want to flag this explicitly for the human reviewer rather than silently agree, because the Analyst was right to call out a real asymmetry worth a second look before merge: undo does **not** fully cover the multiplayer case. If a second collaborator is on the canvas when the import happens, their own local edits made in the moments just before the clear could be lost from *their* perspective without any prompt, and Liveblocks' shared undo/redo history stack does not necessarily behave the way a single-user undo would when multiple people have interleaved edits in it (this pipeline has consistently flagged shared-history interleaving as an unresolved edge case, e.g. this spec's own Open Questions #3, and it was never resolved to run live). A confirmation dialog would not fix that underlying multiplayer-undo ambiguity either, so I don't think adding one is a prerequisite for this spec's sign-off — but I recommend the human weigh in on whether this posture (zero confirmation for a full-canvas wipe, recoverable only via a real but not fully proven-safe-for-multiplayer undo) is acceptable before merging, and consider it as a candidate follow-up (either a lightweight confirmation, or an "only enabled when no one else is actively present" gate) rather than blocking this spec on it now.
+
+### `progress-tracker.md` accuracy
+
+Confirmed untouched (see diff verification above), correctly deferred per this pipeline's convention — Dev only marks "In Progress"; the Product Owner promotes to "Completed" with the QA/PO summary and PR link after sign-off. Per this task's explicit instruction, I am not opening a PR or touching `progress-tracker.md` in this round; that step is deferred back to the requester.
+
+### Rough edges — acceptable at this stage
+
+- No live browser/multiplayer verification possible in this pipeline (consistent with specs 11–17) — recommend a human smoke test specifically: (1) import a template with a second tab open on the same room, watching for any transient empty-canvas frame; (2) confirm `fitView` actually frames the new diagram, not stale bounds; (3) confirm Ctrl+Z genuinely restores the pre-import canvas. Not a blocker for this recommendation, consistent with how every prior canvas spec has been judged.
+- The disclosed, deliberately out-of-scope cross-collaborator different-template race (two users importing different templates at nearly the same moment) remains unaddressed — correctly scoped out per the brief's own Open Questions #3, not something this spec's text asks to solve, and not a blocker for later specs.
+- The no-confirmation-dialog posture discussed above — accepted for this stage, flagged for human awareness, not a blocker.
+
+None of these would block spec 19 or later specs from building on this one correctly — the templates library, preview component, and import mechanism are additive and self-contained, and don't change any interface (`useLiveblocksFlow`'s returned `nodes`/`edges`/`onNodesChange`/`onEdgesChange`/`onDelete`, `CanvasNodeData`/`CanvasEdgeData`) a later spec would depend on.
+
+### Conclusion
+
+All 11 numbered acceptance criteria hold up under my own independent re-verification (not just trusting QA's re-review), including the two items QA's bugfix-round re-review specifically re-checked (the `room.batch(...)` atomicity fix and the `fitView` timing claim) — I re-read the actual `canvas.tsx` source myself rather than relying solely on QA's account of it. Scope is clean against both this spec's own Out-of-scope callouts and `project-overview.md`'s Out of Scope wall. `progress-tracker.md` remains correctly untouched pending this sign-off. The one genuinely debatable product-posture question (no confirmation dialog before a destructive clear) is, in my judgment, acceptable for this stage but flagged above for explicit human attention before merge.
+
+## Handoff
+
+Product Owner PASS — ready for human review. Per this round's explicit task scope, PR creation and the `progress-tracker.md` "Completed" update are deferred back to the requester rather than performed in this pass.
