@@ -8,7 +8,20 @@ import { WorkspaceShell } from "./workspace-shell";
 // test, which only cares that `WorkspaceShell` renders it with the right
 // room ID. Canvas's own internals are covered by `canvas.test.tsx`.
 vi.mock("@/components/editor/canvas", () => ({
-  Canvas: ({ roomId }: { roomId: string }) => <div data-testid="canvas" data-room-id={roomId} />,
+  Canvas: ({
+    roomId,
+    isTemplatesModalOpen,
+  }: {
+    roomId: string;
+    isTemplatesModalOpen: boolean;
+    setIsTemplatesModalOpen: (open: boolean) => void;
+  }) => (
+    <div
+      data-testid="canvas"
+      data-room-id={roomId}
+      data-templates-modal-open={String(isTemplatesModalOpen)}
+    />
+  ),
 }));
 
 const fetchMock = vi.fn();
@@ -59,5 +72,16 @@ describe("WorkspaceShell", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
     expect(screen.getByRole("heading", { name: /share project/i })).toBeInTheDocument();
+  });
+
+  it("passes isTemplatesModalOpen/setIsTemplatesModalOpen down to Canvas, opened via the Templates navbar button", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    expect(screen.getByTestId("canvas")).toHaveAttribute("data-templates-modal-open", "false");
+
+    const templatesButton = screen.getByRole("button", { name: /templates/i });
+    fireEvent.click(templatesButton);
+
+    expect(screen.getByTestId("canvas")).toHaveAttribute("data-templates-modal-open", "true");
   });
 });
