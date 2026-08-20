@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
-  CANVAS_DRAG_MIME_TYPE,
   CANVAS_SHAPES,
   NODE_MIN_SIZE,
   SHAPE_DEFAULT_SIZES,
   createDroppedNode,
   generateNodeId,
-  parseShapeDragPayload,
-  serializeShapeDragPayload,
 } from "./canvas-shapes"
 import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR, DEFAULT_NODE_TEXT_COLOR } from "@/types/canvas"
 
@@ -38,45 +35,6 @@ describe("NODE_MIN_SIZE", () => {
       expect(NODE_MIN_SIZE.width).toBeLessThan(size.width)
       expect(NODE_MIN_SIZE.height).toBeLessThan(size.height)
     }
-  })
-})
-
-describe("serializeShapeDragPayload / parseShapeDragPayload", () => {
-  it("round-trips a valid payload for every shape", () => {
-    for (const shape of CANVAS_SHAPES) {
-      const raw = serializeShapeDragPayload(shape)
-      const parsed = parseShapeDragPayload(raw)
-      expect(parsed).toEqual({ shape, ...SHAPE_DEFAULT_SIZES[shape] })
-    }
-  })
-
-  it("rejects an empty string", () => {
-    expect(parseShapeDragPayload("")).toBeNull()
-  })
-
-  it("rejects malformed JSON", () => {
-    expect(parseShapeDragPayload("{not json")).toBeNull()
-  })
-
-  it("rejects a JSON payload that isn't an object", () => {
-    expect(parseShapeDragPayload("42")).toBeNull()
-    expect(parseShapeDragPayload("null")).toBeNull()
-  })
-
-  it("rejects an unknown shape name", () => {
-    expect(parseShapeDragPayload(JSON.stringify({ shape: "triangle", width: 10, height: 10 }))).toBeNull()
-  })
-
-  it("rejects non-numeric or non-positive width/height", () => {
-    expect(
-      parseShapeDragPayload(JSON.stringify({ shape: "rectangle", width: "160", height: 80 })),
-    ).toBeNull()
-    expect(parseShapeDragPayload(JSON.stringify({ shape: "rectangle", width: 0, height: 80 }))).toBeNull()
-    expect(parseShapeDragPayload(JSON.stringify({ shape: "rectangle", width: -10, height: 80 }))).toBeNull()
-  })
-
-  it("uses a dedicated MIME type distinct from text/plain", () => {
-    expect(CANVAS_DRAG_MIME_TYPE).not.toBe("text/plain")
   })
 })
 

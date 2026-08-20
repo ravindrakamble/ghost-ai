@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState, type DragEvent } from "react"
+import { useCallback, useState } from "react"
 import {
   Background,
   BackgroundVariant,
@@ -27,11 +27,11 @@ import { useLiveblocksFlow } from "@liveblocks/react-flow"
 import { CanvasControlBar } from "@/components/editor/canvas-control-bar"
 import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
-import { ShapePanel } from "@/components/editor/shape-panel"
+import { ShapePanel, type OnDropShape } from "@/components/editor/shape-panel"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
-import { CANVAS_DRAG_MIME_TYPE, createDroppedNode, parseShapeDragPayload } from "@/lib/canvas-shapes"
+import { createDroppedNode } from "@/lib/canvas-shapes"
 import {
   CANVAS_EDGE_TYPE,
   CANVAS_NODE_TYPE,
@@ -109,7 +109,6 @@ export function Canvas({ roomId }: CanvasProps) {
           </CanvasRoomBoundary>
         </RoomProvider>
       </LiveblocksProvider>
-      <ShapePanel />
     </div>
   )
 }
@@ -163,10 +162,22 @@ function CanvasError() {
  * persistence or starter-template loading (spec 21/starter-templates own
  * that). Registers the custom `CanvasNode` renderer for `CANVAS_NODE_TYPE`
  * (spec 11 deliberately deferred this — see spec 12's Analyst Brief, Open
- * Questions #7) and handles native `dragover`/`drop` so a shape dragged from
- * `ShapePanel` creates a new node at the drop position. No custom edge
- * rendering, edge creation changes, or `Controls` panel — untouched by
- * spec 12.
+ * Questions #7) and renders `ShapePanel` as a sibling of `<ReactFlow>` (it
+ * needs direct access to `screenToFlowPosition`/`onNodesChange`, per
+ * `handleDropShape` below) so a shape dragged from the panel creates a new
+ * node at the drop position. No custom edge rendering, edge creation
+ * changes, or `Controls` panel — untouched by spec 12.
+ *
+ * Node creation originally relied on native HTML5 `draggable`/`dragover`/
+ * `drop` (spec 12/13). A human smoke test found that mechanism unreliably
+ * failed to *start* a drag for several shapes (repeated attempts needed for
+ * rectangle/circle/pill/hexagon, while diamond/cylinder began on the first
+ * try every time) — a known general weak spot of the native DnD API, not a
+ * bug in this drop logic, which was always correct for every shape. Fixed by
+ * having `ShapePanel` track the whole gesture itself via Pointer Events and
+ * report a finished drop through `handleDropShape` below (screen position
+ * in, `screenToFlowPosition` + `createDroppedNode` + `onNodesChange` out) —
+ * `onDragOver`/`onDrop` are no longer wired to `<ReactFlow>` at all.
  *
  * Spec 14 adds `updateNodeData`, provided to descendants via
  * `CanvasNodeUpdateContext` so the leaf `CanvasNode` renderer can dispatch
@@ -209,20 +220,9 @@ function CanvasFlow() {
   const canUndo = useCanUndo()
   const canRedo = useCanRedo()
 
-  const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes(CANVAS_DRAG_MIME_TYPE)) return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = "copy"
-  }, [])
-
-  const handleDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
-      const raw = event.dataTransfer.getData(CANVAS_DRAG_MIME_TYPE)
-      const payload = parseShapeDragPayload(raw)
-      if (!payload) return
-
-      event.preventDefault()
-      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+  const handleDropShape = useCallback<OnDropShape>(
+    (payload, clientPosition) => {
+      const position = screenToFlowPosition(clientPosition)
       const newNode = createDroppedNode(payload, position)
       onNodesChange([{ type: "add", item: newNode }])
     },
@@ -280,13 +280,12 @@ function CanvasFlow() {
           nodeTypes={CANVAS_NODE_TYPES}
           edgeTypes={CANVAS_EDGE_TYPES}
           defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
           connectionMode={ConnectionMode.Loose}
           fitView
         >
           <Background variant={BackgroundVariant.Dots} />
         </ReactFlow>
+        <ShapePanel onDropShape={handleDropShape} />
         <CanvasControlBar
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
