@@ -20,6 +20,7 @@ import {
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
 import { CanvasNode } from "@/components/editor/canvas-node"
 import { ShapePanel } from "@/components/editor/shape-panel"
+import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { CANVAS_DRAG_MIME_TYPE, createDroppedNode, parseShapeDragPayload } from "@/lib/canvas-shapes"
 import { CANVAS_NODE_TYPE, type CanvasEdge, type CanvasNode as CanvasNodeAlias } from "@/types/canvas"
 import "@xyflow/react/dist/style.css"
@@ -123,6 +124,11 @@ function CanvasError() {
  * `ShapePanel` creates a new node at the drop position. No custom edge
  * rendering, edge creation changes, or `Controls` panel — untouched by
  * spec 12.
+ *
+ * Spec 14 adds `updateNodeData`, provided to descendants via
+ * `CanvasNodeUpdateContext` so the leaf `CanvasNode` renderer can dispatch
+ * label edits back through the real `onNodesChange` — see spec 14's
+ * Analyst Brief, Open Questions #1, and `hooks/use-update-canvas-node.ts`.
  */
 function CanvasFlow() {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useLiveblocksFlow<
@@ -155,21 +161,34 @@ function CanvasFlow() {
     [screenToFlowPosition, onNodesChange],
   )
 
+  const updateNodeData = useCallback<UpdateCanvasNodeData>(
+    (nodeId, data) => {
+      const node = nodes.find((candidate) => candidate.id === nodeId)
+      if (!node) return
+
+      const updatedNode: CanvasNodeAlias = { ...node, data: { ...node.data, ...data } }
+      onNodesChange([{ id: nodeId, type: "replace", item: updatedNode }])
+    },
+    [nodes, onNodesChange],
+  )
+
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      nodeTypes={CANVAS_NODE_TYPES}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      connectionMode={ConnectionMode.Loose}
-      fitView
-    >
-      <MiniMap />
-      <Background variant={BackgroundVariant.Dots} />
-    </ReactFlow>
+    <CanvasNodeUpdateContext.Provider value={updateNodeData}>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        nodeTypes={CANVAS_NODE_TYPES}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        connectionMode={ConnectionMode.Loose}
+        fitView
+      >
+        <MiniMap />
+        <Background variant={BackgroundVariant.Dots} />
+      </ReactFlow>
+    </CanvasNodeUpdateContext.Provider>
   )
 }

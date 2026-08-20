@@ -49,6 +49,17 @@ export const SHAPE_DEFAULT_SIZES: Record<NodeShape, ShapeSize> = {
   hexagon: { width: 140, height: 100 },
 }
 
+/**
+ * Flat minimum node size enforced by `NodeResizer` (`components/editor/
+ * canvas-node.tsx`) — a single floor across all 6 shapes rather than a
+ * per-shape table, since nothing in the spec text, `ui-context.md`, or
+ * `project-overview.md` pins an exact number. 40x40 sits well below every
+ * entry in `SHAPE_DEFAULT_SIZES` above, so it stops a node from collapsing
+ * into an unusable sliver or empty box without blocking legitimate
+ * shrinking. See spec 14's Analyst Brief, Open Questions #3.
+ */
+export const NODE_MIN_SIZE: ShapeSize = { width: 40, height: 40 }
+
 /** Human-readable label for each shape, used by the shape panel's button titles. */
 export const SHAPE_LABELS: Record<NodeShape, string> = {
   rectangle: "Rectangle",

@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 14: Node Editing — Analyst pass next.
+- Phase 14: Node Editing — Senior Developer pass done, QA next.
 
 ## Current Goal
-- Analyst brief for feature spec 14 (Node Editing).
+- QA pass on feature spec 14 (Node Editing).
 
 ## Completed
 
@@ -160,11 +160,20 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently — spec 13 (Node Shape) completed above, spec 14 (Node Editing) Analyst pass not yet started.
+- Feature spec 14: Node Editing (Senior Developer pass done, awaiting QA)
+  - `components/editor/canvas-node.tsx` (modified) — adds `@xyflow/react`'s `<NodeResizer>` (visible only when `selected`, min size from new `NODE_MIN_SIZE`, styled with `border-brand`/`bg-base` handles and a `border-surface-border` line — no raw hex) rendered as a sibling of `ShapeVisual`, after it in DOM order (so its `position: absolute` controls paint above the shape regardless of the CSS-shape-vs-SVG-shape branch's own `position`); adds double-click-to-edit (`useState` local `isEditing`) rendering a `<textarea>` in the same `children` slot `ShapeVisual` already centers, with `nodrag nopan` classes on the editable wrapper. Label changes dispatch on every keystroke through `useUpdateCanvasNode()`.
+  - `hooks/use-update-canvas-node.ts` (new) — `CanvasNodeUpdateContext` + `useUpdateCanvasNode()`, the mechanism a leaf `CanvasNode` uses to dispatch a label update back through `CanvasFlow`'s real `onNodesChange` (a `"replace"` `NodeChange`) without embedding a non-serializable callback in Liveblocks-synced `data` or mutating React Flow's internal store directly. Returns `null` outside the provider.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` now builds `updateNodeData` (looks up the current node by ID, merges the partial `data` update, dispatches `onNodesChange([{ id, type: "replace", item }])`) and provides it via `CanvasNodeUpdateContext.Provider` wrapping `<ReactFlow>`. No changes to drop/creation logic.
+  - `lib/canvas-shapes.ts` (modified) — added `NODE_MIN_SIZE = { width: 40, height: 40 }`, a flat floor (not per-shape) well below every `SHAPE_DEFAULT_SIZES` entry. `createDroppedNode`/ID generation/drop-position math confirmed untouched via `git diff`.
+  - `context/ui-context.md` (modified) — documented Node Resize (handle/line styling, `NODE_MIN_SIZE`) and Node Label Editing (textarea-overlay convention, live-per-keystroke sync mechanism) under Canvas.
+  - Tests: `components/editor/canvas-node.test.tsx` gained resize-visibility and label-editing coverage (wrapped in `ReactFlowProvider` + `CanvasNodeUpdateContext.Provider`, now required since `<NodeResizer>`'s controls call `useStoreApi()` once visible); `hooks/use-update-canvas-node.test.tsx` (new); `lib/canvas-shapes.test.ts` gained an `NODE_MIN_SIZE` bounds check. 193/193 tests passing across 26 files (up from 180/25).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - `components/editor/shape-visual.tsx` and `components/editor/shape-panel.tsx` confirmed byte-for-byte untouched via `git diff --stat` — satisfies the spec's Scope Limits (no shape-rendering or shape-panel changes).
+  - Full pipeline trail in `context/spec-status/14-node-editing.md`.
 
 ## Next Up
 
-- Analyst pass on feature spec 14 (Node Editing).
+- QA pass on feature spec 14 (Node Editing).
 
 ## Open Questions
 
