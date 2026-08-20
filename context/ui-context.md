@@ -66,6 +66,8 @@ Radius increases with surface depth — smaller for inner elements, larger for o
 
 Default node color: `#1F1F1F` with `#EDEDED` text.
 
+The table above is implemented as a real, exported constant — `NODE_COLORS: readonly { color: string; textColor: string }[]` in `types/canvas.ts` (spec 15, Nodes Color Toolbar) — in the same order as the table, first entry equal to `DEFAULT_NODE_COLOR`/`DEFAULT_NODE_TEXT_COLOR`. `CanvasNodeData` carries both `color` and `textColor` fields; `ShapeVisual` (`components/editor/shape-visual.tsx`) takes `textColor` as a prop (defaulting to `DEFAULT_NODE_TEXT_COLOR` when omitted, e.g. the shape panel's drag-preview elements, which render no label) so a node's label always pairs with its own fill rather than a single fixed color for every node.
+
 ### Edge Style
 
 Smooth-step path with an arrow marker. Default edge color: `#f8fafc`. Stroke width is thin — edges are visually secondary to nodes.
@@ -96,6 +98,12 @@ Minimum node size is a flat `NODE_MIN_SIZE` (`lib/canvas-shapes.ts`): 40×40, we
 ### Node Label Editing
 
 Double-clicking a node's label/center area (spec 14) enters inline editing: a `<textarea>` replaces the label `<span>`/"Untitled" placeholder in the same slot, inheriting `ShapeVisual`'s existing centering rather than reimplementing it. The label updates live on every keystroke (not just on close) so the change is visible to other participants collaboratively, dispatched through a small React context (`hooks/use-update-canvas-node.ts`, provided by `CanvasFlow`) that wraps a real `onNodesChange([{ type: "replace", ... }])` call — the same synced path `NodeResizer`'s own dimension changes already use, not a local-only React Flow store mutation or a non-serializable callback embedded in node `data`. Editing closes on blur or `Escape`. The editable wrapper carries React Flow's `nodrag nopan` classes so clicking, selecting text, or typing doesn't start a node drag or canvas pan.
+
+### Node Color Toolbar
+
+A floating swatch toolbar (`components/editor/node-color-toolbar.tsx`, spec 15) renders above a canvas node only while it is `selected` — same `selected`-gated-visibility convention as Node Resize above, rendered as a sibling of `ShapeVisual`/`NodeResizer` within `CanvasNode`. Positioned via `absolute bottom-full left-1/2 -translate-x-1/2` with a small `mb-2` gap, so it sits above the node without overlapping its shape.
+
+The toolbar shows exactly one swatch button per `NODE_COLORS` pair (8 total, `rounded-full`, `bg-elevated`/`border-surface-border` container matching the shape panel's pill convention). The swatch matching the node's current `data.color` gets the same `border-brand` selected-token treatment used for node borders and resize handles; inactive swatches use `border-surface-border`. Hovering a swatch shows a tight, non-blurry ring (`box-shadow` with zero blur, fixed spread) in that swatch's own paired text color — since this color varies per swatch (sourced from `NODE_COLORS` data, not a single static theme token), it's applied via a per-swatch CSS custom property (`--swatch-glow`) and a `hover:shadow-[0_0_0_2px_var(--swatch-glow)]` Tailwind arbitrary-value utility, the same "runtime data drives an inline color" pattern `ShapeVisual` already uses for `data.color`. Clicking a swatch dispatches `{ color, textColor }` together through the existing `useUpdateCanvasNode()` mechanism (spec 14) — no new sync path. The container carries `nodrag nopan` so interacting with it never starts a node drag or canvas pan. No free-form color input (hex field, native color picker, custom swatch) exists anywhere on the canvas.
 
 ### Connection Handles
 

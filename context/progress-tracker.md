@@ -3,12 +3,26 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 15: Nodes Color Toolbar — Analyst brief next.
+- Phase 16: Edge Behavior — not yet started.
 
 ## Current Goal
-- Analyst brief for feature spec 15 (Nodes Color Toolbar).
+- Analyst brief for feature spec 16 (Edge Behavior).
 
 ## Completed
+
+- Feature spec 15: Nodes Color Toolbar
+  - `types/canvas.ts` (modified) — added `NodeColorPair` interface and `NODE_COLORS` (the 8 fill/text pairs from `ui-context.md`'s Node Color Palette table, first entry reusing `DEFAULT_NODE_COLOR`/`DEFAULT_NODE_TEXT_COLOR` rather than duplicating their values); extended `CanvasNodeData` with a required `textColor: string` field.
+  - `lib/canvas-shapes.ts` (modified, additive only) — `createDroppedNode` now sets `textColor: DEFAULT_NODE_TEXT_COLOR` alongside `color: DEFAULT_NODE_COLOR`. ID generation, drop-position math untouched.
+  - `components/editor/shape-visual.tsx` (modified) — added an optional `textColor` prop (default `DEFAULT_NODE_TEXT_COLOR`) replacing the previously hardcoded `style={{ color: DEFAULT_NODE_TEXT_COLOR }}` on both the CSS-shape and SVG-shape branches. Kept optional (not required) so `shape-panel.tsx`'s label-less drag-preview elements didn't need touching — confirmed via `git diff` that `shape-panel.tsx` is byte-for-byte untouched. This is a legitimate, brief-flagged exception to specs 13/14's precedent of leaving this file untouched — this spec's own text ("the text automatically updates to its paired text color") required it.
+  - `components/editor/node-color-toolbar.tsx` (new) — `NodeColorToolbar`: 8 swatch buttons (one per `NODE_COLORS` pair), active swatch via `border-brand`/`aria-pressed`, tight non-blurry hover glow via a per-swatch `--swatch-glow` CSS custom property + `hover:shadow-[0_0_0_2px_var(--swatch-glow)]` (color sourced from `NODE_COLORS` data, not a hardcoded class), `nodrag nopan` container. Dispatches `{ color, textColor }` together via the passed-in `onSelect`.
+  - `components/editor/canvas-node.tsx` (modified) — passes `data.textColor` through to `ShapeVisual`; applies `data.textColor` as an inline style on the edit-mode `<textarea>` too (kept consistent between rest/edit states, dropping the previously-fixed `text-copy-primary` class in favor of the node's own paired color); renders `<NodeColorToolbar>` only when `selected`, dispatching swatch clicks through the existing `useUpdateCanvasNode()` context (spec 14's mechanism, reused as-is — no new sync path).
+  - `context/ui-context.md` (modified) — documented `NODE_COLORS` as a real code constant (was doc-only) and a new "Node Color Toolbar" convention section (positioning, active/hover styling).
+  - Tests: `types/canvas.test.ts` (NODE_COLORS shape/count/order/default-pair-match), `lib/canvas-shapes.test.ts` (default `textColor` on `createDroppedNode`), `components/editor/shape-visual.test.tsx` (`textColor` prop default + override on both CSS/SVG branches), `components/editor/canvas-node.test.tsx` (toolbar rendered only when `selected`, swatch click dispatches both fields, `data.textColor` applied to both rest-state and edit-mode label), `components/editor/node-color-toolbar.test.tsx` (new — swatch count, active-swatch marking, click dispatch, `nodrag`/`nopan`, no free-form color input, per-swatch glow variable). 211/211 tests passing across 27 files (up from 193/26 at the end of spec 14).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 12 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced. Confirmed via `git diff spec/14-node-editing spec/15-nodes-color-toolbar` that `components/editor/canvas.tsx` and `components/editor/shape-panel.tsx` are byte-for-byte untouched — satisfies this spec's Scope Limits (no drag/drop, node-creation, or selection-logic changes).
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec continues the trajectory of specs 13/14 (shape geometry, then resize/label editing, now color-coding) toward making the shared canvas a genuinely usable diagramming surface for Success Criterion 2 (multiple users collaborating in the same canvas). Independently re-verified via `git diff spec/14-node-editing spec/15-nodes-color-toolbar` (not just trusting Dev/QA claims) that `canvas.tsx` and `shape-panel.tsx` are untouched, `lib/canvas-shapes.ts` is purely additive, and `shape-visual.tsx`'s change is the minimal one required by this spec's own text (not scope creep, distinct from specs 13/14 which correctly left it alone). No touches to any `project-overview.md` Out of Scope item. One non-blocking observation carried from QA: `CanvasNodeData.textColor` is now a required field with no starter-template canvas snapshots yet in the codebase — correctly out of scope (Starter System Designs is a later, separate spec). No live browser verification possible in this pipeline (consistent with specs 11–14) — recommended human smoke test (select a node, confirm the 8-swatch toolbar, click a non-default swatch, confirm live sync across two tabs, confirm hover glow is tight/non-blurry) before considering this fully proven, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #8](https://github.com/ravindrakamble/ghost-ai/pull/8) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/15-nodes-color-toolbar.md`.
 
 - Feature spec 14: Node Editing
   - `components/editor/canvas-node.tsx` (modified) — adds `@xyflow/react`'s `<NodeResizer>` (visible only when `selected`, min size from new `NODE_MIN_SIZE`, styled with `border-brand`/`bg-base` handles and a `border-surface-border` line — no raw hex) rendered as a sibling of `ShapeVisual`, after it in DOM order (so its `position: absolute` controls paint above the shape regardless of the CSS-shape-vs-SVG-shape branch's own `position`); adds double-click-to-edit (`useState` local `isEditing`) rendering a `<textarea>` in the same `children` slot `ShapeVisual` already centers, with `nodrag nopan` classes on the editable wrapper. Label changes dispatch on every keystroke through `useUpdateCanvasNode()`.
@@ -179,7 +193,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- Analyst brief for feature spec 15 (Nodes Color Toolbar).
+- Analyst brief for feature spec 16 (Edge Behavior).
 
 ## Open Questions
 

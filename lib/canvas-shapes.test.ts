@@ -9,7 +9,7 @@ import {
   parseShapeDragPayload,
   serializeShapeDragPayload,
 } from "./canvas-shapes"
-import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas"
+import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR, DEFAULT_NODE_TEXT_COLOR } from "@/types/canvas"
 
 describe("SHAPE_DEFAULT_SIZES", () => {
   it("gives every one of the 6 supported shapes a positive default size", () => {
@@ -91,14 +91,19 @@ describe("generateNodeId", () => {
 })
 
 describe("createDroppedNode", () => {
-  it("builds a CanvasNode with an empty label, the default color, the dragged shape/size, and the given position", () => {
+  it("builds a CanvasNode with an empty label, the default color/text-color pair, the dragged shape/size, and the given position", () => {
     const node = createDroppedNode({ shape: "circle", width: 80, height: 80 }, { x: 12, y: 34 })
 
     expect(node.type).toBe(CANVAS_NODE_TYPE)
     expect(node.position).toEqual({ x: 12, y: 34 })
     expect(node.width).toBe(80)
     expect(node.height).toBe(80)
-    expect(node.data).toEqual({ label: "", color: DEFAULT_NODE_COLOR, shape: "circle" })
+    expect(node.data).toEqual({
+      label: "",
+      color: DEFAULT_NODE_COLOR,
+      textColor: DEFAULT_NODE_TEXT_COLOR,
+      shape: "circle",
+    })
     expect(node.id.startsWith("circle-")).toBe(true)
   })
 

@@ -6,7 +6,13 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react"
 import { CanvasNode } from "./canvas-node"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { NODE_MIN_SIZE } from "@/lib/canvas-shapes"
-import { DEFAULT_NODE_COLOR, type CanvasNode as CanvasNodeType, type NodeShape } from "@/types/canvas"
+import {
+  DEFAULT_NODE_COLOR,
+  DEFAULT_NODE_TEXT_COLOR,
+  NODE_COLORS,
+  type CanvasNode as CanvasNodeType,
+  type NodeShape,
+} from "@/types/canvas"
 
 function makeProps(
   overrides: Partial<CanvasNodeType["data"]> = {},
@@ -15,7 +21,13 @@ function makeProps(
   return {
     id: "node-1",
     type: "canvasNode",
-    data: { label: "", color: DEFAULT_NODE_COLOR, shape: "rectangle", ...overrides },
+    data: {
+      label: "",
+      color: DEFAULT_NODE_COLOR,
+      textColor: DEFAULT_NODE_TEXT_COLOR,
+      shape: "rectangle",
+      ...overrides,
+    },
     selected,
     dragging: false,
     zIndex: 0,
@@ -203,6 +215,49 @@ describe("CanvasNode", () => {
       const wrapper = screen.getByText("My Service").parentElement as HTMLElement
       expect(wrapper.className).toContain("nodrag")
       expect(wrapper.className).toContain("nopan")
+    })
+  })
+
+  describe("color toolbar", () => {
+    it("renders one swatch button per NODE_COLORS pair when selected", () => {
+      renderNode(makeProps({}, true))
+      const swatches = screen.getAllByRole("button", { name: /Set node color to/i })
+      expect(swatches).toHaveLength(NODE_COLORS.length)
+    })
+
+    it("renders no color toolbar when unselected", () => {
+      renderNode(makeProps({}, false))
+      expect(screen.queryByRole("button", { name: /Set node color to/i })).not.toBeInTheDocument()
+    })
+
+    it("dispatches both color and textColor through the update-node-data context on swatch click", () => {
+      const updateNodeData = vi.fn()
+      renderNode(makeProps({}, true), updateNodeData)
+
+      const bluePair = NODE_COLORS[1]
+      fireEvent.click(screen.getByRole("button", { name: `Set node color to ${bluePair.color}` }))
+
+      expect(updateNodeData).toHaveBeenCalledWith("node-1", {
+        color: bluePair.color,
+        textColor: bluePair.textColor,
+      })
+    })
+
+    it("applies the node's data.textColor to the shape container", () => {
+      const bluePair = NODE_COLORS[1]
+      const { container } = renderNode(
+        makeProps({ label: "X", color: bluePair.color, textColor: bluePair.textColor }),
+      )
+      const shapeRoot = container.firstElementChild as HTMLElement
+      expect(shapeRoot.style.color).toBe("rgb(82, 168, 255)") // #52A8FF
+    })
+
+    it("applies the node's data.textColor to the edit-mode textarea", () => {
+      const bluePair = NODE_COLORS[1]
+      renderNode(makeProps({ label: "X", color: bluePair.color, textColor: bluePair.textColor }))
+      fireEvent.doubleClick(screen.getByText("X"))
+      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement
+      expect(textarea.style.color).toBe("rgb(82, 168, 255)") // #52A8FF
     })
   })
 })
