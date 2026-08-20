@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 20: AI Sidebar Shell — not yet started.
+- Phase 20: AI Sidebar Shell — Dev pass complete, awaiting QA.
 
 ## Current Goal
-- Analyst pass for feature spec 20 (AI Sidebar Shell) at `context/feature-specs/20-ai-sidebar-shell.md`.
+- QA pass for feature spec 20 (AI Sidebar Shell) at `context/spec-status/20-ai-sidebar-shell.md`.
 
 ## Completed
 
@@ -244,11 +244,22 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None.
+- Feature spec 20: AI Sidebar Shell
+  - `components/editor/ai-sidebar.tsx` (new) — the sidebar root: preserves the placeholder's floating position/slide transform/border/background exactly, adds the header (bot icon, "AI Workspace" title, "Collaborate with Ghost AI" subtitle, close button wired to a new `onClose` prop) and a shadcn `Tabs` shell ("AI Architect"/"Specs"), with active-tab styling driven by local `activeTab` state reusing `project-sidebar.tsx`/`share-dialog.tsx`'s existing `bg-accent-dim`/`text-brand` "active" convention.
+  - `components/editor/ai-architect-tab.tsx` (new) — chat UI: scrollable message area, empty state (bot icon, description, three exact-copy starter prompt chips that fill-not-submit the textarea), bottom input row (auto-resizing `Textarea`, `min-h-[72px] max-h-[160px]`, Send button). `Enter` submits, `Shift+Enter` newlines; submitting appends a local ephemeral user bubble only (no assistant reply/persistence/network call). Also exports `ChatBubble` (user right-aligned/`bg-accent-dim`, assistant left-aligned/`text-ai-text`) as directly-tested, real code even though the assistant branch isn't reachable through this spec's own UI yet.
+  - `components/editor/specs-tab.tsx` (new) — enabled-looking "Generate Spec" button (no wired handler) plus exactly one static demo spec card with a `disabled` download action.
+  - `components/editor/ai-sidebar-placeholder.tsx` (deleted) — fully superseded, no remaining code references.
+  - `components/editor/workspace-shell.tsx` (modified) — swaps `AiSidebarPlaceholder` for `AiSidebar`, passing `onClose={() => setIsAiSidebarOpen(false)}`; `isAiSidebarOpen` state and the navbar toggle untouched.
+  - `components/editor/workspace-shell.test.tsx` (modified) — placeholder-text assertions updated to the real header text; added a close-button test.
+  - `context/ui-context.md` (modified) — new "AI Sidebar" section under Canvas.
+  - Tests: `components/editor/ai-sidebar.test.tsx`, `components/editor/ai-architect-tab.test.tsx`, `components/editor/specs-tab.test.tsx` (all new). 316/316 tests passing across 41 files (up from 298/38 at the end of spec 19), via `--no-file-parallelism` (default parallelism hit the same environment-driven worker-timeout flakiness documented for spec 18).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - No Liveblocks, `/api/ai/*`, or Trigger.dev references anywhere in the diff — presentational shell only, per the brief's Scope Limits.
+  - Not yet QA-reviewed. Full pipeline trail in `context/spec-status/20-ai-sidebar-shell.md`.
 
 ## Next Up
 
-- Analyst pass for feature spec 20 (AI Sidebar Shell) at `context/feature-specs/20-ai-sidebar-shell.md`.
+- QA pass for feature spec 20 (AI Sidebar Shell).
 - Human review/merge of spec 19's PR (once opened) and the still-open PRs for specs 12–18.
 
 ## Open Questions

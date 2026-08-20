@@ -43,20 +43,34 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("heading", { name: "Project One" })).toBeInTheDocument();
     expect(screen.getByTestId("canvas")).toHaveAttribute("data-room-id", "p1");
 
-    const aiSidebar = screen.getByText(/ai chat is coming soon/i).closest("aside");
+    const aiSidebar = screen.getByText("AI Workspace").closest("aside");
     expect(aiSidebar).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("toggles the AI sidebar placeholder open and closed", () => {
+  it("toggles the AI sidebar open and closed via the navbar button", () => {
     render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
 
     const toggle = screen.getByRole("button", { name: /toggle ai sidebar/i });
-    const aiSidebar = screen.getByText(/ai chat is coming soon/i).closest("aside");
+    const aiSidebar = screen.getByText("AI Workspace").closest("aside");
 
     fireEvent.click(toggle);
     expect(aiSidebar).toHaveAttribute("aria-hidden", "false");
 
     fireEvent.click(toggle);
+    expect(aiSidebar).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("closes the AI sidebar via its own header close button", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    const toggle = screen.getByRole("button", { name: /toggle ai sidebar/i });
+    fireEvent.click(toggle);
+
+    const aiSidebar = screen.getByText("AI Workspace").closest("aside") as HTMLElement;
+    expect(aiSidebar).toHaveAttribute("aria-hidden", "false");
+
+    const closeButton = screen.getByRole("button", { name: /close ai sidebar/i });
+    fireEvent.click(closeButton);
     expect(aiSidebar).toHaveAttribute("aria-hidden", "true");
   });
 
