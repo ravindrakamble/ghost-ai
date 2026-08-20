@@ -117,3 +117,82 @@ Commands run, all passing:
 - No live browser/manual verification of drag-resize or double-click-edit interactions — consistent with this pipeline's prior specs (11–13), which have all flagged the same "no interactive browser session available" limitation and recommended a human smoke test before considering the spec fully done. Recommended smoke test: select a node, drag each of the 8 resize handles and confirm it won't shrink below ~40×40 and that a second browser tab sees the resize live; double-click a node's label, type, confirm the second tab sees the label update live as you type, then confirm blur/Escape both close editing without losing the typed text.
 - Textarea is single-line-sized (`rows={1}`, no auto-grow); a very long label will horizontally scroll within the textarea rather than wrapping. Not specified by the brief ("textarea" only, no multi-line/growth requirement) — flagged as a reasonable MVP choice, not a gap against any acceptance criterion.
 - `updateNodeData`'s `useCallback` identity changes whenever `nodes` changes (i.e. on most canvas interactions, including other users' concurrent edits) since it closes over the live `nodes` array to look up the target node. This is a minor referential-stability cost, not a correctness issue — flagged in case a future spec cares about it for a `React.memo`-wrapped `CanvasNode`.
+
+## QA Report
+
+**Overall verdict: FAIL**
+
+### Mechanical gate
+
+All commands independently reproduced on branch spec/14-node-editing (commit bfb4e56):
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit` | PASS - no errors |
+| `npx eslint .` | PASS - 0 errors, 1 pre-existing unrelated warning in `.agents/skills/clerk-tanstack-patterns/...` |
+| `npx vitest run` | PASS - 193/193 tests, 26 files |
+| `npx next build` | PASS - compiles, route manifest generated with no errors |
+
+Matches the Dev Notes claims exactly.
+
+### Acceptance criteria
+
+1. Selected node shows resize handles, unselected does not - PASS. NodeResizer isVisible={selected}; test coverage confirms .react-flow__resize-control present only when selected.
+2. Dragging a resize handle updates width/height through onNodesChange - PASS (code-review/library-level verification only, no live browser session available - consistent with this pipeline prior specs documented limitation). nodeId={id} correctly wired, no custom resize logic that could diverge from NodeResizer own onNodesChange-based dispatch.
+3. Cannot resize below a defined minimum - PASS. NODE_MIN_SIZE = width 40 height 40 in lib/canvas-shapes.ts, passed as minWidth/minHeight, well below every SHAPE_DEFAULT_SIZES entry; bounds-checked in lib/canvas-shapes.test.ts.
+4. Resize handles subtle, token-based (no raw hex/zinc classes) - PASS. handleClassName/lineClassName use border-brand, bg-base, border-surface-border, all confirmed CSS-custom-property-backed tokens in app/globals.css (--accent-primary, --bg-base, --border-default), not raw Tailwind palette classes.
+5. Double-click node center/label area opens inline editing - PASS, with a UX caveat. The onDoubleClick handler lives on the nodrag nopan wrapper div, which shrink-wraps to the label span/placeholder own content box rather than filling the node full center area. Double-clicking directly on the label/placeholder text opens editing (verified in tests and by code review); double-clicking elsewhere inside the node visual bounds but outside that shrink-wrapped text does nothing. This is a defensible reading of the spec center/label area wording, so not failing the criterion outright, but flagging as a minor hit-target gap - see Issues below.
+6. Textarea shown directly over label in the same centered position, no layout shift - FAIL. See Issue 1 below.
+7. Placeholder text in same centered position at rest and while editing - PASS. At rest a span shows Untitled; while editing the textarea placeholder is Untitled, both inside the same children slot ShapeVisual centers. Test-covered.
+8. Typing updates label through the existing sync flow, not local-only - PASS. canvas.tsx updateNodeData looks up the node in useLiveblocksFlow real nodes, merges the patch, and dispatches a genuine onNodesChange replace change - confirmed by code review this is the same prop passed to ReactFlow onNodesChange, not a useReactFlow-store-only mutation or a non-serializable callback embedded in data.
+9. Editing closes on blur or Escape - PASS. Test-covered for both.
+10. Text interactions do not trigger node drag/canvas pan - PASS. nodrag nopan classes present on the wrapper at all times (rest and editing); test-covered.
+11. Shape rendering, shape panel, drag preview, dropped-node creation unchanged from spec 13 - PASS, independently verified via git diff on shape-visual.tsx and shape-panel.tsx (empty diff, byte-for-byte untouched) and git diff on lib/canvas-shapes.ts (purely additive NODE_MIN_SIZE constant; createDroppedNode/generateNodeId/drop-position math untouched).
+12. npm run build / npx tsc --noEmit / npx eslint . pass - PASS, see Mechanical gate above.
+
+### Architecture invariants
+
+No violations found. No long-running AI work introduced, no metadata/blob storage boundary touched, no auth/ownership mutation surface added (canvas-only client-side interaction), CanvasNode/CanvasFlow remain appropriately client components (already were).
+
+### Standards compliance
+
+- No raw Tailwind color classes (zinc-, slate-) or hex values introduced in the diff (grep came back empty on the changed files).
+- No any usage introduced.
+- components/ui/* untouched (not part of this diff).
+- ShapeVisual (components/editor/shape-visual.tsx) genuinely untouched, per Scope Limits.
+
+### Issues
+
+1. [Bug -> Dev] components/editor/canvas-node.tsx, the editing textarea branch around line 78-87 - the editing textarea has no explicit width constraint (no w-full, max-w-full, or cols prop; only rows=1). Per the HTML living standard, a textarea with no cols attribute defaults to a suggested width of 20 characters, which for a text-sm node label renders at roughly 150 to 180px depending on font metrics, independent of the node actual box size. ShapeVisual containers (both the CSS-shape branch flex/px-3 div and the SVG-shape branch relative/px-3 div) have no overflow-hidden, so this textarea will very likely render wider than, and visually spill out of, the node shape boundary for every node at or near its size floor or common default: the flat NODE_MIN_SIZE (40x40), the default circle (80x80), cylinder (100x120), and hexagon (140x100) are all narrower than the textarea default intrinsic width, even before subtracting the px-3 padding. This directly undermines acceptance criterion 6, no layout shift / same centered position intent - instead of occupying the label footprint, the textarea will overhang the node during editing. Dev Notes Key Decision 5 addressed the under-sizing risk (percentage width against an undetermined base) but not the over-sizing risk from the browser cols=20 default. Recommend constraining the textarea rendered width to the node available box, e.g. adding max-w-full combined with box-sizing border-box, or setting a cols value tied to font metrics, and confirming with a manual/browser check (Dev Notes own Known Limitations section already flags no browser session was available for this spec, so this specific case was not caught).
+2. [Bug -> Dev, minor/non-blocking] components/editor/canvas-node.tsx, the nodrag nopan wrapper div with onDoubleClick around line 76 - the onDoubleClick handler is bound to the nodrag nopan wrapper div, whose box shrink-wraps to the label/placeholder text own content size rather than the node full center area. For nodes with a short label (or the Untitled placeholder) inside a larger shape, double-clicking near-but-not-exactly-on the text does not open editing, even though it is within what a user would perceive as the node center/label area. Consider widening the double-click hit target (e.g. h-full w-full on the wrapper, matching ShapeVisual own centered flex box) so the whole label region, not just the tightly-wrapped text glyphs, is double-clickable. Not failing acceptance criterion 5 outright since double-clicking the visible text does work and is test-covered, but worth a follow-up fix alongside Issue 1 since both touch the same wrapper.
+
+### Housekeeping
+
+context/progress-tracker.md and context/ui-context.md were both updated appropriately: progress tracker reflects Senior Developer pass done, QA next, with an accurate summary of files touched, and ui-context.md gained Node Resize and Node Label Editing subsections under Canvas documenting the handle/line tokens, NODE_MIN_SIZE, and the textarea-overlay/live-sync convention, consistent with Keeping Docs In Sync.
+
+QA failed - see issues above. Routing to Dev (both issues are implementation/styling fixes on components/editor/canvas-node.tsx, not ambiguity in the brief - the brief textarea directly over the label, no layout shift language is clear enough that this is a Dev-level CSS-containment fix, not a spec gap).
+
+## Dev Notes — QA bugfix round
+
+### Files changed
+
+- `components/editor/canvas-node.tsx` (modified) — fixed both QA-reported bugs, no other files touched (confirmed via `git diff`/`git status`; scope stayed within the Scope Limits, no change to `shape-visual.tsx`, the shape panel, or node creation/drop logic).
+
+### Fixes
+
+1. **Issue 1 (blocking) — textarea overflowing the node's shape boundary.** The editing `<textarea>` now carries `box-border w-full min-w-0 max-w-full` alongside its existing classes, and the `nodrag nopan` wrapper `<div>` around both the textarea and the label/placeholder now carries `flex h-full w-full min-w-0 items-center justify-center` (previously it had no layout classes at all, so it shrink-wrapped to content). The `min-w-0` on both the wrapper and the textarea is the load-bearing part of this fix, not just `w-full`/`max-w-full`: a bare `width: 100%` on a descendant of an auto-sized flex item (the SVG-shape branch's intermediate `px-3` div in `ShapeVisual`, which this spec cannot touch) is treated as `auto` during that ancestor's own intrinsic (max-/min-content) size computation per the CSS sizing algorithm, so without overriding the textarea's default automatic minimum width (which is what produces the ~150–180px unshrinkable floor QA measured), the ancestor's flex-shrink would still be capped at that floor and the overflow would persist. Setting `min-width: 0` on the textarea (and defensively on the wrapper, since the wrapper itself is the direct flex item in the CSS-shape branch) removes that floor, letting the whole chain shrink down to whatever width the node's real box actually provides in both `ShapeVisual` branches (CSS-shape: rectangle/pill/circle: the wrapper is the flex item directly; SVG-shape: diamond/hexagon/cylinder: the wrapper is nested inside `ShapeVisual`'s own `px-3` flex item) — verified by reasoning through both branches' flex layout, not a live browser session (still unavailable in this pipeline, per the original Dev Notes' Known Limitations — flagging that this reasoning-based verification, like the rest of this spec's resize/edit behavior, should still get a human smoke test before being considered fully proven).
+2. **Issue 2 (minor) — double-click hit target too small.** The same wrapper `<div>` change above (`flex h-full w-full items-center justify-center`) also fixes this: the wrapper now fills the space `ShapeVisual` gives it instead of shrink-wrapping to the label/placeholder text's own content box, so `onDoubleClick` (still bound to that same wrapper) fires across that filled area rather than only the tight text glyphs. In the CSS-shape branch (rectangle/pill/circle) this reaches the node's full interior (minus `ShapeVisual`'s own `px-3` padding/border). In the SVG-shape branch (diamond/hexagon/cylinder) the improvement is bounded by `ShapeVisual`'s own intermediate `px-3` div, which — per the same flex reasoning as Issue 1 — now sizes itself to the available node width rather than shrink-wrapping to the textarea's old oversized intrinsic width, but its height still isn't force-stretched to the node's full height (that div's parent uses `align-items: center`, not `stretch`, and `ShapeVisual` is out of scope to change). This is a partial, in-scope improvement consistent with QA's own suggested fix and framing of this issue as minor/non-blocking, not a full-shape hit target in every branch.
+3. **No changes to the double-click handler itself, editing state logic, sync/dispatch mechanism, resize handling, or `NODE_MIN_SIZE`** — both bugs were containable to wrapper/textarea CSS, consistent with QA's own read that this was a Dev-level CSS-containment fix, not a spec or mechanism gap.
+
+### Verification
+
+Commands run, all passing:
+- `npx tsc --noEmit` — pass, no errors.
+- `npx eslint .` — pass, 0 errors (same 1 pre-existing unrelated warning in `.agents/skills/clerk-tanstack-patterns/…`, untouched by this change).
+- `npx vitest run` — 193/193 passing across 26 files (unchanged count — existing `nodrag`/`nopan` class assertions use `toContain`, so they still pass against the wrapper's now-longer class list; no new tests added for this bugfix round since the existing double-click/editing/nodrag-nopan coverage already exercises the changed element, and the bug itself was a CSS-containment issue not expressible in JSDOM's layout-less test environment).
+- `npx next build` — pass, compiles and generates the route manifest with no errors.
+
+### Known limitations / deferrals (carried forward)
+
+- Still no live browser/manual verification available in this pipeline. The Issue 1 fix is reasoned through CSS flex-layout mechanics (documented above) rather than confirmed by rendering; recommended smoke test (in addition to the original spec's resize/edit smoke test): shrink a node down to `NODE_MIN_SIZE` (40×40) and to each SVG-shape's default (hexagon 140×100, cylinder 100×120), double-click to edit, and visually confirm the textarea stays within the shape's boundary rather than spilling out.
+- The SVG-shape branch's double-click hit target still doesn't cover the node's full vertical extent (see Issue 2 fix notes above) — a `ShapeVisual`-level change would be needed to fully close that gap, which is out of this spec's scope.

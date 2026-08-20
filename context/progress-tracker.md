@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 14: Node Editing — Senior Developer pass done, QA next.
+- Phase 14: Node Editing — QA bugfix round done, re-review by QA next.
 
 ## Current Goal
-- QA pass on feature spec 14 (Node Editing).
+- QA re-review of feature spec 14 (Node Editing) bugfixes.
 
 ## Completed
 
@@ -160,7 +160,8 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- Feature spec 14: Node Editing (Senior Developer pass done, awaiting QA)
+- Feature spec 14: Node Editing (QA failed once — textarea overflowed the node's shape boundary at small sizes, plus a minor double-click hit-target gap; both fixed on the same branch, awaiting QA re-review)
+  - QA bugfix round: `components/editor/canvas-node.tsx` — the editing `<textarea>` gained `box-border w-full min-w-0 max-w-full`, and the `nodrag nopan` wrapper `<div>` around the label/textarea gained `flex h-full w-full min-w-0 items-center justify-center` (previously unstyled, shrink-wrapping to content). Fixes both the textarea-overflow bug (via `min-w-0` removing the textarea's default ~150–180px unshrinkable floor so it can flex-shrink to the node's real box) and widens the double-click hit target to the wrapper's filled area. No other files touched. `npx tsc --noEmit`/`npx eslint .`/`npx vitest run` (193/193)/`npx next build` all still pass. See `context/spec-status/14-node-editing.md`'s second "Dev Notes" section for full detail.
   - `components/editor/canvas-node.tsx` (modified) — adds `@xyflow/react`'s `<NodeResizer>` (visible only when `selected`, min size from new `NODE_MIN_SIZE`, styled with `border-brand`/`bg-base` handles and a `border-surface-border` line — no raw hex) rendered as a sibling of `ShapeVisual`, after it in DOM order (so its `position: absolute` controls paint above the shape regardless of the CSS-shape-vs-SVG-shape branch's own `position`); adds double-click-to-edit (`useState` local `isEditing`) rendering a `<textarea>` in the same `children` slot `ShapeVisual` already centers, with `nodrag nopan` classes on the editable wrapper. Label changes dispatch on every keystroke through `useUpdateCanvasNode()`.
   - `hooks/use-update-canvas-node.ts` (new) — `CanvasNodeUpdateContext` + `useUpdateCanvasNode()`, the mechanism a leaf `CanvasNode` uses to dispatch a label update back through `CanvasFlow`'s real `onNodesChange` (a `"replace"` `NodeChange`) without embedding a non-serializable callback in Liveblocks-synced `data` or mutating React Flow's internal store directly. Returns `null` outside the provider.
   - `components/editor/canvas.tsx` (modified) — `CanvasFlow` now builds `updateNodeData` (looks up the current node by ID, merges the partial `data` update, dispatches `onNodesChange([{ id, type: "replace", item }])`) and provides it via `CanvasNodeUpdateContext.Provider` wrapping `<ReactFlow>`. No changes to drop/creation logic.
@@ -173,7 +174,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- QA pass on feature spec 14 (Node Editing).
+- QA re-review of feature spec 14 (Node Editing) bugfixes.
 
 ## Open Questions
 

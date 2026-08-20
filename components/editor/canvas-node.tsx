@@ -73,7 +73,10 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
           controls) — keeps clicking, selecting text, and typing here from
           starting a node drag or canvas pan.
         */}
-        <div className="nodrag nopan" onDoubleClick={handleDoubleClick}>
+        <div
+          className="nodrag nopan flex h-full w-full min-w-0 items-center justify-center"
+          onDoubleClick={handleDoubleClick}
+        >
           {isEditing ? (
             <textarea
               ref={focusOnMount}
@@ -83,7 +86,7 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
               onKeyDown={handleKeyDown}
               placeholder="Untitled"
               rows={1}
-              className="resize-none bg-transparent text-center text-sm text-copy-primary outline-none placeholder:text-copy-faint"
+              className="box-border w-full min-w-0 max-w-full resize-none bg-transparent text-center text-sm text-copy-primary outline-none placeholder:text-copy-faint"
             />
           ) : data.label ? (
             <span className="truncate">{data.label}</span>
