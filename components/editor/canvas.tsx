@@ -6,7 +6,6 @@ import {
   BackgroundVariant,
   ConnectionMode,
   MarkerType,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -18,14 +17,20 @@ import {
   ClientSideSuspense,
   LiveblocksProvider,
   RoomProvider,
+  useCanRedo,
+  useCanUndo,
   useErrorListener,
+  useRedo,
+  useUndo,
 } from "@liveblocks/react/suspense"
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
+import { CanvasControlBar } from "@/components/editor/canvas-control-bar"
 import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
 import { ShapePanel } from "@/components/editor/shape-panel"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { CANVAS_DRAG_MIME_TYPE, createDroppedNode, parseShapeDragPayload } from "@/lib/canvas-shapes"
 import {
   CANVAS_EDGE_TYPE,
@@ -60,6 +65,16 @@ const DEFAULT_EDGE_OPTIONS: DefaultEdgeOptions = {
   type: CANVAS_EDGE_TYPE,
   markerEnd: { type: MarkerType.ArrowClosed, color: "var(--text-secondary)" },
 }
+
+/**
+ * Passed as `{ duration }` to `zoomIn`/`zoomOut`/`fitView` so the viewport
+ * transition animates smoothly rather than jumping instantly — `@xyflow/
+ * react`'s own animated-transition mechanism, not a hand-rolled CSS
+ * transition. No exact value is pinned by the spec text; 200ms is a Dev-level
+ * choice within its own recommended 150–300ms range. See spec 17's Analyst
+ * Brief, Open Questions #2.
+ */
+const ZOOM_TRANSITION_DURATION_MS = 200
 
 interface CanvasProps {
   /** Liveblocks room ID — the current project's ID (spec 10's convention). */
@@ -168,6 +183,16 @@ function CanvasError() {
  * renderer can dispatch label edits back through the real `onEdgesChange`
  * — see spec 16's Analyst Brief, Open Questions #1, and
  * `hooks/use-update-canvas-edge.ts`.
+ *
+ * Spec 17 (Canvas Ergonomics) reads the real React Flow zoom methods
+ * (`zoomIn`/`zoomOut`/`fitView`, from the same `useReactFlow()` call already
+ * used for `screenToFlowPosition`) and Liveblocks' four room-history hooks
+ * (`useUndo`/`useRedo`/`useCanUndo`/`useCanRedo`, valid here since
+ * `CanvasFlow` already sits inside `RoomProvider`), then passes the results
+ * down as plain props to `CanvasControlBar` and as arguments to
+ * `useKeyboardShortcuts` — not a new context, since both are siblings
+ * `CanvasFlow` itself instantiates. See spec 17's Analyst Brief, Open
+ * Questions #4. Also drops `<MiniMap>` (spec 17's Concrete deliverables).
  */
 function CanvasFlow() {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useLiveblocksFlow<
@@ -178,7 +203,11 @@ function CanvasFlow() {
     nodes: { initial: [] },
     edges: { initial: [] },
   })
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow()
+  const undo = useUndo()
+  const redo = useRedo()
+  const canUndo = useCanUndo()
+  const canRedo = useCanRedo()
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!event.dataTransfer.types.includes(CANVAS_DRAG_MIME_TYPE)) return
@@ -222,6 +251,23 @@ function CanvasFlow() {
     [edges, onEdgesChange],
   )
 
+  // Shared by both CanvasControlBar's buttons and the keyboard shortcuts
+  // below, so both trigger the exact same animated zoom/undo/redo behavior
+  // — see this component's docblock, spec 17's Analyst Brief.
+  const handleZoomIn = useCallback(() => {
+    zoomIn({ duration: ZOOM_TRANSITION_DURATION_MS })
+  }, [zoomIn])
+
+  const handleZoomOut = useCallback(() => {
+    zoomOut({ duration: ZOOM_TRANSITION_DURATION_MS })
+  }, [zoomOut])
+
+  const handleFitView = useCallback(() => {
+    fitView({ duration: ZOOM_TRANSITION_DURATION_MS })
+  }, [fitView])
+
+  useKeyboardShortcuts({ zoomIn: handleZoomIn, zoomOut: handleZoomOut, undo, redo })
+
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
@@ -239,9 +285,17 @@ function CanvasFlow() {
           connectionMode={ConnectionMode.Loose}
           fitView
         >
-          <MiniMap />
           <Background variant={BackgroundVariant.Dots} />
         </ReactFlow>
+        <CanvasControlBar
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onFitView={handleFitView}
+          onUndo={undo}
+          onRedo={redo}
+          canUndo={canUndo}
+          canRedo={canRedo}
+        />
       </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>
   )

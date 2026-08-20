@@ -123,9 +123,22 @@ React Flow `<Background>` component. Canvas sits on the base background color.
 
 ### Floating Shape Panel
 
-Bottom-center pill-shaped toolbar for dragging new shapes onto the canvas (spec 12). Convention: `rounded-full` container (the standard way to get a true pill shape — the Border Radius scale has no dedicated "pill" entry), `bg-elevated` background with `border-surface-border`, matching the same floating-overlay visual language documented for sidebars above. Positioned via `absolute bottom-* left-1/2 -translate-x-1/2` inside the canvas's `relative` wrapper; does not overlap the default bottom-right `MiniMap`.
+Bottom-center pill-shaped toolbar for dragging new shapes onto the canvas (spec 12). Convention: `rounded-full` container (the standard way to get a true pill shape — the Border Radius scale has no dedicated "pill" entry), `bg-elevated` background with `border-surface-border`, matching the same floating-overlay visual language documented for sidebars above. Positioned via `absolute bottom-* left-1/2 -translate-x-1/2` inside the canvas's `relative` wrapper; does not overlap the bottom-left Canvas Control Bar (below) — spec 17 removed the previous default `MiniMap` this section used to reference.
 
 Drag preview (spec 13): starting a drag from a shape button shows a cursor-attached ghost preview via the native `dataTransfer.setDragImage(element, xOffset, yOffset)` API — not a custom `mousemove`-tracked floating element. The panel keeps one always-mounted, off-screen preview `<div>` per shape (sized per `SHAPE_DEFAULT_SIZES`, rendered with the same `ShapeVisual` geometry `CanvasNode` uses), because `setDragImage` needs a real, already-rendered DOM node at the moment `dragstart` fires — state committed inside that same synchronous handler wouldn't exist in the DOM yet. The browser positions and removes the ghost automatically for the whole drag (drop or cancel), so no extra cleanup code is needed.
+
+### Canvas Control Bar
+
+Floating pill-shaped toolbar (`components/editor/canvas-control-bar.tsx`, spec 17) positioned bottom-left, above the bottom-center Floating Shape Panel so the two never overlap. Same visual language as that panel: `rounded-full` container, `bg-elevated` background with `border-surface-border`. Positioned via `absolute bottom-24 left-6` inside the canvas's `relative` wrapper (a higher `bottom` offset than the Shape Panel's `bottom-6`, so the two stay vertically separated regardless of viewport width, not just relying on the left/center horizontal split).
+
+Two button groups, separated by a thin single-token divider (`border-surface-border`'s paired `--color-surface-border`, applied as a 1px `bg-surface-border` vertical rule — not a new visual element or token):
+
+- **Zoom controls**: zoom out, fit view, zoom in — call the real React Flow instance's `zoomOut`/`fitView`/`zoomIn` (from `useReactFlow()`, already called in `CanvasFlow` for `screenToFlowPosition`), each passed `{ duration: 200 }` for `@xyflow/react`'s own animated viewport transition (not a hand-rolled CSS transition). 200ms is a Dev-level choice within the spec's own recommended 150–300ms range.
+- **History controls**: undo, redo — call Liveblocks' `useUndo()`/`useRedo()` handlers (room-scoped canvas-edit history, not a local-only or React-Flow-only mechanism). Disabled (via the shadcn `Button`'s native `disabled` prop, which already ships `disabled:opacity-50`) when `useCanUndo()`/`useCanRedo()` report `false` — no custom dimming CSS needed.
+
+`hooks/use-keyboard-shortcuts.ts` mirrors the same five actions on a single `window` `keydown` listener: `+`/`=` zooms in, `-` zooms out, `Cmd/Ctrl+Z` undoes, `Cmd/Ctrl+Shift+Z` and `Cmd/Ctrl+Y` both redo. Ignored entirely when the event's target or `document.activeElement` is an `<input>`, `<textarea>`, or another `isContentEditable`/`contenteditable` element — the guard that keeps shortcuts from hijacking the node-label (spec 14) and edge-label (spec 16) inline-editing fields. Every recognized shortcut calls `event.preventDefault()` so the app's handling wins over the browser's own native zoom/undo behavior for the same keys.
+
+`CanvasFlow` (`components/editor/canvas.tsx`) is the single source for all of the above — it calls `useReactFlow()`'s zoom methods and Liveblocks' four history hooks directly (valid since it already sits inside `RoomProvider`), then passes the results down as plain props to `CanvasControlBar` and as arguments to `useKeyboardShortcuts`, not through a new React context (both are siblings `CanvasFlow` itself instantiates). No `MiniMap` renders anywhere on the canvas — removed as part of this spec.
 
 ## Component Library
 

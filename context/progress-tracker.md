@@ -3,12 +3,24 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 17: Canvas Ergonomics — not yet started.
+- Phase 18: Starter Template — not yet started.
 
 ## Current Goal
-- Analyst pass for feature spec 17 (Canvas Ergonomics) at `context/feature-specs/17-canvas-ergonomics.md`.
+- Analyst pass for feature spec 18 (Starter Template) at `context/feature-specs/18-starter-template.md`.
 
 ## Completed
+
+- Feature spec 17: Canvas Ergonomics
+  - `hooks/use-keyboard-shortcuts.ts` (new) — `useKeyboardShortcuts({ zoomIn, zoomOut, undo, redo })`, a single `window` `keydown` listener mirroring `CanvasControlBar`'s five actions (`+`/`=` zoom in, `-` zoom out, `Cmd/Ctrl+Z` undo, `Cmd/Ctrl+Shift+Z`/`Cmd/Ctrl+Y` redo), ignored when the event target or `document.activeElement` is an editable field (input/textarea/contenteditable) — the guard that keeps it from hijacking specs 14/16's inline label editing. Calls `preventDefault()` on every recognized shortcut.
+  - `components/editor/canvas-control-bar.tsx` (new) — `CanvasControlBar`: bottom-left pill toolbar, zoom out/fit view/zoom in then a `bg-surface-border` divider then undo/redo, all five actions and `canUndo`/`canRedo` passed in as props (no context). Undo/redo use the shadcn `Button`'s native `disabled` prop for the dimmed state.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` reads `zoomIn`/`zoomOut`/`fitView` from the existing `useReactFlow()` call plus Liveblocks' `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo` (`@liveblocks/react/suspense`), wraps zoom calls with a shared `{ duration: 200 }`, wires both `CanvasControlBar` and `useKeyboardShortcuts` off the same handlers, and removes `<MiniMap>` (and its import). No changes to drag/drop, node/edge creation, or the existing collaborative sync setup.
+  - `context/ui-context.md` (modified) — new "Canvas Control Bar" section; updated Floating Shape Panel's stale `MiniMap` reference.
+  - Tests: `hooks/use-keyboard-shortcuts.test.ts` (new, 11 tests), `components/editor/canvas-control-bar.test.tsx` (new, 6 tests), `components/editor/canvas.test.tsx` (extended — history-hook mock surface, zoom-method mock surface, `MiniMap` removal, control-bar/keyboard-shortcut wiring). 257/257 tests passing across 31 files (up from 236/29 at the end of spec 16).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 12 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced. Confirmed via `git diff spec/16-edge-behavior..spec/17-canvas-ergonomics` that `shape-panel.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, and `types/canvas.ts` are byte-for-byte untouched.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec strengthens Success Criterion 2 (multiple users collaborating in the same canvas) and the Core User Flow's "collaborators edit and refine the design" step by making the collaborative canvas genuinely navigable and undo-able (zoom/fit-view, visible working undo/redo, keyboard shortcuts) rather than closing a new criterion outright — appropriate incremental ergonomics work per `ai-workflow-rules.md`'s incremental philosophy, building on specs 12–16's node/edge/shape/color work. Independently re-verified via `git diff spec/16-edge-behavior..spec/17-canvas-ergonomics` (this branch's actual parent, not `main`) — not just trusting Dev/QA claims — that `shape-panel.tsx`, `canvas-node.tsx`, `canvas-edge.tsx`, `shape-visual.tsx`, `node-color-toolbar.tsx`, and `types/canvas.ts` are genuinely untouched, and that `canvas.tsx`'s changes are additive and scoped exactly as the brief describes (real Liveblocks history hooks and real React Flow zoom methods, no local-only or React-Flow-only history mechanism). No touches to any `project-overview.md` Out of Scope item. No live browser/multiplayer verification possible in this pipeline (consistent with specs 11–16) — recommended human smoke test (zoom/fit-view/undo/redo buttons and their keyboard equivalents, two-tab Liveblocks history sync, typing in a node/edge label doesn't trigger shortcuts, no minimap anywhere) before considering this fully proven, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #10](https://github.com/ravindrakamble/ghost-ai/pull/10) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/17-canvas-ergonomics.md`.
 
 - Feature spec 16: Edge Behavior
   - `hooks/use-update-canvas-edge.ts` (new) — `CanvasEdgeUpdateContext`/`useUpdateCanvasEdge()`, the edge-scoped mirror of spec 14's `hooks/use-update-canvas-node.ts`, so the leaf `CanvasEdge` renderer can dispatch label edits back through `CanvasFlow`'s real `onEdgesChange`.
@@ -206,7 +218,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## Next Up
 
-- Analyst pass for feature spec 17 (Canvas Ergonomics) at `context/feature-specs/17-canvas-ergonomics.md`.
+- Analyst pass for feature spec 18 (Starter Template) at `context/feature-specs/18-starter-template.md`.
 
 ## Open Questions
 
