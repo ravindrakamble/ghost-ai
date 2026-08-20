@@ -33,7 +33,7 @@ export function StarterTemplatesModal({ open, onOpenChange, onImport }: StarterT
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl rounded-3xl">
+      <DialogContent className="max-w-7xl rounded-3xl">
         <DialogHeader>
           <DialogTitle className="text-copy-primary">Starter templates</DialogTitle>
           <DialogDescription className="text-copy-secondary">
@@ -41,7 +41,7 @@ export function StarterTemplatesModal({ open, onOpenChange, onImport }: StarterT
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid max-h-[70vh] grid-cols-1 gap-4 overflow-y-auto py-1 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid max-h-[70vh] grid-cols-1 gap-6 overflow-y-auto py-1 sm:grid-cols-2 lg:grid-cols-3">
           {CANVAS_TEMPLATES.map((template) => (
             <div
               key={template.id}
