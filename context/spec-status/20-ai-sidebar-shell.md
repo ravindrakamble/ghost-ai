@@ -113,3 +113,95 @@ One deviation worth flagging for QA/PO: the brief left the file split ("Dev's ca
 - Chat and Specs tab local state fully resets when navigating away and back to `/editor/[roomId]` (component unmount) since nothing is persisted — expected and explicitly in scope per the brief (no Liveblocks/backend wiring yet).
 - `AiArchitectTab`'s `TabsContent` is rendered with `keepMounted` so switching to the Specs tab and back preserves in-progress chat/input state within a single session — a presentation-layer convenience, not a requirement of any acceptance criterion; the Specs tab has no analogous state to preserve, so it doesn't need it.
 - No visual/browser verification was possible in this pipeline (consistent with prior specs) — a human smoke test (open/close via both the navbar toggle and the new header close button, switch tabs, submit a message via Enter and via Send, click a starter chip, confirm the input auto-grows up to the 160px cap then scrolls) is recommended before considering this fully proven.
+
+## QA Report
+
+**Overall verdict: FAIL**
+
+### Mechanical gate
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit` | PASS - no errors |
+| `npx eslint .` | PASS - only the pre-existing, unrelated warning in `.agents/skills/clerk-tanstack-patterns/templates/...` |
+| `npx vitest run --no-file-parallelism` | PASS - 316/316 tests across 41 files (matches Dev's claim exactly) |
+| `npx next build` | PASS - Turbopack build compiled, typecheck clean, all routes generated |
+
+Diff scope independently confirmed via `git diff --stat bbe0fea..HEAD`: only `ai-architect-tab.tsx(.test)`, `ai-sidebar.tsx(.test)`, `specs-tab.tsx(.test)`, `ai-sidebar-placeholder.tsx` (deleted), `workspace-shell.tsx`/`.test.tsx`, `context/progress-tracker.md`, `context/ui-context.md`, and this spec-status file. No `canvas.tsx`, `workspace-navbar.tsx`, `app/api`, or `prisma/schema.prisma` touched - matches the brief's scope statement.
+
+### Acceptance criteria checklist
+
+1. **PASS** - `ai-sidebar-placeholder.tsx` deleted; `AiSidebar` rendered by `WorkspaceShell` in its place; `isOpen` still driven by `isAiSidebarOpen`; `workspace-navbar.tsx` unchanged (confirmed not in diff).
+2. **PASS** - `ai-sidebar.tsx`'s `<aside>` className verified byte-for-byte against the deleted placeholder's className (`git show` on the old file): `absolute top-0 right-0`, `h-full`, `w-80`, `translate-x-full`/`translate-x-0`, `duration-200 ease-in-out`, `border-l border-surface-border`, `bg-elevated/95 backdrop-blur` - all preserved exactly.
+3. **PASS** - `Bot` icon, "AI Workspace" (`text-copy-primary`), "Collaborate with Ghost AI" (`text-copy-muted`), right-aligned close button wired to `onClose`, all present and tested.
+4. **FAIL** - see Bug #1 below. The active tab does not actually render with `bg-accent-dim`/`text-brand` as claimed in Dev Notes and the new `ui-context.md` section; it renders with the shadcn/Base UI default `data-active:bg-background`/`data-active:text-foreground` instead, due to a CSS cascade/specificity issue. Verified empirically with a real browser (Playwright + the actual `next build` output CSS), not just code inspection.
+5. **PASS** - chat area, empty state (bot icon + description), exactly the three specified starter chips ("Design an e-commerce backend", "Create a chat app architecture", "Build a CI/CD pipeline"), `Textarea` with `min-h-[72px] max-h-[160px]` and `field-sizing-content` (baked into the shared `Textarea` primitive) for auto-resize, Send button - all present and tested.
+6. **PASS** - `Enter` (no Shift) calls `handleSubmit()` + `preventDefault()`; `Shift+Enter` falls through to the native newline; both covered by passing tests.
+7. **PASS** - verified both in code and empirically (Playwright + real compiled CSS): user bubbles render `justify-end`/`border-brand`/`bg-accent-dim`/`text-copy-primary` (computed: border `#00c8d4`, bg `rgba(0,200,212,0.12)`, text `#f0f0f4` - all correct token values); assistant bubbles `justify-start`/`border-surface-border`/`bg-subtle`/`text-ai-text`. `ChatBubble` is a plain `<div>` with no competing base-component default classes, so unlike the Tabs case (Bug #1) this one actually renders as intended.
+8. **PASS** - "Generate Spec" enabled-looking button, exactly one static demo card (`FileText` icon, title, snippet, `disabled` download icon button via the native `disabled` prop), `bg-elevated`/`border-surface-border`. No fetch/data logic.
+9. **PASS** - grep-verified: no `liveblocks`, `/api/ai`, or `trigger.dev` references anywhere in the new/changed component code except doc comments explicitly noting their *absence* (by design, per the brief).
+10. **PASS** - `git diff --stat bbe0fea..HEAD -- components/ui/` is empty; no protected foundation file touched.
+11. **PASS** - `grep -nE "\b(bg|text|border)-(white|black|zinc|gray|slate)(-[0-9]+)?\b|#[0-9a-fA-F]{3,8}"` across all new/changed component files returns no matches. All colors used resolve to real tokens defined in `app/globals.css`'s `@theme` block (`text-ai-text`, `bg-ai`, `text-brand`, `bg-accent-dim`, `border-brand`, `text-copy-primary`, `text-copy-muted`, `bg-elevated`, `border-surface-border`, `bg-subtle`).
+12. **PASS** (mechanical gate) - see table above. Note: `npx vitest run` alone (without `--no-file-parallelism`) still hits the same environment-driven worker-timeout flakiness documented in spec 18's Dev Notes; this is a pre-existing environment issue, not something spec 20 introduced, so it isn't blocking.
+
+### Issues
+
+**[Bug -> Dev] Active-tab styling (criterion 4) is silently overridden by the shadcn `Tabs`/Base UI default and never actually renders as `bg-accent-dim`/`text-brand`, contradicting both the Dev Notes and the new `ui-context.md` "AI Sidebar" section's own claims.**
+
+- **Where**: `components/editor/ai-sidebar.tsx`, `tabTriggerClassName()` (lines 17-25) applied at the two `TabsTrigger` call sites (lines 69, 72).
+- **Root cause**: `components/ui/tabs.tsx`'s `TabsTrigger` bakes in `data-active:bg-background data-active:text-foreground` (Base UI sets `data-active` on the selected tab automatically). Tailwind compiles that variant as `.data-active\:bg-background:where([data-active]:not([data-active=false]))` - the `:where()` wrapper gives it the *same* specificity as a plain, unconditional class like `.bg-accent-dim`. Because `tabTriggerClassName()` passes `bg-accent-dim`/`text-brand` as *unconditional* (non-`data-active:`-prefixed) classes, `tailwind-merge` (`cn()`) does not treat them as being in the same conflict group as the base's `data-active:bg-background`/`data-active:text-foreground` (different modifier prefix), so both rules survive into the final className, and standard CSS cascade order (not source-file order - verified via byte offsets in the actual `next build` output CSS) then lets the *later*-appearing `data-active:*` rule win.
+- **Verified empirically**, not just by reading the code: built the project (`npx next build`), extracted the real compiled `TabsTrigger` className exactly as `cn()` produces it, loaded it into a real Chromium instance (Playwright) with the actual generated `app/globals.css` output, and read `getComputedStyle()`:
+  - Active tab: computed `background-color: rgb(8, 8, 9)` (= `--background`, i.e. `#080809`) and `color: rgb(240, 240, 244)` (= `--foreground`/`--text-primary`, i.e. `#f0f0f4`) - not `--accent-primary-dim` (`bg-accent-dim`) or `--accent-primary` (`text-brand`, `#00c8d4`) as intended.
+  - By contrast, the inactive tab (`text-copy-muted`) and the Send button (`bg-ai`/`text-copy-primary`) render correctly, because in those cases `tailwind-merge` does recognize the override as conflicting with the base component's own unconditional (non-modifier-prefixed) classes and strips them out before the browser ever sees them.
+- **Impact**: The AI Architect tab is active by default on mount, so this is visible immediately, not just after a click. The active tab is still marginally distinguishable from the inactive one (different background/text than the inactive state), but not via the documented token pairing - it's the shadcn/Base UI library default, which isn't part of this app's documented "AI Sidebar" palette. This also means `ai-sidebar.test.tsx`'s assertions (`toContain("bg-accent-dim")`/`toContain("text-brand")`) are checking for the class name string in the DOM but not the actual computed/rendered style, so the test suite is green despite the visual contract not being met.
+- **Expected**: the active tab visually renders with `bg-accent-dim`/`text-brand` (or whatever token pairing Dev settles on), consistently, in an actual browser - not just present as a string in `className`.
+- **Suggested direction** (not mandating a specific fix): apply the override using the same `data-active:` modifier prefix the base component uses (e.g. `data-active:bg-accent-dim data-active:text-brand`) so `tailwind-merge` recognizes it as the same conflict group and correctly drops the base's `data-active:bg-background`/`data-active:text-foreground`, the same way the inactive-tab and Send-button overrides already work correctly elsewhere in this same file/PR.
+- Once fixed, the corresponding claims in Dev Notes and the new `ui-context.md` "AI Sidebar" section (both currently describe the intended-but-not-actually-rendered `bg-accent-dim`/`text-brand` active-tab behavior) should be double-checked against the real fix.
+
+### Housekeeping
+
+- `context/progress-tracker.md` - updated appropriately, reflects what was actually built and current phase/status. No issue.
+
+**QA failed - see issues above.** Routing to Dev (criterion 4 / active-tab styling bug). No spec-gap items - the brief's Open Questions #2 recommendation (`bg-accent-dim`/`text-brand` for the active tab) is clear and directly actionable; this is a CSS-cascade implementation defect, not an ambiguity in the brief.
+
+## Dev Notes — Bugfix round
+
+Scope of this round: QA's single reported bug (criterion 4, active-tab styling) only. No other files touched.
+
+### Files changed
+
+- `components/editor/ai-sidebar.tsx` — `tabTriggerClassName(isActive)` replaced with a single constant, `TAB_TRIGGER_CLASS_NAME`, applied unconditionally to both `TabsTrigger`s. The active-state classes are now `data-active:bg-accent-dim data-active:text-brand dark:data-active:bg-accent-dim dark:data-active:text-brand` instead of QA's own suggested direction of just `data-active:bg-accent-dim data-active:text-brand` — see "Why the suggested fix alone wasn't enough" below for why the `dark:data-active:` pair was also required. The `activeTab` React state is now used only to drive the controlled `Tabs`' `value`/`onValueChange`, not to compute per-trigger className — styling is keyed entirely off Base UI's own `data-active` DOM attribute now, matching the modifier prefixes `components/ui/tabs.tsx` itself uses.
+- `components/editor/ai-sidebar.test.tsx` — the tab-switching test now asserts the exact class tokens `data-active:bg-accent-dim`, `data-active:text-brand`, `dark:data-active:bg-accent-dim`, and `dark:data-active:text-brand` (not just the bare, ambiguous substrings `bg-accent-dim`/`text-brand`, which would have passed even under the original buggy code since those substrings appear inside the unconditional class names too), plus explicit `data-active` attribute presence/absence checks on the selected vs. unselected tab to confirm the selector these classes key off actually reflects real DOM state.
+- `context/ui-context.md` — the "AI Sidebar" section's Tabs bullet rewritten: no longer describes styling as computed from local `activeTab` state, now describes the `data-active:`/`dark:data-active:` override approach and why both modifier prefixes are required.
+- `context/spec-status/20-ai-sidebar-shell.md` — this section.
+
+### Why the suggested fix alone wasn't enough
+
+QA's suggested direction (`data-active:bg-accent-dim data-active:text-brand`, matching only the base component's plain `data-active:bg-background data-active:text-foreground` pair) was tried first and verified as insufficient before landing the final fix. `components/ui/tabs.tsx`'s `TabsTrigger` actually bakes in **two** competing active-state rule sets, not one:
+
+1. A plain pair: `data-active:bg-background data-active:text-foreground`
+2. A dark-mode-specific pair: `dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground`
+
+This app's `<html>` element carries a hardcoded, always-on `dark` class (`app/layout.tsx`, no light/dark toggle exists anywhere in the codebase), so both rule sets are live simultaneously, not just the plain one. Applying the override with only the plain `data-active:` prefix correctly made `tailwind-merge` drop rule set 1 (verified — `data-active:bg-background`/`data-active:text-foreground` no longer appear in the rendered className), but rule set 2 survived untouched, because `tailwind-merge` only treats two classes as the same conflict group when their full modifier chain matches, and `dark:data-active:*` is a different modifier chain than `data-active:*`. Rule set 2's compiled selector (`.dark\:data-active\:bg-input\/30:is(.dark *):where([data-active]...)`) also carries a higher specificity than a plain, single-modifier override (`.data-active\:bg-accent-dim:where([data-active]...)`) — an extra class-level match from `:is(.dark *)` — so even without `tailwind-merge`'s dedup, cascade math alone would have let it win.
+
+The final fix applies the override with **both** modifier chains — `data-active:bg-accent-dim data-active:text-brand dark:data-active:bg-accent-dim dark:data-active:text-brand` — putting it in the same conflict group as both of the base's rule sets, so `tailwind-merge` drops both, leaving only the intended override classes in the rendered className.
+
+### Verification method (mirrors QA's approach, not just code inspection)
+
+1. Ran `npx next build` (Turbopack) to produce the real compiled CSS.
+2. Extracted the actual `TabsTrigger` className exactly as this codebase's own `cn()` (`clsx` + `twMerge`, no custom config) produces it, using the real base classes copied verbatim from `components/ui/tabs.tsx` plus the new override — confirmed via exact token matching (not substring matching) that `data-active:bg-background`, `data-active:text-foreground`, `dark:data-active:bg-input/30`, and `dark:data-active:text-foreground` are all absent from the final className, and that `data-active:bg-accent-dim`, `data-active:text-brand`, `dark:data-active:bg-accent-dim`, and `dark:data-active:text-brand` are present.
+3. Built a minimal static HTML fixture reproducing the real DOM shape (`<html class="dark ...">`, a button with the computed className and a `data-active` attribute, matching how Base UI marks the selected tab) loaded with the actual generated CSS from the `next build` output.
+4. Loaded the fixture in a real Chromium instance via the `playwright` devDependency already in this repo and read `getComputedStyle()` on both the active and inactive triggers.
+5. **Result**: active tab computed `background-color: rgba(0, 200, 212, 0.12)` and `color: rgb(0, 200, 212)` — matching `--accent-primary-dim` (`bg-accent-dim`) and `--accent-primary` (`text-brand`) exactly, the same real token values QA's own Playwright check confirmed were correctly rendering elsewhere (e.g. the user chat bubble's `border-brand`). Inactive tab computed `background-color: rgba(0, 0, 0, 0)` (transparent) and `color: rgb(128, 128, 144)` (`--copy-muted`/`text-copy-muted`), unaffected by the fix. This confirms the fix renders correctly in a real browser against real compiled CSS, not just that the class name strings are present in the DOM.
+6. All fixture/scratch files used for this verification were temporary and removed before handoff — not part of the diff.
+
+### Gate results (bugfix round)
+
+- `npx tsc --noEmit` — pass, no errors.
+- `npx eslint .` — pass, 0 errors, same 1 pre-existing unrelated warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx` (not part of this spec's diff).
+- `npx vitest run --no-file-parallelism` — 316/316 passing across 41 files (unchanged count — one existing test file strengthened, no tests added/removed). One retry was needed on the first attempt due to the same environment-driven worker-timeout flakiness documented in specs 18/20's prior Dev Notes; the retry passed cleanly.
+- `npx next build` — pass, Turbopack, typecheck clean, all routes compiled.
+
+### Untouched-files confirmation
+
+Only `components/editor/ai-sidebar.tsx`, `components/editor/ai-sidebar.test.tsx`, `context/ui-context.md`, and `context/spec-status/20-ai-sidebar-shell.md` were touched this round — matches QA's Bug #1 location exactly (`ai-sidebar.tsx` lines 17-25/69/72). No other component, route, or schema file touched.

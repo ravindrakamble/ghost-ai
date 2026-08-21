@@ -56,12 +56,31 @@ describe("AiSidebar", () => {
   it("switches to the Specs tab content on click, distinguishing the active tab via tokens", () => {
     render(<AiSidebar isOpen={true} onClose={vi.fn()} />);
 
+    const architectTab = screen.getByRole("tab", { name: "AI Architect" });
     const specsTab = screen.getByRole("tab", { name: "Specs" });
     fireEvent.click(specsTab);
 
     expect(specsTab).toHaveAttribute("aria-selected", "true");
-    expect(specsTab.className).toContain("bg-accent-dim");
-    expect(specsTab.className).toContain("text-brand");
+    // Regression coverage for the QA-reported bug: the active/inactive
+    // pairing must be applied via the SAME modifier prefixes
+    // `components/ui/tabs.tsx`'s own base classes use — both plain
+    // `data-active:` (vs. the base's `data-active:bg-background
+    // data-active:text-foreground`) AND `dark:data-active:` (vs. the base's
+    // `dark:data-active:bg-input/30 dark:data-active:text-foreground`, which
+    // this app's always-on `.dark` class on `<html>` makes just as live as
+    // the plain pair) — otherwise tailwind-merge doesn't treat the override
+    // as being in the same conflict group and the base's rule(s) silently
+    // win the cascade instead, exactly as QA verified via real computed
+    // styles in a built + Playwright-rendered page.
+    expect(specsTab.className).toContain("data-active:bg-accent-dim");
+    expect(specsTab.className).toContain("data-active:text-brand");
+    expect(specsTab.className).toContain("dark:data-active:bg-accent-dim");
+    expect(specsTab.className).toContain("dark:data-active:text-brand");
+    // Base UI actually sets the `data-active` attribute on the selected tab
+    // (and only the selected tab) — confirms the selector these classes key
+    // off actually matches the real DOM state, not just a string in className.
+    expect(specsTab).toHaveAttribute("data-active");
+    expect(architectTab).not.toHaveAttribute("data-active");
     expect(screen.getByRole("button", { name: /generate spec/i })).toBeInTheDocument();
   });
 

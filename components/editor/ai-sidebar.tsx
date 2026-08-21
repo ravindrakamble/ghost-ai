@@ -12,17 +12,29 @@ interface AiSidebarProps {
   onClose: () => void
 }
 
-const TAB_TRIGGER_BASE_CLASS = "flex-1"
-
 /** Active vs. inactive tab styling — see the brief's Open Questions #2:
  * reuses the same `bg-accent-dim`/`text-brand` "active" pairing
- * `project-sidebar.tsx`/`share-dialog.tsx` already establish, tracked via
- * local `activeTab` state (Base UI's own `data-active` attribute isn't
- * relied on for styling, matching this codebase's existing convention of
- * computing an `isActive` boolean rather than attribute-selector CSS). */
-function tabTriggerClassName(isActive: boolean) {
-  return `${TAB_TRIGGER_BASE_CLASS} ${isActive ? "bg-accent-dim text-brand" : "text-copy-muted"}`
-}
+ * `project-sidebar.tsx`/`share-dialog.tsx` already establish.
+ *
+ * Both the plain `data-active:` pair AND the `dark:data-active:` pair are
+ * required. `components/ui/tabs.tsx` bakes in two competing rule sets for
+ * the active state: `data-active:bg-background data-active:text-foreground`
+ * (plain) and `dark:data-active:border-input dark:data-active:bg-input/30
+ * dark:data-active:text-foreground` (dark-mode-specific). Overriding with
+ * only the plain `data-active:*` pair (as an earlier fix attempt did) drops
+ * the base's plain rules via `tailwind-merge`, but the dark-prefixed rules
+ * survive untouched — and since this app's `<html>` always carries the
+ * `dark` class (see `app/layout.tsx`, no light/dark toggle exists), the
+ * `dark:data-active:bg-input/30`/`dark:data-active:text-foreground` selectors
+ * (`.dark\:data-active\:bg-input\/30:is(.dark *)...`) carry a higher class
+ * count than our plain `data-active:bg-accent-dim` override, so they still
+ * win on real specificity even after the plain-pair fix — verified with a
+ * real `next build` + Playwright `getComputedStyle()` check. Matching both
+ * modifier combinations (`data-active:` and `dark:data-active:`) puts our
+ * override in the same `tailwind-merge` conflict group as *both* of the
+ * base's competing rule sets, so both are correctly dropped. */
+const TAB_TRIGGER_CLASS_NAME =
+  "flex-1 text-copy-muted data-active:bg-accent-dim data-active:text-brand dark:data-active:bg-accent-dim dark:data-active:text-brand"
 
 /**
  * Standalone AI sidebar shell (spec 20) — supersedes `AiSidebarPlaceholder`.
@@ -66,10 +78,10 @@ export function AiSidebar({ isOpen, onClose }: AiSidebarProps) {
         className="flex flex-1 flex-col overflow-hidden"
       >
         <TabsList className="mx-3 mt-3 w-auto">
-          <TabsTrigger value="architect" className={tabTriggerClassName(activeTab === "architect")}>
+          <TabsTrigger value="architect" className={TAB_TRIGGER_CLASS_NAME}>
             AI Architect
           </TabsTrigger>
-          <TabsTrigger value="specs" className={tabTriggerClassName(activeTab === "specs")}>
+          <TabsTrigger value="specs" className={TAB_TRIGGER_CLASS_NAME}>
             Specs
           </TabsTrigger>
         </TabsList>
