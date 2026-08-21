@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { AiSidebarPlaceholder } from "@/components/editor/ai-sidebar-placeholder"
+import { AiSidebar } from "@/components/editor/ai-sidebar"
 import { Canvas } from "@/components/editor/canvas"
 import { ShareDialog } from "@/components/editor/share-dialog"
 import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
@@ -15,21 +15,34 @@ interface WorkspaceShellProps {
 
 /**
  * `/editor/[roomId]` workspace layout: project-name navbar with share/AI-toggle
- * actions, the Liveblocks-backed canvas, and a slide-over AI sidebar
- * placeholder. Client component because the AI-sidebar toggle and Share
- * dialog need local UI state. `project.id` is passed as the canvas's
- * Liveblocks room ID, per spec 10's convention (room ID = project ID). No
- * AI chat logic lives here yet.
+ * actions, the Liveblocks-backed canvas, and a slide-over `AiSidebar` (spec
+ * 20). Client component because the AI-sidebar toggle and Share dialog need
+ * local UI state. `project.id` is passed as the canvas's Liveblocks room ID,
+ * per spec 10's convention (room ID = project ID). `isAiSidebarOpen` still
+ * fully controls the sidebar's visibility (toggled from
+ * `WorkspaceNavbar`'s button); the new `onClose` prop lets the sidebar's own
+ * header close button collapse it too, without moving the open/close state
+ * out of this component. No AI chat/backend logic lives here or in
+ * `AiSidebar` yet — presentational shell only.
  *
  * Owns the `useCollaborators` hook (rather than `ShareDialog` owning it
  * internally) so the initial collaborator fetch can be triggered directly
  * from the Share button's `onClick` — a real event handler — instead of a
  * `useEffect` watching the dialog's `open` prop, which
  * `react-hooks/set-state-in-effect` flags as a cascading-render pattern.
+ *
+ * `isTemplatesModalOpen`/`setIsTemplatesModalOpen` (spec 18) are threaded
+ * down as `Canvas` props — the same direction `roomId` already flows — since
+ * the starter templates modal itself is rendered by `CanvasFlow`
+ * (`components/editor/canvas.tsx`), the only place the real import
+ * mechanism (`nodes`/`edges`/`onNodesChange`/`onEdgesChange`/`fitView`)
+ * lives. `WorkspaceShell` only owns the open/close boolean, mirroring
+ * `isShareOpen` above.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
   const [isShareOpen, setIsShareOpen] = useState(false)
+  const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false)
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
@@ -45,10 +58,15 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
         isAiSidebarOpen={isAiSidebarOpen}
         onToggleAiSidebar={() => setIsAiSidebarOpen((prev) => !prev)}
         onOpenShare={handleOpenShare}
+        onOpenTemplates={() => setIsTemplatesModalOpen(true)}
       />
       <div className="relative flex flex-1 overflow-hidden">
-        <Canvas roomId={project.id} />
-        <AiSidebarPlaceholder isOpen={isAiSidebarOpen} />
+        <Canvas
+          roomId={project.id}
+          isTemplatesModalOpen={isTemplatesModalOpen}
+          setIsTemplatesModalOpen={setIsTemplatesModalOpen}
+        />
+        <AiSidebar isOpen={isAiSidebarOpen} onClose={() => setIsAiSidebarOpen(false)} />
       </div>
       <ShareDialog
         open={isShareOpen}

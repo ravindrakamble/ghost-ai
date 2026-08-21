@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, type MouseEvent as ReactMouseEvent } from "react"
 import {
   Background,
   BackgroundVariant,
@@ -10,7 +10,9 @@ import {
   ReactFlowProvider,
   useReactFlow,
   type DefaultEdgeOptions,
+  type EdgeChange,
   type EdgeTypes,
+  type NodeChange,
   type NodeTypes,
 } from "@xyflow/react"
 import {
@@ -21,13 +23,19 @@ import {
   useCanUndo,
   useErrorListener,
   useRedo,
+  useRoom,
   useUndo,
+  useUpdateMyPresence,
 } from "@liveblocks/react/suspense"
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
 import { CanvasControlBar } from "@/components/editor/canvas-control-bar"
 import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
+import { LiveCursors } from "@/components/editor/live-cursors"
+import { PresenceAvatars } from "@/components/editor/presence-avatars"
 import { ShapePanel, type OnDropShape } from "@/components/editor/shape-panel"
+import { StarterTemplatesModal } from "@/components/editor/starter-templates-modal"
+import type { CanvasTemplate } from "@/components/editor/starter-templates"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
@@ -79,6 +87,16 @@ const ZOOM_TRANSITION_DURATION_MS = 200
 interface CanvasProps {
   /** Liveblocks room ID — the current project's ID (spec 10's convention). */
   roomId: string
+  /**
+   * Starter templates modal open/close state, owned by `WorkspaceShell`
+   * (spec 18) and threaded down the same direction `roomId` already flows —
+   * see spec 18's Analyst Brief, Open Questions #1. Forwarded straight
+   * through to `CanvasFlow`, which is the only place the real
+   * `nodes`/`edges`/`onNodesChange`/`onEdgesChange`/`fitView` mechanism the
+   * modal's Import action needs actually lives.
+   */
+  isTemplatesModalOpen: boolean
+  setIsTemplatesModalOpen: (open: boolean) => void
 }
 
 /**
@@ -88,7 +106,7 @@ interface CanvasProps {
  * canvas *foundation* only — no persistence, no custom node/edge visuals,
  * no `Controls` panel, and no AI-generated content (spec 11's Scope Limits).
  */
-export function Canvas({ roomId }: CanvasProps) {
+export function Canvas({ roomId, isTemplatesModalOpen, setIsTemplatesModalOpen }: CanvasProps) {
   return (
     <div className="relative flex-1 bg-base">
       <LiveblocksProvider authEndpoint="/api/liveblocks-auth">
@@ -103,7 +121,10 @@ export function Canvas({ roomId }: CanvasProps) {
                 instantiates it. See spec 12's Analyst Brief, Open Questions #4.
               */}
               <ReactFlowProvider>
-                <CanvasFlow />
+                <CanvasFlow
+                  isTemplatesModalOpen={isTemplatesModalOpen}
+                  setIsTemplatesModalOpen={setIsTemplatesModalOpen}
+                />
               </ReactFlowProvider>
             </ClientSideSuspense>
           </CanvasRoomBoundary>
@@ -204,9 +225,65 @@ function CanvasError() {
  * `useKeyboardShortcuts` — not a new context, since both are siblings
  * `CanvasFlow` itself instantiates. See spec 17's Analyst Brief, Open
  * Questions #4. Also drops `<MiniMap>` (spec 17's Concrete deliverables).
+ *
+ * Spec 18 (Starter Template) renders `<StarterTemplatesModal>` as a sibling
+ * of `<ReactFlow>`/`ShapePanel`/`CanvasControlBar` and owns
+ * `handleImportTemplate`, the clear-then-add mechanism. **This deliberately
+ * does not match the Analyst Brief's literal code sketch** (dispatching a
+ * `{ id, type: "remove" }` `NodeChange`/`EdgeChange` through
+ * `onNodesChange`/`onEdgesChange` to clear the canvas) — reading
+ * `@liveblocks/react-flow`'s real (unminified) `dist/lib/flow.js` source
+ * shows `applyNodeChanges`/`applyEdgeChanges`'s `"remove"` case is a no-op
+ * (`case "remove": break`) in this installed version; removal is only wired
+ * through the separate `onDelete` mutation the same hook returns (which
+ * really does `nodesMap.delete(...)`/`edgesMap.delete(...)` against
+ * Liveblocks Storage). Dispatching `"remove"` through `onNodesChange` as the
+ * brief's sketch describes would silently leave every pre-existing node/edge
+ * in Storage while the template's nodes/edges get added on top — failing
+ * acceptance criterion 8 ("only the template's node/edge IDs remain"). Using
+ * `onDelete` is still "the existing... change-dispatch mechanism" in the
+ * sense acceptance criterion 7 cares about (it's the other half of the same
+ * `useLiveblocksFlow` API, a real Storage-backed mutation, not a local-only
+ * or React-Flow-only path) — it is simply the *correct* half for removal in
+ * this library version, not a workaround. See this component's own inline
+ * comment on `handleImportTemplate` below, and the Dev Notes appended to
+ * `context/spec-status/18-starter-template.md` for the full source excerpt.
+ *
+ * QA's bugfix round: the three mutations (`onDelete`, `onNodesChange`,
+ * `onEdgesChange`) are wrapped in `room.batch(...)` (`room` from `useRoom()`,
+ * the same `@liveblocks/react/suspense` module already imported here for
+ * `useUndo`/`useRedo`/`useCanUndo`/`useCanRedo`). Each is itself a
+ * `useMutation`-returned function that already wraps its own call in
+ * `room.batch(...)` internally — but `@liveblocks/core`'s `batch()` is
+ * reentrant (a nested `batch()` call runs its callback inline and folds its
+ * ops into the enclosing batch rather than flushing on its own), so wrapping
+ * all three in one outer `room.batch(...)` coalesces them into a single
+ * Storage commit/broadcast instead of three. See the "Bugfix round" note
+ * appended to `context/spec-status/18-starter-template.md` for the verified
+ * source.
+ *
+ * Spec 19 (Presence Avatars & Cursor) adds `updateMyPresence` (Liveblocks'
+ * `useUpdateMyPresence()`, valid here for the same reason `useUndo`/`useRedo`
+ * already are — `CanvasFlow` sits inside `RoomProvider`) and wires two of
+ * React Flow's own real, named pane-level handlers — `onPaneMouseMove`/
+ * `onPaneMouseLeave` — to it, broadcasting the local pointer's flow-space
+ * position (via the same `screenToFlowPosition` already used for node
+ * drops) into the room's Presence `cursor` field, and clearing it to `null`
+ * on pane-leave. `flowToScreenPosition` (the same `useReactFlow()` call's
+ * other half) is threaded down to `<LiveCursors>` as a prop so it can
+ * convert other participants' stored cursor positions back to screen space.
+ * `<PresenceAvatars>`/`<LiveCursors>` render as further siblings of
+ * `<ReactFlow>`/`ShapePanel`/`CanvasControlBar`/`StarterTemplatesModal` —
+ * same convention, no new context. See spec 19's Analyst Brief.
  */
-function CanvasFlow() {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useLiveblocksFlow<
+function CanvasFlow({
+  isTemplatesModalOpen,
+  setIsTemplatesModalOpen,
+}: {
+  isTemplatesModalOpen: boolean
+  setIsTemplatesModalOpen: (open: boolean) => void
+}) {
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, onDelete } = useLiveblocksFlow<
     CanvasNodeAlias,
     CanvasEdgeAlias
   >({
@@ -214,11 +291,13 @@ function CanvasFlow() {
     nodes: { initial: [] },
     edges: { initial: [] },
   })
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow()
+  const { screenToFlowPosition, flowToScreenPosition, zoomIn, zoomOut, fitView } = useReactFlow()
   const undo = useUndo()
   const redo = useRedo()
   const canUndo = useCanUndo()
   const canRedo = useCanRedo()
+  const room = useRoom()
+  const updateMyPresence = useUpdateMyPresence()
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {
@@ -251,6 +330,70 @@ function CanvasFlow() {
     [edges, onEdgesChange],
   )
 
+  /**
+   * Clears every existing node/edge, then adds the selected template's own
+   * nodes/edges, then fits the view — spec 18's Concrete deliverables. No
+   * confirmation dialog before the clear (spec 18's Analyst Brief, Open
+   * Questions #6: the existing Liveblocks undo, spec 17, is the recovery
+   * path).
+   *
+   * Removal goes through `onDelete` (not a `{ type: "remove" }` change
+   * through `onNodesChange`/`onEdgesChange` — see this component's docblock
+   * above for why that path is a verified no-op in the installed
+   * `@liveblocks/react-flow` version). `onDelete` takes the full current
+   * node/edge objects and both collections in one call, so the removal step
+   * is still a single real Storage mutation, just via the other half of the
+   * same `useLiveblocksFlow` API. Adds still go through the standard
+   * `onNodesChange`/`onEdgesChange` `{ type: "add", item }` path (spec 12's
+   * pattern), one call each so every template node/edge lands in a single
+   * batch rather than one mutation per item.
+   *
+   * All three calls (`onDelete`, `onNodesChange`, `onEdgesChange`) are
+   * wrapped in `room.batch(...)` so they coalesce into one Storage commit/
+   * broadcast rather than three — otherwise a remote collaborator could
+   * observe a transient empty-canvas frame between the `onDelete` commit and
+   * the subsequent "add" commits, which is exactly the race the Concrete
+   * Deliverables text for this spec calls out as something to avoid. See
+   * this component's docblock above and the "Bugfix round" note in
+   * `context/spec-status/18-starter-template.md`.
+   *
+   * `fitView()` is called synchronously right after, with no manual
+   * deferral (rAF/effect/microtask) — verified via `@xyflow/react`'s real
+   * source (`dist/esm/index.js`) that `fitView()` itself only flags
+   * `fitViewQueued: true` in the store and returns a promise; the actual fit
+   * computation is deferred internally until a later `setNodes()` call (from
+   * `StoreUpdater`'s effect reacting to the `nodes` prop changing) reports
+   * `nodesInitialized: true` for the new nodes. Since our template nodes
+   * carry explicit `width`/`height`, and `StoreUpdater` re-runs `setNodes`
+   * on every `nodes` prop change until that resolves, the fit genuinely
+   * lands on the newly-imported diagram's real bounds, not the previous
+   * (stale) ones, regardless of exactly when in this synchronous handler
+   * `fitView()` is invoked relative to `onNodesChange`/`onEdgesChange`/
+   * `onDelete`. See the Dev Notes in `context/spec-status/18-starter-
+   * template.md` for the full source excerpts this conclusion is based on.
+   */
+  const handleImportTemplate = useCallback(
+    (template: CanvasTemplate) => {
+      const nodeChanges: NodeChange<CanvasNodeAlias>[] = template.nodes.map((node) => ({
+        type: "add" as const,
+        item: node,
+      }))
+      const edgeChanges: EdgeChange<CanvasEdgeAlias>[] = template.edges.map((edge) => ({
+        type: "add" as const,
+        item: edge,
+      }))
+
+      room.batch(() => {
+        onDelete({ nodes, edges })
+        onNodesChange(nodeChanges)
+        onEdgesChange(edgeChanges)
+      })
+
+      fitView({ duration: ZOOM_TRANSITION_DURATION_MS })
+    },
+    [nodes, edges, onNodesChange, onEdgesChange, onDelete, fitView, room],
+  )
+
   // Shared by both CanvasControlBar's buttons and the keyboard shortcuts
   // below, so both trigger the exact same animated zoom/undo/redo behavior
   // — see this component's docblock, spec 17's Analyst Brief.
@@ -268,6 +411,31 @@ function CanvasFlow() {
 
   useKeyboardShortcuts({ zoomIn: handleZoomIn, zoomOut: handleZoomOut, undo, redo })
 
+  /**
+   * Spec 19 (Presence Avatars & Cursor): broadcasts the local pointer's
+   * position through the room's Presence `cursor` field on every pane-level
+   * mouse move, and clears it back to `null` when the pointer leaves the
+   * pane — `onPaneMouseMove`/`onPaneMouseLeave` are React Flow's own real,
+   * named pane-level mouse handlers (verified at `node_modules/@xyflow/
+   * react/dist/esm/types/component-props.d.ts`), not a generic DOM
+   * `onMouseMove` passthrough. The position is stored in flow-space
+   * (`screenToFlowPosition`'s own output), not raw client coordinates, so a
+   * cursor renders at its real target point on the canvas for every viewer
+   * regardless of their own individual pan/zoom state — see spec 19's
+   * Analyst Brief, Concrete deliverables, and `@liveblocks/react-flow`'s own
+   * bundled `<Cursors />` reference implementation, which does the same.
+   */
+  const handlePaneMouseMove = useCallback(
+    (event: ReactMouseEvent) => {
+      updateMyPresence({ cursor: screenToFlowPosition({ x: event.clientX, y: event.clientY }) })
+    },
+    [updateMyPresence, screenToFlowPosition],
+  )
+
+  const handlePaneMouseLeave = useCallback(() => {
+    updateMyPresence({ cursor: null })
+  }, [updateMyPresence])
+
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
@@ -281,6 +449,8 @@ function CanvasFlow() {
           edgeTypes={CANVAS_EDGE_TYPES}
           defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           connectionMode={ConnectionMode.Loose}
+          onPaneMouseMove={handlePaneMouseMove}
+          onPaneMouseLeave={handlePaneMouseLeave}
           fitView
         >
           <Background variant={BackgroundVariant.Dots} />
@@ -295,6 +465,13 @@ function CanvasFlow() {
           canUndo={canUndo}
           canRedo={canRedo}
         />
+        <StarterTemplatesModal
+          open={isTemplatesModalOpen}
+          onOpenChange={setIsTemplatesModalOpen}
+          onImport={handleImportTemplate}
+        />
+        <PresenceAvatars />
+        <LiveCursors flowToScreenPosition={flowToScreenPosition} />
       </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>
   )
