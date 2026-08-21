@@ -229,3 +229,40 @@ Read the file directly (not trusting the diff alone):
 None. The single outstanding item from round 1 is fully resolved, and no new issue was introduced by this commit.
 
 QA re-review passed — no remaining issues. Routing to Product Owner.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Against Success Criteria / project-overview.md
+
+- This spec is infrastructure, not a directly-user-visible feature — it does not itself land Success Criterion 4 ("AI can generate an architecture into the shared room from a prompt"). That is honest and expected: the spec's own scope statement and this pipeline's Analyst Brief are explicit that no AI provider call, no node/edge generation, and no canvas mutation happen here — that work is spec 23's. What this spec does deliver is the durable-background-task plumbing (`POST /api/ai/design` triggering Trigger.dev and recording a `TaskRun`, `POST /api/ai/design/token` issuing a run-scoped token) that Success Criterion 4 cannot be met without. Read as prerequisite infrastructure, the same posture Product Owner review gave spec 21 relative to Criterion 5/6 — accurate here too.
+- Confirmed directly (not just via Dev Notes/QA's account) that `architecture-context.md` Invariant 1 ("Request handlers do not run long-lived AI work") is respected: both `app/api/ai/design/route.ts` and `app/api/ai/design/token/route.ts` each make exactly one `lib/trigger.ts` call and one Prisma call before returning; the actual task body lives solely in `trigger/design-agent.ts`, run by Trigger.dev's own runtime. This is the correct shape for a durable background task per Goal 4 ("Generation runs as a durable background task").
+- No success criterion is put at risk or misrepresented by this spec. Criteria 1, 2, 3, 5, 6 are untouched and unaffected (no project/canvas/spec-generation code touched).
+
+### Scope check (Out of Scope wall + this spec's own Scope Limits)
+
+Independently diffed `spec/21-canvas-autosave...HEAD` (this branch's real parent, confirmed via `git log`) rather than trusting Dev Notes/QA's account alone. 15 files changed:
+
+- `app/api/ai/design/route.ts` + `.test.ts`, `app/api/ai/design/token/route.ts` + `.test.ts`, `lib/trigger.ts` + `.test.ts`, `trigger/design-agent.ts` + `.test.ts`, `trigger.config.ts`, `prisma/schema.prisma` (+ migration), `package.json`/`package-lock.json`, `context/progress-tracker.md`, `context/spec-status/22-design-agent-api.md`.
+- No `components/*` file appears anywhere in the diff — confirmed via `git diff --stat`. This spec is genuinely backend-only, as its own Scope Limits require.
+- No AI provider code anywhere in the diff. Grepped the full diff for Gemini/ai-sdk-style references — every hit is prose (code comments, a test description, or this status file's own text), never an import or call. Read `trigger/design-agent.ts` directly: `runDesignAgent` only calls `logger.log` and returns an echo object; no external model call exists.
+- No canvas/node/edge/Liveblocks mutation anywhere in the diff. Grepped for Liveblocks/nodes/edges references — same result, prose-only mentions of prior specs' conventions (e.g. "roomId/projectId are the same value by convention, spec 10/11/21"). No `useRoom`/Liveblocks import, no Storage mutation, anywhere in the new code.
+- Only `@trigger.dev/sdk` was added to `package.json` — confirmed via `git diff -- package.json`; no `zod` or other unrequested dependency snuck in, consistent with the brief's Open Questions #8 disposition (manual type guards, not a new validation library).
+- Read `app/api/ai/design/route.ts`, `app/api/ai/design/token/route.ts`, `lib/trigger.ts`, `trigger/design-agent.ts`, and the `prisma/schema.prisma` diff directly (not just Dev Notes' description): auth-then-parse-then-access ordering is correct and matches the brief's own reasoning (401 must not depend on body shape), the roomId-not-equal-projectId rejection is the stricter of the brief's two recommended options, the `TaskRun` ownership check for the token route is specifically `TaskRun.userId`-scoped (not a broader project-membership check) — correctly preventing one collaborator from grabbing another's run token — and the `TaskRun` to `Project` relation with `onDelete: Cascade` matches `ProjectCollaborator`'s existing pattern, avoiding orphaned rows.
+- Nothing here touches the Out of Scope wall (Billing, enterprise permission tiers, versioned history, production object storage migration, mobile apps) or this spec's own explicitly-named out-of-scope items (AI provider call, node/edge generation, AI presence/status feed, ai-chat/sidebar wiring, POST /api/ai/spec, rate limiting).
+- The one genuine judgment call in this spec — bootstrapping Trigger.dev from scratch (new SDK dependency, new `trigger.config.ts`) despite the source spec's own text assuming reusable prior setup — was correctly identified as unavoidable (verified no `@trigger.dev/*` package, `trigger/` directory, or Trigger.dev skill existed before this spec) and handled the same way spec 21 handled an analogous gap: follow the established lazy-instantiation pattern so a missing secret doesn't break `next build`. This is not scope creep — it is the necessary foundation the brief's own deliverables require, and it introduces no product-facing behavior beyond what is needed for this spec's two routes and one task.
+
+### progress-tracker.md accuracy
+
+The QA round-1 FAIL on progress-tracker staleness (stale "not yet started" language in Current Phase/In Progress/Next Up) was fully resolved in commit `4db643c`, and QA's round-2 re-review independently confirmed the fix and found no regression. Re-read the file directly for this review: `Current Phase` (line 6) and `In Progress` (line 276) accurately describe "Senior Developer pass complete, awaiting QA" plus an accurate file list and gate results; `Current Goal`/`Next Up` currently describe the QA re-review step, which is now stale in turn now that QA has passed — this is the expected, normal state at this point in the pipeline (Dev/QA only note in-progress state; moving this spec to "Completed" and advancing Current Phase/Next Up to spec 23 is this review's own job, done below as part of PR creation) rather than a defect in what is there today.
+
+### Rough edges (acceptable at this stage, not blocking)
+
+- No live Trigger.dev project is provisioned in this environment (`TRIGGER_PROJECT_REF`/`TRIGGER_SECRET_KEY` both absent) — same category of human-provisioning gap already logged and accepted for `LIVEBLOCKS_SECRET_KEY` (spec 10) and `BLOB_READ_WRITE_TOKEN` (spec 21). Neither route nor the task has been exercised against a real Trigger.dev backend; only the lazy-instantiation failure path and full request-handler logic (SDK mocked) are verified. Consistent with this pipeline's established precedent of flagging infra-provisioning gaps as human follow-ups rather than blocking the spec on them.
+- The response-shape mismatch with spec 26's own text (`{ runId }` only vs. spec 26's assumption of `{ runId, publicToken }` in one call) is correctly left unresolved here and flagged forward in both the brief and Dev Notes — not this spec's job to fix, and not a defect in what spec 22 itself delivers per its own literal text.
+- The two-phase-write gap (a successful Trigger.dev trigger followed by a failed `TaskRun` Prisma write leaves an orphaned real run with no corresponding row) is a known, documented limitation with no compensating action specified anywhere in the brief. Acceptable for this stage — this is exactly the kind of edge case later hardening work (not yet spec'd) would address, and does not block spec 23 from building the next layer on top of a `TaskRun` row that, when it does exist, is trustworthy.
+
+None of these rough edges would block a later spec (23+) from building correctly on top of this one — the routes' contracts (`{ runId }` from the design route, `{ token }` from the token route, `TaskRun`'s schema shape) are exactly what the brief specifies and what spec 23+ needs to consume.
+
+No changes requested. This spec is ready for the human's final call.
