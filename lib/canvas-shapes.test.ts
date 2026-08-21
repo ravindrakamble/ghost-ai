@@ -4,6 +4,7 @@ import {
   NODE_MIN_SIZE,
   SHAPE_DEFAULT_SIZES,
   createDroppedNode,
+  generateEdgeId,
   generateNodeId,
 } from "./canvas-shapes"
 import { CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR, DEFAULT_NODE_TEXT_COLOR } from "@/types/canvas"
@@ -44,6 +45,16 @@ describe("generateNodeId", () => {
     expect(ids.size).toBe(50)
     for (const id of ids) {
       expect(id.startsWith("rectangle-")).toBe(true)
+    }
+  })
+})
+
+describe("generateEdgeId", () => {
+  it("produces unique, edge-prefixed IDs across repeated calls", () => {
+    const ids = new Set(Array.from({ length: 50 }, () => generateEdgeId()))
+    expect(ids.size).toBe(50)
+    for (const id of ids) {
+      expect(id.startsWith("edge-")).toBe(true)
     }
   })
 })

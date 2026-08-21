@@ -3,12 +3,27 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 23: Design Agent Logic — not yet started.
+- Phase 23: Design Agent Logic — Completed (QA PASS, Product Owner PASS, PR #18 open). Phase 24: AI Presence State — not yet started.
 
 ## Current Goal
-- Analyst pass for feature spec 23 (Design Agent Logic) at `context/feature-specs/23-design-agent-logic.md`.
+- Analyst pass for feature spec 24 (AI Presence State) at `context/feature-specs/24-ai-presence-state.md`.
 
 ## Completed
+
+- Feature spec 23: Design Agent Logic
+  - `trigger/design-agent.ts` (rewritten) — `runDesignAgent` replaces spec 22's log-and-echo shell with the real implementation: sets AI presence (`thinking: true`) → broadcasts `start` status → reads current Storage via `getCurrentDesignGraph` → broadcasts `processing` status → calls Gemini via `interpretDesignPrompt` → sets presence cursor to the last added/moved node → applies the full action batch atomically via `applyDesignAgentActions` → broadcasts `complete` status → returns `{ roomId, actionCount }`. On any failure: broadcasts an `error` status and always clears AI presence in a `finally` block (both wrapped in their own `.catch` so a secondary failure can't mask the original error).
+  - `lib/design-agent-ai.ts` (new) — Gemini/`@ai-sdk/google` interpretation module. Uses `ai`'s `generateObject` + `jsonSchema()` (no Zod) to turn `{ prompt, currentGraph }` into a validated, bounded list of the 7 canvas action kinds. Lazily instantiates the Google provider (cached on `globalThis`, same pattern as `lib/liveblocks.ts`). Asks the model for a color *name* (mapped to a real `NODE_COLORS` pair by index) and a shape from `CANVAS_SHAPES` rather than raw hex/free-form values, and always sizes new nodes from `SHAPE_DEFAULT_SIZES` — guaranteeing acceptance criteria 4/5 by construction. Normalizes model-invented local node/edge IDs into real ones (`generateNodeId`/`generateEdgeId`) and resolves same-batch references (e.g. an edge connecting two nodes added earlier in the same response); drops (does not throw on) any action whose reference doesn't resolve to an existing or newly-created node/edge.
+  - `lib/design-agent-room.ts` (new) — Liveblocks-server-mutation/status/presence module, reusing `getLiveblocksClient()` (spec 10). Canvas mutations go through `@liveblocks/react-flow/node`'s own `mutateFlow` helper (not a hand-rolled `mutateStorage` callback) — the package's own server-side counterpart to `useLiveblocksFlow`, guaranteeing the Storage schema this writes exactly matches what the client reads. `getCurrentDesignGraph` reads current Storage via `getStorageDocument(roomId, "json")`. `broadcastDesignAgentStatus`/`setDesignAgentPresence`/`clearDesignAgentPresence` wrap `broadcastEvent`/`setPresence` with a fixed Ghost AI identity (`userId: "ghost-ai-agent"`, `--accent-ai` color).
+  - `lib/canvas-shapes.ts` (modified, additive) — added `generateEdgeId()`, mirroring `generateNodeId`'s recipe; no prior edge-ID mechanism existed outside the client-only `onConnect` path.
+  - `package.json`/`package-lock.json` — added `@ai-sdk/google` and `ai` (both genuinely missing before this spec).
+  - `.env.local` (gitignored, not part of the diff) — added a `GEMINI_API_KEY=` placeholder with an explanatory comment, human-provisioning gap logged same as `TRIGGER_SECRET_KEY`/`BLOB_READ_WRITE_TOKEN`.
+  - Tests: `trigger/design-agent.test.ts` (rewritten), `lib/design-agent-ai.test.ts`, `lib/design-agent-room.test.ts` (both new), `lib/canvas-shapes.test.ts` (extended for `generateEdgeId`). 427/427 tests passing across 51 files (up from 389/49 at the end of spec 22).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass — the last confirmed with neither `GEMINI_API_KEY` nor `TRIGGER_SECRET_KEY` set, validating both modules' lazy-instantiation patterns.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 11 acceptance criteria independently re-verified against the code, full mechanical gate independently reproduced, and the highest-risk claim (`mutateFlow` wraps exactly one `mutateStorage` call and shares the same node/edge conversion code as the client's `useLiveblocksFlow`) independently confirmed by reading the installed package's actual runtime source, not just its `.d.ts` types.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this is the first spec where a user prompt produces real Gemini-driven canvas mutations, broadcast AI status, and AI presence — genuine, substantive progress on Success Criterion 4 ("AI can generate an architecture into the shared room from a prompt") and Goal 4 ("Generation runs as a durable background task"), while staying inside this spec's own Scope Limits and `project-overview.md`'s Out of Scope wall. Independently re-verified via `git diff main...spec/23-design-agent-logic` (this branch's real parent) — not just trusting Dev/QA claims — that no `components/*` file, route, or schema file was touched, read `trigger/design-agent.ts`/`lib/design-agent-ai.ts`/`lib/design-agent-room.ts` directly, and confirmed the `NODE_COLORS`/`NODE_COLOR_NAMES` index alignment directly against `types/canvas.ts`. Formed an independent view that the Dev's `mutateFlow`-over-hand-rolled-`mutateStorage` judgment call is, if anything, the more literal reading of the original spec's own "reuse existing Liveblocks flow and presence patterns" wording, not a deviation from product intent. No live `GEMINI_API_KEY`/Gemini account or live Liveblocks room verification possible in this pipeline (consistent with specs 10/21/22) — recommended human smoke test (provision a real key, trigger `POST /api/ai/design` against a real project room, confirm nodes/edges/status/presence appear correctly on a connected client) before treating Success Criterion 4 as fully closed end-to-end, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #18](https://github.com/ravindrakamble/ghost-ai/pull/18) — not yet merged, human's call.
+  - **Post-PASS live verification**: human provisioned a real `GEMINI_API_KEY`. A one-off, uncommitted smoke-test script (create a real Liveblocks room → call `runDesignAgent` with a real Gemini call → read Storage back → delete the room) surfaced and led to fixing 3 live-only bugs no mocked test could catch: (1) `gemini-2.5-flash` is deprecated/rejected by the live API, updated `GEMINI_MODEL_ID` to `gemini-3.6-flash`; (2) that model's reasoning tokens were truncating the JSON response before completion with no `maxOutputTokens` set (`thinkingBudget: 0` is rejected outright by this model) — fixed by raising `maxOutputTokens` to 8192; (3) the JSON Schema only required `kind`, so the model reliably populated every optional field on every action regardless of kind (e.g. a stray `sourceNodeId`/`width` on an `addNode` action) — fixed by restructuring the schema into a discriminated `anyOf` of 7 exact per-kind variants (`additionalProperties: false`) plus explicit per-kind field documentation in the prompt text. Verified passing twice in a row end to end (correct 2-node/1-edge graph landed in a real room's Storage); full gate re-confirmed passing. Committed as `8c851d0` on `spec/23-design-agent-logic`, documented in full under "Post-PASS: Live Verification" in `context/spec-status/23-design-agent-logic.md`. This closes the "no real Gemini account" gap the Product Owner flagged as a non-blocking recommended human smoke test — the one gap still open is watching a connected browser client receive the result live, which needs specs 24/26's UI.
+  - Full pipeline trail in `context/spec-status/23-design-agent-logic.md`.
 
 - Feature spec 22: Design Agent API
   - `package.json`/`package-lock.json` — added `@trigger.dev/sdk@^4.5.12`, the first Trigger.dev dependency in this repo.
@@ -288,17 +303,18 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- (none — spec 23 not yet started)
+- (none — spec 24 not yet started)
 
 ## Next Up
 
-- Analyst pass for feature spec 23 (Design Agent Logic).
-- Human review/merge of spec 22's PR #16 and the still-open PRs for specs 12–21.
+- Analyst pass for feature spec 24 (AI Presence State).
+- Human review/merge of spec 23's PR #18 and the still-open PRs for specs 12–22.
 
 ## Open Questions
 
 - Spec 18's no-confirmation-dialog posture on the destructive template-import clear — Product Owner accepted it for this stage but flagged that Liveblocks undo doesn't fully cover the multiplayer case (a second collaborator's own just-made edits could be lost without their own prompt). Recommended as a candidate follow-up (lightweight confirmation, or gating it when other collaborators are present), not a blocker for spec 19+.
 - Spec 19's live two-tab/multiplayer behavior (self-exclusion with a real second tab, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) has not been verified in a real browser — recommended as a human smoke test before spec 20+ builds further on this presence mechanism, not a blocker.
+- Spec 23's full pipeline (real Gemini call → real Storage mutation → real client-side render, plus live AI status/presence) has not been exercised end-to-end against live services (no `GEMINI_API_KEY`/Gemini account or live Liveblocks room in this environment) — recommended as a human smoke test before spec 24+ builds further on the `ai-status-feed`/AI presence mechanism this spec produces, not a blocker.
 
 ## Deferred — Production Hardening (after spec 29)
 
