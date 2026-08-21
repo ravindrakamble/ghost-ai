@@ -115,3 +115,72 @@ Brief ready for Senior Developer at `context/spec-status/23-design-agent-logic.m
 - The read-then-generate-then-write pipeline is not itself transactional: another collaborator could edit the canvas between `getCurrentDesignGraph` and `applyDesignAgentActions`. The final Storage write is still atomic and surgical (targets specific IDs), and every action was already fully validated before that write — so this can at worst produce a stale-context suggestion (e.g. moving a node that's since been deleted, which is simply dropped since its ID no longer resolves inside `applyDesignAgentActions`... actually note: `applyDesignAgentActions` itself doesn't re-validate IDs against a *fresh* graph read at write time — `mutateFlow`'s `updateNode`/`updateNodeData`/`removeNode`/`removeEdge` are documented as no-ops when the target ID doesn't exist, so a stale reference simply does nothing rather than erroring or corrupting Storage). Not addressed further here — nothing in the brief asks for optimistic-concurrency/conflict handling, and Liveblocks Storage's own CRDT model is the existing safety net for concurrent edits generally.
 
 Implementation ready for QA at `context/spec-status/23-design-agent-logic.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — PASS (clean, no output).
+- `npx eslint .` — PASS (0 errors; 1 pre-existing, unrelated warning in `.agents/skills/clerk-tanstack-patterns/templates/tanstack-basic-auth/src/routes/__root.tsx`, untouched by this diff). Also re-ran targeted at only the 4 new/changed source files (`lib/design-agent-ai.ts`, `lib/design-agent-room.ts`, `trigger/design-agent.ts`, `lib/canvas-shapes.ts`) — clean.
+- `npx vitest run --no-file-parallelism` — PASS: 427/427 tests across 51 files, matching the Dev's reported count exactly.
+- `npx next build`, run with both `GEMINI_API_KEY` and `TRIGGER_SECRET_KEY` unset in the shell environment (and `.env.local`'s `GEMINI_API_KEY=` left as an empty placeholder) — PASS. Compiled successfully, `/api/ai/design` and `/api/ai/design/token` still list as dynamic routes, confirming the lazy-instantiation pattern in `lib/design-agent-ai.ts#getGoogleProvider`/`requireGeminiApiKey` genuinely defers the missing-key throw to first call, not import/page-data-collection time.
+
+### Highest-risk claim: `@liveblocks/react-flow/node`'s `mutateFlow`
+
+Independently verified, not trusted from the Dev's account:
+
+- `node_modules/@liveblocks/react-flow/package.json#exports` genuinely declares a "./node" subpath (`dist/node.js`/`dist/node.d.ts`), a real package export, not a guess.
+- `node_modules/@liveblocks/react-flow/dist/node.js` shows `mutateFlow(options, callback)` does exactly one thing structurally: it calls `client.mutateStorage(roomId, async callback)` internally — the entire MutableFlow object (addNode/updateNode/updateNodeData/removeNode/addEdge/updateEdge/updateEdgeData/removeEdge/etc.) is assembled and handed to the callback inside that single mutateStorage call. One JS-level mutateStorage invocation per mutateFlow call, confirmed directly from source, not inferred from the .d.ts alone.
+- `node_modules/@liveblocks/react-flow/dist/lib/shared.js` defines `DEFAULT_STORAGE_KEY = "flow"` and `toLiveblocksInternalNode`/`toLiveblocksInternalEdge` (both `LiveObject.from(...)`). `dist/node.js` imports and uses exactly these from `shared.js`. `dist/lib/flow.js` (the client-side useLiveblocksFlow implementation) imports the same `toLiveblocksInternalNode`/`toLiveblocksInternalEdge`/`DEFAULT_STORAGE_KEY` from the same `shared.js` module. Server and client code paths are provably running the same conversion logic against the same default storage key, not two independently-maintained implementations that could drift.
+- `components/editor/canvas.tsx`'s real `useLiveblocksFlow<CanvasNodeAlias, CanvasEdgeAlias>({...})` call (line 358) passes no storageKey option, confirmed by reading the file directly — so it defaults to "flow", matching mutateFlow's own default.
+- `lib/design-agent-room.ts#applyDesignAgentActions` passes `getLiveblocksClient()` (the spec-10 singleton, confirmed to be the only `new Liveblocks(...)` construction anywhere in lib/trigger/app via grep) directly as mutateFlow's client option — no second Liveblocks Node client is constructed.
+
+The Dev's account of this deviation from the brief's literal hand-rolled-mutateStorage-callback wording is accurate and, if anything, the more rigorous choice — it structurally cannot drift from what the client's useLiveblocksFlow reads, which a hand-rolled reimplementation of the internal LiveObject/LiveMap conversion logic could not guarantee. Acceptance criterion 6 is satisfied with direct source-level evidence, not best-effort mirroring.
+
+### Acceptance criteria
+
+1. PASS. `lib/design-agent-ai.ts#interpretDesignPrompt` calls `generateObject` from `ai` with `model: provider(GEMINI_MODEL_ID)` where `provider = createGoogleGenerativeAI(...)` from `@ai-sdk/google` — the only AI-provider import anywhere in the diff. No templated/hardcoded response path exists.
+2. PASS. `getCurrentDesignGraph` (`lib/design-agent-room.ts`) reads via `getLiveblocksClient().getStorageDocument(roomId, "json")` — confirmed this is a real, current-signature `@liveblocks/node` method (`node_modules/@liveblocks/node/dist/index.d.ts` line 734). No `lib/canvas-blob.ts`/`fetchCanvasSnapshot` import anywhere in the new code.
+3. PASS. `DESIGN_AGENT_ACTION_KINDS` is exactly the 7 named kinds; `isValidRawAction`'s switch has no default-return-true fallthrough (returns false for any unrecognized kind), and `applyDesignAgentActions`'s switch has a no-op default. No clear-and-replace path exists in mutateFlow's available API (MutableFlow has no such method) or in this module's usage of it.
+4. PASS. Shape: `isNodeShape`/JSON-Schema enum gate every addNode action against `CANVAS_SHAPES`. Color: the AI is never asked for a raw hex value — only a colorName from a fixed local NODE_COLOR_NAMES list, resolved via array-index lookup into the real NODE_COLORS (`types/canvas.ts`) — confirmed the two arrays are in the same order (neutral, blue, purple, orange, red, pink, green, teal) by reading both files directly, so every color/textColor pair the model can produce is one of the 8 real, correctly-paired entries by construction.
+5. PASS. addNode's width/height are never taken from the model — always `SHAPE_DEFAULT_SIZES[shape]`, applied in normalizeActions. resizeNode is the one action kind that takes AI-chosen dimensions, and both are clamped to at least NODE_MIN_SIZE.width/height via Math.max. Verified via a real (non-mocked schema validation) unit test (lib/design-agent-ai.test.ts, "clamps a resizeNode action's dimensions to at least NODE_MIN_SIZE").
+6. PASS — see the dedicated section above.
+7. PASS. `trigger/design-agent.ts#runDesignAgent` broadcasts stage start before reading Storage, stage processing after the read and before calling Gemini, and stage complete (or error on failure) after the Storage write — confirmed by reading the function directly and via trigger/design-agent.test.ts's "broadcasts start, processing, and complete status messages in order" test.
+8. PASS. setDesignAgentPresence is called at the very start (thinking true, cursor null) and again after interpretation (thinking true, cursor set to lastActionCursor of the batch); clearDesignAgentPresence runs in a finally block, so it executes on both the success and every failure path — confirmed by reading the try/catch/finally structure and by the "always clears AI presence on success" and three separate failure-injection tests plus the "does not let a failure while clearing presence itself mask the original error" test. setPresence's real signature (userId/data/userInfo/ttl) is used correctly, confirmed against node_modules/@liveblocks/node/dist/index.d.ts.
+9. PASS. All three failure points named in the criterion (Gemini call, Storage read, action application) are separately tested in trigger/design-agent.test.ts, each asserting an error-stage broadcast, a clearDesignAgentPresence call, and the original error rethrown (not swallowed). The error-broadcast and presence-clear calls are each wrapped in their own .catch, confirmed to still let the original error win via two dedicated "does not let a failure... mask the original error" tests. No action-kind outside the criteria-4/5 vocabulary can reach Storage, since every addNode/updateNodeData action's shape/color/textColor is resolved from the fixed vocabularies before applyDesignAgentActions is ever called.
+10. PASS. `git diff main...spec/23-design-agent-logic --stat` confirms no components/*, app/api/ai/design/route.ts, app/api/ai/design/token/route.ts, or prisma/schema.prisma file appears in the diff. package.json's diff shows only @ai-sdk/google and ai added — no new Liveblocks package (@liveblocks/react-flow was already a spec-11 dependency; only a different subpath of it is now imported).
+11. PASS — see Mechanical gate above.
+
+### Architecture invariants (architecture-context.md)
+
+1. No long-running AI work in a request handler — the Gemini call lives entirely in trigger/design-agent.ts/lib/design-agent-ai.ts, never in app/api/ai/design*, both confirmed untouched.
+2. Metadata vs. blob storage separation — not touched by this spec (no new Prisma/Blob code); N/A.
+3. Auth/ownership enforced at every mutation boundary — this spec adds no new externally-triggerable mutation entry point; the task is only invoked via spec 22's already-ownership-checked POST /api/ai/design to triggerDesignAgent path, unchanged here.
+4. Client components only where needed — N/A, no components touched.
+5. Canvas schema consistency between user-created content and imported content — directly verified above (mutateFlow and useLiveblocksFlow share the same conversion code and default storage key).
+
+No invariant violations found.
+
+### Standards compliance (code-standards.md)
+
+- No `any` anywhere in the 4 new/changed source files (grep for any-type patterns returned zero matches).
+- No raw Tailwind color classes (zinc-/slate-) or ad hoc hex values in styling — the one hex literal in the diff (GHOST_AI_USER_COLOR = "#6457f9" in lib/design-agent-room.ts) is server-side presence data passed to @liveblocks/node's setPresence, not a CSS class, and matches ui-context.md's documented --accent-ai token value exactly (confirmed via grep against app/globals.css and ui-context.md).
+- Modules kept small/single-purpose: AI interpretation (lib/design-agent-ai.ts) and Liveblocks server mutation/status/presence (lib/design-agent-room.ts) are genuinely separate files, not one undifferentiated block, per the brief's explicit ask.
+- components/ui/* untouched (not present in the diff at all).
+- Tests mock via vi.hoisted/vi.mock, consistent with the Testing section's convention.
+
+### Error handling
+
+- Bad/invalid Gemini output: jsonSchema()'s validate callback (isRawDesignAgentActionsResponse/isValidRawAction) is the real, wired-in gate — confirmed genuinely exercised (not just not-triggered) via lib/design-agent-ai.test.ts tests that mock only generateObject, not jsonSchema, so the real per-kind-required-field validation runs; out-of-vocabulary shape, unrecognized kind, and missing-both-fields updateNodeData are each explicitly asserted to reject.
+- Unauthorized access: not this spec's concern (already enforced upstream by spec 22's route before the task is ever triggered); correctly out of scope here.
+- Missing/malformed Storage: getCurrentDesignGraph degrades a missing/malformed "flow" key to an empty graph (legitimate nothing-here-yet state) while letting a genuine upstream failure (network/auth/room-not-found) propagate — confirmed via lib/design-agent-room.test.ts's "propagates a genuine upstream failure rather than silently returning an empty graph" test, and by reading getCurrentDesignGraph's guard clauses directly.
+- Liveblocks mutation failure: applyDesignAgentActions propagates a genuine mutateFlow rejection (tested), and runDesignAgent's failure handling (criterion 9) correctly reacts to it.
+
+### Minor, non-blocking observations (not filed as Bug or Spec gap)
+
+- GHOST_AI_USER_COLOR ("#6457f9", the --accent-ai token) happens to coincidentally equal one of the 8 entries already in lib/liveblocks-color.ts's CURSOR_COLORS hash palette (index 1) used for real human participants cursor colors. This means a real user whose userId happens to hash to that palette index would render with the same cursor color as Ghost AI's fixed presence badge in the same room. Both --accent-ai and CURSOR_COLORS pre-date this spec and neither the brief's Open Questions #3 recommendation nor the Dev introduced this collision — it is a pre-existing, low-probability (1-in-8), purely cosmetic coincidence between two independently-designed color systems, not something this spec's diff caused or could reasonably have been expected to check against. Not filed as a Bug (nothing in this diff is wrong) or a Spec gap (fixing it would mean touching CURSOR_COLORS, a spec-10 concern, for a cosmetic edge case outside this spec's scope) — flagging only for awareness.
+- @liveblocks/node's own mutateStorage implementation (node_modules/@liveblocks/node/dist/index.js#_mutateOneRoom) internally buffers and periodically flushes Storage ops to the server on a 200ms debounce while the callback is still running, not only after it completes — meaning a single mutateStorage/mutateFlow call is not a strict all-or-nothing transaction at the network-message level if the callback's own synchronous work happened to straddle that debounce window and then threw partway through. In this spec's actual code, applyDesignAgentActions's callback loop is fully synchronous with no await, and every branch is a guarded no-throw case (unknown kinds hit a no-op default), so this is not practically reachable through this diff — but it is a nuance in the underlying SDK, not something the Dev's choice of mutateFlow versus a hand-rolled mutateStorage callback changes either way (both would inherit the same behavior). Not filed as a Bug — it does not contradict the Dev's or this report's "one mutateStorage/mutateFlow call" characterization, which is what acceptance criterion 6 and Open Question #8 actually ask for.
+
+QA passed — ready for Product Owner review.
