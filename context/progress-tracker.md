@@ -3,12 +3,25 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 20: AI Sidebar Shell — QA re-review PASS (bugfix round), ready for Product Owner pass.
+- Phase 21: Canvas Autosave — not yet started.
 
 ## Current Goal
-- Product Owner pass for feature spec 20 (AI Sidebar Shell) at `context/spec-status/20-ai-sidebar-shell.md`.
+- Analyst pass for feature spec 21 (Canvas Autosave) at `context/feature-specs/21-canvas-autosave.md`.
 
 ## Completed
+
+- Feature spec 20: AI Sidebar Shell
+  - `components/editor/ai-sidebar.tsx` (new) — the sidebar root: preserves the placeholder's floating position/slide transform/border/background exactly, adds the header (bot icon, "AI Workspace" title, "Collaborate with Ghost AI" subtitle, close button wired to a new `onClose` prop) and a shadcn `Tabs` shell ("AI Architect"/"Specs"), with active-tab styling applied via `data-active:`- **and** `dark:data-active:`-prefixed override classes (`bg-accent-dim`/`text-brand`, reusing `project-sidebar.tsx`/`share-dialog.tsx`'s existing "active" convention) keyed off Base UI's own `data-active` DOM attribute — not local `activeTab`-state-computed className, which a QA-caught bugfix round found was silently overridden by `components/ui/tabs.tsx`'s own baked-in `data-active:bg-background`/`dark:data-active:bg-input/30` default rule sets due to a `tailwind-merge` conflict-group mismatch. Both modifier prefixes are required because this app's `<html>` always carries the `dark` class, so both of the base component's competing rule sets are live simultaneously.
+  - `components/editor/ai-architect-tab.tsx` (new) — chat UI: scrollable message area, empty state (bot icon, description, three exact-copy starter prompt chips that fill-not-submit the textarea), bottom input row (auto-resizing `Textarea`, `min-h-[72px] max-h-[160px]`, Send button). `Enter` submits, `Shift+Enter` newlines; submitting appends a local ephemeral user bubble only (no assistant reply/persistence/network call). Also exports `ChatBubble` (user right-aligned/`bg-accent-dim`, assistant left-aligned/`text-ai-text`) as directly-tested, real code even though the assistant branch isn't reachable through this spec's own UI yet.
+  - `components/editor/specs-tab.tsx` (new) — enabled-looking "Generate Spec" button (no wired handler) plus exactly one static demo spec card with a `disabled` download action.
+  - `components/editor/ai-sidebar-placeholder.tsx` (deleted) — fully superseded, no remaining code references.
+  - `components/editor/workspace-shell.tsx` (modified) — swaps `AiSidebarPlaceholder` for `AiSidebar`, passing `onClose={() => setIsAiSidebarOpen(false)}`; `isAiSidebarOpen` state and the navbar toggle untouched.
+  - `components/editor/workspace-shell.test.tsx` (modified) — placeholder-text assertions updated to the real header text; added a close-button test.
+  - `context/ui-context.md` (modified) — new "AI Sidebar" section under Canvas.
+  - Tests: `components/editor/ai-sidebar.test.tsx`, `components/editor/ai-architect-tab.test.tsx`, `components/editor/specs-tab.test.tsx` (all new). 316/316 tests passing across 41 files (up from 298/38 at the end of spec 19), via `--no-file-parallelism` (default parallelism hit the same environment-driven worker-timeout flakiness documented for spec 18).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - No Liveblocks, `/api/ai/*`, or Trigger.dev references anywhere in the diff — presentational shell only, per the brief's Scope Limits.
+  - QA: FAIL on first pass (criterion 4, active-tab styling silently overridden by `components/ui/tabs.tsx`'s own default `data-active:` rules — a real CSS-cascade/`tailwind-merge` conflict-group defect, not a spec-gap) → Dev bugfix (moved the override to `data-active:`/`dark:data-active:`-prefixed classes) → QA re-review PASS, independently re-verified via a real `next build` + Playwright `getComputedStyle()` check that the active tab genuinely renders `bg-accent-dim`/`text-brand` → Product Owner PASS (independently re-verified diff scope, source, and criterion-4 root cause; closed the progress-tracker accuracy gap QA's re-review flagged). Full pipeline trail in `context/spec-status/20-ai-sidebar-shell.md`. PR opened against `main`: [PR #14](https://github.com/ravindrakamble/ghost-ai/pull/14) — not yet merged, human's call.
 
 - Feature spec 19: Presence Avatars & Cursor
   - `hooks/use-current-user-id.ts` (new) — `useCurrentUserId()` wrapping Clerk's `useUser()` (first use of this hook in the codebase), the single shared source both new presence components filter on. Returns `undefined` while loading/signed-out — the self-exclusion filter degrades to "no exclusion" rather than throwing.
@@ -244,23 +257,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- Feature spec 20: AI Sidebar Shell
-  - `components/editor/ai-sidebar.tsx` (new) — the sidebar root: preserves the placeholder's floating position/slide transform/border/background exactly, adds the header (bot icon, "AI Workspace" title, "Collaborate with Ghost AI" subtitle, close button wired to a new `onClose` prop) and a shadcn `Tabs` shell ("AI Architect"/"Specs"), with active-tab styling applied via `data-active:`- **and** `dark:data-active:`-prefixed override classes (`bg-accent-dim`/`text-brand`, reusing `project-sidebar.tsx`/`share-dialog.tsx`'s existing "active" convention) keyed off Base UI's own `data-active` DOM attribute — not local `activeTab`-state-computed className, which a QA-caught bugfix round found was silently overridden by `components/ui/tabs.tsx`'s own baked-in `data-active:bg-background`/`dark:data-active:bg-input/30` default rule sets due to a `tailwind-merge` conflict-group mismatch. Both modifier prefixes are required because this app's `<html>` always carries the `dark` class, so both of the base component's competing rule sets are live simultaneously.
-  - `components/editor/ai-architect-tab.tsx` (new) — chat UI: scrollable message area, empty state (bot icon, description, three exact-copy starter prompt chips that fill-not-submit the textarea), bottom input row (auto-resizing `Textarea`, `min-h-[72px] max-h-[160px]`, Send button). `Enter` submits, `Shift+Enter` newlines; submitting appends a local ephemeral user bubble only (no assistant reply/persistence/network call). Also exports `ChatBubble` (user right-aligned/`bg-accent-dim`, assistant left-aligned/`text-ai-text`) as directly-tested, real code even though the assistant branch isn't reachable through this spec's own UI yet.
-  - `components/editor/specs-tab.tsx` (new) — enabled-looking "Generate Spec" button (no wired handler) plus exactly one static demo spec card with a `disabled` download action.
-  - `components/editor/ai-sidebar-placeholder.tsx` (deleted) — fully superseded, no remaining code references.
-  - `components/editor/workspace-shell.tsx` (modified) — swaps `AiSidebarPlaceholder` for `AiSidebar`, passing `onClose={() => setIsAiSidebarOpen(false)}`; `isAiSidebarOpen` state and the navbar toggle untouched.
-  - `components/editor/workspace-shell.test.tsx` (modified) — placeholder-text assertions updated to the real header text; added a close-button test.
-  - `context/ui-context.md` (modified) — new "AI Sidebar" section under Canvas.
-  - Tests: `components/editor/ai-sidebar.test.tsx`, `components/editor/ai-architect-tab.test.tsx`, `components/editor/specs-tab.test.tsx` (all new). 316/316 tests passing across 41 files (up from 298/38 at the end of spec 19), via `--no-file-parallelism` (default parallelism hit the same environment-driven worker-timeout flakiness documented for spec 18).
-  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass.
-  - No Liveblocks, `/api/ai/*`, or Trigger.dev references anywhere in the diff — presentational shell only, per the brief's Scope Limits.
-  - QA: FAIL on first pass (criterion 4, active-tab styling silently overridden by `components/ui/tabs.tsx`'s own default `data-active:` rules — a real CSS-cascade/`tailwind-merge` conflict-group defect, not a spec-gap) → Dev bugfix (moved the override to `data-active:`/`dark:data-active:`-prefixed classes) → QA re-review PASS, independently re-verified via a real `next build` + Playwright `getComputedStyle()` check that the active tab genuinely renders `bg-accent-dim`/`text-brand`. Ready for the Product Owner pass. Full pipeline trail in `context/spec-status/20-ai-sidebar-shell.md`.
+(none — spec 21 not yet started)
 
 ## Next Up
 
-- Product Owner pass for feature spec 20 (AI Sidebar Shell).
-- Human review/merge of spec 19's PR (once opened) and the still-open PRs for specs 12–18.
+- Analyst pass for feature spec 21 (Canvas Autosave).
+- Human review/merge of spec 20's PR #14 and the still-open PRs for specs 12–19.
 
 ## Open Questions
 
