@@ -19,7 +19,7 @@ import { NODE_COLORS, type NodeShape } from "@/types/canvas"
  * silently accepted or partially trusted.
  */
 
-const GEMINI_MODEL_ID = "gemini-2.5-flash"
+const GEMINI_MODEL_ID = "gemini-3.6-flash"
 
 const globalForGemini = globalThis as unknown as {
   googleProvider?: ReturnType<typeof createGoogleGenerativeAI>
@@ -262,28 +262,118 @@ function isRawDesignAgentActionsResponse(value: unknown): value is RawDesignAgen
   return Array.isArray(candidate.actions) && candidate.actions.every(isValidRawAction)
 }
 
+/**
+ * Per-kind variants, combined via `anyOf` below, each with an exact
+ * `properties`/`required`/`additionalProperties: false` set. A single flat
+ * object schema (every field optional except `kind`) was tried first and
+ * found — via a live smoke test against a real Gemini account, not
+ * something a mocked test could have caught — to make the model populate
+ * every declared property on every action regardless of `kind` (e.g. an
+ * `addNode` action carrying a stray `sourceNodeId: ""`/`width: 0`), since
+ * nothing in the schema itself said those fields didn't belong there. A
+ * discriminated `anyOf` gives the model — and Gemini's native structured-
+ * output/controlled-generation mode specifically — an actual per-kind
+ * contract to follow, not just prose instructions in the prompt.
+ */
+const ADD_NODE_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["addNode"] },
+    nodeId: { type: "string" },
+    shape: { type: "string", enum: [...CANVAS_SHAPES] },
+    colorName: { type: "string", enum: [...NODE_COLOR_NAMES] },
+    label: { type: "string" },
+    x: { type: "number" },
+    y: { type: "number" },
+  },
+  required: ["kind", "nodeId", "shape", "colorName", "label", "x", "y"],
+  additionalProperties: false,
+}
+
+const MOVE_NODE_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["moveNode"] },
+    nodeId: { type: "string" },
+    x: { type: "number" },
+    y: { type: "number" },
+  },
+  required: ["kind", "nodeId", "x", "y"],
+  additionalProperties: false,
+}
+
+const RESIZE_NODE_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["resizeNode"] },
+    nodeId: { type: "string" },
+    width: { type: "number" },
+    height: { type: "number" },
+  },
+  required: ["kind", "nodeId", "width", "height"],
+  additionalProperties: false,
+}
+
+const UPDATE_NODE_DATA_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["updateNodeData"] },
+    nodeId: { type: "string" },
+    label: { type: "string" },
+    colorName: { type: "string", enum: [...NODE_COLOR_NAMES] },
+  },
+  required: ["kind", "nodeId"],
+  additionalProperties: false,
+}
+
+const DELETE_NODE_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["deleteNode"] },
+    nodeId: { type: "string" },
+  },
+  required: ["kind", "nodeId"],
+  additionalProperties: false,
+}
+
+const ADD_EDGE_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["addEdge"] },
+    edgeId: { type: "string" },
+    sourceNodeId: { type: "string" },
+    targetNodeId: { type: "string" },
+    label: { type: "string" },
+  },
+  required: ["kind", "edgeId", "sourceNodeId", "targetNodeId"],
+  additionalProperties: false,
+}
+
+const DELETE_EDGE_ACTION_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["deleteEdge"] },
+    edgeId: { type: "string" },
+  },
+  required: ["kind", "edgeId"],
+  additionalProperties: false,
+}
+
 const DESIGN_AGENT_ACTIONS_JSON_SCHEMA: JSONSchema7 = {
   type: "object",
   properties: {
     actions: {
       type: "array",
       items: {
-        type: "object",
-        properties: {
-          kind: { type: "string", enum: [...DESIGN_AGENT_ACTION_KINDS] },
-          nodeId: { type: "string" },
-          edgeId: { type: "string" },
-          sourceNodeId: { type: "string" },
-          targetNodeId: { type: "string" },
-          shape: { type: "string", enum: [...CANVAS_SHAPES] },
-          colorName: { type: "string", enum: [...NODE_COLOR_NAMES] },
-          label: { type: "string" },
-          x: { type: "number" },
-          y: { type: "number" },
-          width: { type: "number" },
-          height: { type: "number" },
-        },
-        required: ["kind"],
+        anyOf: [
+          ADD_NODE_ACTION_SCHEMA,
+          MOVE_NODE_ACTION_SCHEMA,
+          RESIZE_NODE_ACTION_SCHEMA,
+          UPDATE_NODE_DATA_ACTION_SCHEMA,
+          DELETE_NODE_ACTION_SCHEMA,
+          ADD_EDGE_ACTION_SCHEMA,
+          DELETE_EDGE_ACTION_SCHEMA,
+        ],
       },
     },
   },
@@ -305,6 +395,28 @@ function colorNameToPair(colorName: NodeColorName): { color: string; textColor: 
   return NODE_COLORS[index] ?? NODE_COLORS[0]
 }
 
+/**
+ * Per-kind required-field documentation for the model. The JSON Schema fed
+ * to `generateObject` (`DESIGN_AGENT_ACTIONS_JSON_SCHEMA`) only requires
+ * `kind` — it can't express "these other fields are required only when
+ * `kind` is X" — so without this, the model has no signal at all about
+ * which fields each action kind actually needs and produces
+ * schema-shaped-but-semantically-incomplete actions (e.g. an `addNode` with
+ * no `x`/`y`/`shape`) that `isValidRawAction` correctly rejects. Found via a
+ * live smoke test against a real Gemini account — every mocked unit test
+ * supplies a complete, already-valid response, so this gap was invisible to
+ * the test suite.
+ */
+const ACTION_FIELD_GUIDE = [
+  `addNode: { kind, nodeId (a short local id you invent), shape (one of: ${CANVAS_SHAPES.join(", ")}), colorName (one of: ${NODE_COLOR_NAMES.join(", ")}), label, x, y } — all fields required.`,
+  "moveNode: { kind, nodeId (an existing node's real id), x, y } — all fields required.",
+  "resizeNode: { kind, nodeId (an existing node's real id), width, height } — all fields required.",
+  "updateNodeData: { kind, nodeId (an existing node's real id), label?, colorName? } — at least one of label/colorName must be present.",
+  "deleteNode: { kind, nodeId (an existing node's real id) } — no other fields.",
+  "addEdge: { kind, edgeId (a short local id you invent), sourceNodeId, targetNodeId (each an existing node's real id, or a local id you invented earlier in this same response), label? } — sourceNodeId/targetNodeId required.",
+  "deleteEdge: { kind, edgeId (an existing edge's real id) } — no other fields.",
+].join("\n")
+
 function buildPrompt(prompt: string, currentGraph: DesignAgentGraphSummary): string {
   return [
     "You are Ghost AI, a system-design assistant that edits a shared, real-time architecture diagram.",
@@ -312,6 +424,7 @@ function buildPrompt(prompt: string, currentGraph: DesignAgentGraphSummary): str
     `and these edges: ${JSON.stringify(currentGraph.edges)}`,
     `The user's request is: ${prompt}`,
     "Respond with a bounded list of actions that edit this diagram to satisfy the request.",
+    `Each action must be one of exactly these 7 kinds, with exactly the fields listed below (no other fields, no missing required fields):\n${ACTION_FIELD_GUIDE}`,
     "Only reference existing node/edge IDs from the lists above, or short local IDs you invent for nodes/edges you are adding in this same response (they will be replaced with real IDs).",
     "Prefer editing/extending the existing diagram over replacing it — only delete nodes or edges the request clearly asks to remove.",
     "Space newly added nodes so they do not overlap existing nodes or each other (at least 220 horizontal / 160 vertical units apart).",
@@ -338,6 +451,13 @@ export async function interpretDesignPrompt(input: InterpretDesignPromptInput): 
     model: provider(GEMINI_MODEL_ID),
     schema: designAgentActionsSchema,
     prompt: buildPrompt(input.prompt, input.currentGraph),
+    // gemini-3.6-flash reasons before producing structured output and
+    // rejects thinkingBudget: 0 outright ("Request contains an invalid
+    // argument") — found via a live smoke test against a real Gemini
+    // account, not something a mocked test could have caught. A generous
+    // budget keeps reasoning tokens from truncating the JSON response
+    // before it completes.
+    maxOutputTokens: 8192,
   })
 
   return normalizeActions(object.actions, input.currentGraph)

@@ -99,10 +99,10 @@ describe("interpretDesignPrompt", () => {
 
     expect(createGoogleGenerativeAIMock).toHaveBeenCalledTimes(1)
     expect(createGoogleGenerativeAIMock).toHaveBeenCalledWith({ apiKey: "test-gemini-key" })
-    expect(providerFnMock).toHaveBeenCalledWith("gemini-2.5-flash")
+    expect(providerFnMock).toHaveBeenCalledWith("gemini-3.6-flash")
 
     const call = generateObjectMock.mock.calls[0][0] as MockGenerateObjectArgs
-    expect(call.model).toEqual({ modelId: "gemini-2.5-flash" })
+    expect(call.model).toEqual({ modelId: "gemini-3.6-flash" })
     expect(call.prompt).toContain("design a checkout flow")
     expect(typeof call.schema.validate).toBe("function")
   })
