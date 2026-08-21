@@ -190,3 +190,42 @@ This is a genuine regression from this repo's own established convention, not a 
 No other bugs and no spec gaps found. All 12 acceptance criteria pass on their own merits, all mechanical gates are genuinely green (independently reproduced, not just trusted from the Dev's report), and no architecture invariant or standards violation was found anywhere in the diff.
 
 QA failed — see issues above. Routing to Dev only (no spec gap; the brief itself is clear and was followed correctly in every other respect).
+
+## QA Report — re-review (round 2)
+
+**Overall verdict: PASS**
+
+### Scope of this re-review
+
+Per instruction, this round verifies only the single outstanding item from the round-1 FAIL — `context/progress-tracker.md` staleness — plus a check that commit `4db643c` introduced no other regression. The full mechanical gate and all 12 acceptance criteria were independently re-verified in round 1 and are not re-run here, since nothing in the implementation changed.
+
+### Diff scope
+
+`git show 4db643c --stat` confirms exactly two files touched: `context/progress-tracker.md` (8 lines changed) and `context/spec-status/22-design-agent-api.md` (74 lines added — the round-1 QA Report itself, appended in the same commit). No `app/`, `lib/`, `trigger/`, `prisma/`, or `components/` file appears anywhere in this commit — confirmed directly, not assumed. This is a docs-only commit, consistent with the orchestrator's stated rationale (a doc correction, not a code defect, so it bypassed a Dev round).
+
+### `context/progress-tracker.md` re-verification
+
+Read the file directly (not trusting the diff alone):
+
+- `## Current Phase` (line 6): "Phase 22: Design Agent API — Senior Developer pass complete, awaiting QA." — accurate; matches the actual state (Dev implementation complete, this is the QA re-review).
+- `## Current Goal` (line 9): correctly names this as a QA re-review, correctly attributes the sole round-1 finding (progress-tracker staleness) and correctly notes it was fixed directly rather than routed through a full Dev bugfix round, with an accurate root-cause note (Dev was instructed to skip this file this round).
+- `## In Progress` (line 276): full spec 22 entry present — branch name, file list (Trigger.dev bootstrap, `TaskRun` model, both routes with accurate one-line descriptions of their behavior), pointer to Dev Notes for detail, accurate gate results (389/389 tests, `tsc`/`eslint`/`build` all passing, build with no `TRIGGER_SECRET_KEY` set), and an accurate one-line summary of the round-1 QA outcome (FAIL on progress-tracker staleness only; all 12 criteria and the full gate independently passed).
+- `## Next Up` (line 280): correctly lists "QA re-review of feature spec 22" as the next action — matches this review actually happening now.
+- No stale "not yet started" language remains anywhere in the spec 22-related sections (confirmed via direct read of lines 1–20 and 265–283; the round-1 FAIL's specific complaint — line 6 still reading "not yet started", line 276 reading "(none — spec 22 not yet started)", line 280 still listing "Analyst pass for feature spec 22" — is fully resolved).
+
+### Format/convention check against spec 21 and spec 20 precedent
+
+- Structurally matches `git show 648a2bb -- context/progress-tracker.md` (spec 21's own feat-commit progress-tracker bump) line-for-line in shape: same four sections touched (Current Phase, Current Goal, In Progress, Next Up), same "Senior Developer pass complete, awaiting QA" phrasing convention, same level of file-list/gate-result detail in the In Progress entry, same "no full Completed entry yet — that lands after PO sign-off" convention (no premature `## Completed` entry for spec 22 was added, correctly deferring that to a later `docs: mark spec 22 completed` commit, matching spec 21's `13a7e8a` precedent).
+- Matches spec 20's round-2 precedent (`context/spec-status/20-ai-sidebar-shell.md`'s own "QA re-review" section) in narrating the FAIL → fix → re-review PASS trail explicitly inside `progress-tracker.md`'s Current Goal, rather than silently overwriting the history.
+
+### Regression check
+
+- `git status --porcelain` — clean working tree, no uncommitted stray changes beyond this commit.
+- No code, test, schema, or component file touched by `4db643c` — confirmed via `git show --stat` above. Round 1's mechanical gate and 12/12 acceptance criteria results stand unchanged since nothing they depend on was modified.
+- The appended round-1 `## QA Report` content in this file (lines 120–193) is byte-identical to what I originally wrote in round 1 — confirmed via direct read; no unauthorized edits to my own prior findings.
+
+### Issues found
+
+None. The single outstanding item from round 1 is fully resolved, and no new issue was introduced by this commit.
+
+QA re-review passed — no remaining issues. Routing to Product Owner.
