@@ -90,6 +90,26 @@ export function generateNodeId(shape: NodeShape): string {
   return `${shape}-${Date.now()}-${nodeIdCounter}-${randomSuffix}`
 }
 
+let edgeIdCounter = 0
+
+/**
+ * Generates a new edge ID, mirroring `generateNodeId`'s recipe (a stable
+ * prefix, a timestamp, a counter, and a random suffix to close the same
+ * cross-client/cross-run collision gap). No edge-ID equivalent existed
+ * anywhere in this codebase before spec 23 — every edge created client-side
+ * so far goes through `onConnect`, a `@liveblocks/react-flow`-internal path
+ * only reachable from inside the React hook, which assigns its own ID
+ * without going through this module. This helper exists for spec 23's
+ * server-side (Trigger.dev task) edge-creation action, which has no such
+ * internal path available and needs to mint its own edge IDs. See spec 23's
+ * Analyst Brief, Open Questions #7.
+ */
+export function generateEdgeId(): string {
+  edgeIdCounter += 1
+  const randomSuffix = Math.random().toString(36).slice(2, 8)
+  return `edge-${Date.now()}-${edgeIdCounter}-${randomSuffix}`
+}
+
 /**
  * Builds the new `CanvasNode` to add on drop: empty label, the default node
  * fill/text color pairing, and the dragged shape/size at the given (already

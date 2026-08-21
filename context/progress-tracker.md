@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 23: Design Agent Logic — not yet started.
+- Phase 23: Design Agent Logic — Senior Developer pass complete, awaiting QA.
 
 ## Current Goal
-- Analyst pass for feature spec 23 (Design Agent Logic) at `context/feature-specs/23-design-agent-logic.md`.
+- QA review of feature spec 23 (Design Agent Logic) at `context/spec-status/23-design-agent-logic.md`.
 
 ## Completed
 
@@ -288,11 +288,21 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- (none — spec 23 not yet started)
+- Feature spec 23: Design Agent Logic
+  - `trigger/design-agent.ts` (rewritten) — `runDesignAgent` replaces spec 22's log-and-echo shell with the real implementation: sets AI presence (`thinking: true`) → broadcasts `start` status → reads current Storage via `getCurrentDesignGraph` → broadcasts `processing` status → calls Gemini via `interpretDesignPrompt` → sets presence cursor to the last added/moved node → applies the full action batch atomically via `applyDesignAgentActions` → broadcasts `complete` status → returns `{ roomId, actionCount }`. On any failure: broadcasts an `error` status and always clears AI presence in a `finally` block (both wrapped in their own `.catch` so a secondary failure can't mask the original error).
+  - `lib/design-agent-ai.ts` (new) — Gemini/`@ai-sdk/google` interpretation module. Uses `ai`'s `generateObject` + `jsonSchema()` (no Zod) to turn `{ prompt, currentGraph }` into a validated, bounded list of the 7 canvas action kinds. Lazily instantiates the Google provider (cached on `globalThis`, same pattern as `lib/liveblocks.ts`). Asks the model for a color *name* (mapped to a real `NODE_COLORS` pair by index) and a shape from `CANVAS_SHAPES` rather than raw hex/free-form values, and always sizes new nodes from `SHAPE_DEFAULT_SIZES` — guaranteeing acceptance criteria 4/5 by construction. Normalizes model-invented local node/edge IDs into real ones (`generateNodeId`/`generateEdgeId`) and resolves same-batch references (e.g. an edge connecting two nodes added earlier in the same response); drops (does not throw on) any action whose reference doesn't resolve to an existing or newly-created node/edge.
+  - `lib/design-agent-room.ts` (new) — Liveblocks-server-mutation/status/presence module, reusing `getLiveblocksClient()` (spec 10). Canvas mutations go through `@liveblocks/react-flow/node`'s own `mutateFlow` helper (not a hand-rolled `mutateStorage` callback) — the package's own server-side counterpart to `useLiveblocksFlow`, guaranteeing the Storage schema this writes exactly matches what the client reads. `getCurrentDesignGraph` reads current Storage via `getStorageDocument(roomId, "json")`. `broadcastDesignAgentStatus`/`setDesignAgentPresence`/`clearDesignAgentPresence` wrap `broadcastEvent`/`setPresence` with a fixed Ghost AI identity (`userId: "ghost-ai-agent"`, `--accent-ai` color).
+  - `lib/canvas-shapes.ts` (modified, additive) — added `generateEdgeId()`, mirroring `generateNodeId`'s recipe; no prior edge-ID mechanism existed outside the client-only `onConnect` path.
+  - `package.json`/`package-lock.json` — added `@ai-sdk/google` and `ai` (both genuinely missing before this spec).
+  - `.env.local` (gitignored, not part of the diff) — added a `GEMINI_API_KEY=` placeholder with an explanatory comment, human-provisioning gap logged same as `TRIGGER_SECRET_KEY`/`BLOB_READ_WRITE_TOKEN`.
+  - Tests: `trigger/design-agent.test.ts` (rewritten), `lib/design-agent-ai.test.ts`, `lib/design-agent-room.test.ts` (both new), `lib/canvas-shapes.test.ts` (extended for `generateEdgeId`). 427/427 tests passing across 51 files (up from 389/49 at the end of spec 22).
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass — the last confirmed with neither `GEMINI_API_KEY` nor `TRIGGER_SECRET_KEY` set, validating both modules' lazy-instantiation patterns.
+  - No `components/*`, `app/api/ai/design/route.ts`, `app/api/ai/design/token/route.ts`, or `prisma/schema.prisma` touched.
+  - Full pipeline trail in `context/spec-status/23-design-agent-logic.md`.
 
 ## Next Up
 
-- Analyst pass for feature spec 23 (Design Agent Logic).
+- QA review of feature spec 23 (Design Agent Logic).
 - Human review/merge of spec 22's PR #16 and the still-open PRs for specs 12–21.
 
 ## Open Questions
