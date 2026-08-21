@@ -6,6 +6,7 @@ import { Canvas } from "@/components/editor/canvas"
 import { ShareDialog } from "@/components/editor/share-dialog"
 import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
+import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import type { Project } from "@/types/project"
 
 interface WorkspaceShellProps {
@@ -38,11 +39,20 @@ interface WorkspaceShellProps {
  * mechanism (`nodes`/`edges`/`onNodesChange`/`onEdgesChange`/`fitView`)
  * lives. `WorkspaceShell` only owns the open/close boolean, mirroring
  * `isShareOpen` above.
+ *
+ * `saveStatus` (spec 21) is owned here too, so `WorkspaceNavbar` can render
+ * it via `SaveStatusIndicator` — but unlike `isTemplatesModalOpen`, the
+ * setter (`setSaveStatus`) is passed down to `Canvas` as `onSaveStatusChange`
+ * rather than the boolean/value itself, since the real status is only known
+ * inside `CanvasFlow` (`useCanvasAutosave` needs the room's synced
+ * `nodes`/`edges`) and gets pushed back up through that callback. See
+ * `Canvas`'s own docblock for the full reasoning.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
   const [isShareOpen, setIsShareOpen] = useState(false)
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<CanvasSaveStatus>("idle")
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
@@ -59,12 +69,14 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
         onToggleAiSidebar={() => setIsAiSidebarOpen((prev) => !prev)}
         onOpenShare={handleOpenShare}
         onOpenTemplates={() => setIsTemplatesModalOpen(true)}
+        saveStatus={saveStatus}
       />
       <div className="relative flex flex-1 overflow-hidden">
         <Canvas
           roomId={project.id}
           isTemplatesModalOpen={isTemplatesModalOpen}
           setIsTemplatesModalOpen={setIsTemplatesModalOpen}
+          onSaveStatusChange={setSaveStatus}
         />
         <AiSidebar isOpen={isAiSidebarOpen} onClose={() => setIsAiSidebarOpen(false)} />
       </div>

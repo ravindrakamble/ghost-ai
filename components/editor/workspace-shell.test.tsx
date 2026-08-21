@@ -11,16 +11,29 @@ vi.mock("@/components/editor/canvas", () => ({
   Canvas: ({
     roomId,
     isTemplatesModalOpen,
+    onSaveStatusChange,
   }: {
     roomId: string;
     isTemplatesModalOpen: boolean;
     setIsTemplatesModalOpen: (open: boolean) => void;
+    onSaveStatusChange: (status: "idle" | "saving" | "saved" | "error") => void;
   }) => (
     <div
       data-testid="canvas"
       data-room-id={roomId}
       data-templates-modal-open={String(isTemplatesModalOpen)}
-    />
+    >
+      {/*
+        Spec 21: `CanvasFlow`'s real internals (Liveblocks-mocked
+        `canvas.test.tsx` territory) push a save status up through this
+        callback prop — this button stands in for that push so
+        `WorkspaceShell`'s wiring to `WorkspaceNavbar` can be verified here
+        without re-mounting the real Liveblocks room stack.
+      */}
+      <button type="button" onClick={() => onSaveStatusChange("saved")}>
+        simulate save
+      </button>
+    </div>
   ),
 }));
 
@@ -97,5 +110,15 @@ describe("WorkspaceShell", () => {
     fireEvent.click(templatesButton);
 
     expect(screen.getByTestId("canvas")).toHaveAttribute("data-templates-modal-open", "true");
+  });
+
+  it("passes onSaveStatusChange down to Canvas and renders the resulting status in the navbar (spec 21)", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /simulate save/i }));
+
+    expect(screen.getByText("Saved")).toBeInTheDocument();
   });
 });

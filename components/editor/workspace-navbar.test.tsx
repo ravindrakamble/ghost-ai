@@ -10,6 +10,7 @@ function renderNavbar(overrides: Partial<Parameters<typeof WorkspaceNavbar>[0]> 
     onToggleAiSidebar: vi.fn(),
     onOpenShare: vi.fn(),
     onOpenTemplates: vi.fn(),
+    saveStatus: "idle" as const,
     ...overrides,
   }
   render(<WorkspaceNavbar {...props} />)
@@ -32,5 +33,17 @@ describe("WorkspaceNavbar", () => {
     fireEvent.click(screen.getByRole("button", { name: /templates/i }))
 
     expect(onOpenTemplates).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders nothing for the save status by default (idle)", () => {
+    renderNavbar()
+
+    expect(screen.queryByText(/saving|saved|save failed/i)).not.toBeInTheDocument()
+  })
+
+  it("renders the save status indicator for a non-idle saveStatus", () => {
+    renderNavbar({ saveStatus: "saved" })
+
+    expect(screen.getByText("Saved")).toBeInTheDocument()
   })
 })

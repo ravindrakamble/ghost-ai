@@ -3,12 +3,28 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 21: Canvas Autosave — not yet started.
+- Phase 22: Design Agent API — not yet started.
 
 ## Current Goal
-- Analyst pass for feature spec 21 (Canvas Autosave) at `context/feature-specs/21-canvas-autosave.md`.
+- Analyst brief for feature spec 22 (Design Agent API) at `context/feature-specs/22-design-agent-api.md`.
 
 ## Completed
+
+- Feature spec 21: Canvas Autosave
+  - `lib/canvas-blob.ts` (new) — shared `@vercel/blob` upload/fetch helpers (`uploadCanvasSnapshot`/`fetchCanvasSnapshot`, `canvasBlobPathname`), storing/reading canvas JSON at `canvas/{projectId}.json`. Follows `lib/liveblocks.ts`'s lazy-token pattern (`requireBlobToken()` throws only when actually called), so a missing `BLOB_READ_WRITE_TOKEN` doesn't break `next build`'s page-data collection.
+  - `app/api/projects/[projectId]/canvas/route.ts` (new) — `PUT` (owner-or-collaborator, uploads to Blob, updates the existing `Project.canvasJsonPath` field — no schema change) and `GET` (same gate, reads `canvasJsonPath`, fetches from Blob server-side, returns the JSON body — never the raw blob URL). Standard 401/404/403 precedence; a project with no saved canvas returns 404 via the existing `errorResponse` envelope.
+  - `hooks/use-canvas-autosave.ts` (new) — `useCanvasAutosave`, debounces (`CANVAS_AUTOSAVE_DEBOUNCE_MS = 1500`) writes to the `PUT` route and exposes `idle | saving | saved | error`, gated by an `enabled` flag so a save can't fire before the editor's initial load-or-skip decision settles; a `requestId` ref discards stale in-flight responses.
+  - `components/editor/save-status-indicator.tsx` (new) — small non-interactive status element (icon + "Saving…"/"Saved"/"Save failed"), renders nothing for `idle`.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` gains a mount-guarded initial-load effect: if the room is empty and the project has a saved `canvasJsonPath`, fetches and applies the snapshot via one `room.batch(...)` (spec 18's atomic-write convention); if the room already has any nodes/edges, the load is skipped entirely regardless of whether a saved blob also exists. Wires `useCanvasAutosave` and pushes its status up via a new `onSaveStatusChange` prop (a callback push-up, not a direct pass-through, since the hook needs the room's live nodes/edges from inside the Liveblocks boundary).
+  - `components/editor/workspace-shell.tsx`/`workspace-navbar.tsx` (modified) — thread `saveStatus` state from `Canvas` up to `WorkspaceNavbar`, which renders `SaveStatusIndicator` in its button row.
+  - `context/ui-context.md` (modified) — new "Save Status Indicator" section under Canvas.
+  - `package.json`/`package-lock.json` — added `@vercel/blob`.
+  - Tests: `lib/canvas-blob.test.ts`, `app/api/projects/[projectId]/canvas/route.test.ts`, `hooks/use-canvas-autosave.test.ts`, `components/editor/save-status-indicator.test.tsx` (all new), `canvas.test.tsx`/`workspace-navbar.test.tsx`/`workspace-shell.test.tsx` (extended). 362/362 tests passing across 45 files (up from 316/41 at the end of spec 20), via `--no-file-parallelism`.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass — the last confirmed with no `BLOB_READ_WRITE_TOKEN` set, validating the lazy-token pattern.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 12 acceptance criteria independently re-verified against the code, all mechanical checks independently reproduced. Two minor, non-blocking observations logged (a stale docstring on `getProjectAccess`, a harmless immediate re-save-after-load no-op) — neither a spec gap nor required to fix.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is a direct hit on Success Criterion 6 ("Project metadata and generated artifacts are stored in the correct layers") — `canvasJsonPath` (Postgres) holds only the blob reference, the JSON body itself never touches Postgres — and genuine prerequisite infrastructure ahead of spec 22+'s AI generation work. Independently re-verified via `git diff spec/20-ai-sidebar-shell..spec/21-canvas-autosave` (this branch's real parent) — not just trusting Dev/QA claims — that no schema change, AI touch, or manual Save-button was introduced, and read `route.ts`/`lib/canvas-blob.ts`/`hooks/use-canvas-autosave.ts`/the `canvas.tsx` diff directly. No touches to any `project-overview.md` Out of Scope item. No live network verification against a real Vercel Blob store, and no live two-tab verification of the load-skip behavior — consistent with every prior canvas spec's recommended human smoke test, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #15](https://github.com/ravindrakamble/ghost-ai/pull/15) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/21-canvas-autosave.md`.
 
 - Feature spec 20: AI Sidebar Shell
   - `components/editor/ai-sidebar.tsx` (new) — the sidebar root: preserves the placeholder's floating position/slide transform/border/background exactly, adds the header (bot icon, "AI Workspace" title, "Collaborate with Ghost AI" subtitle, close button wired to a new `onClose` prop) and a shadcn `Tabs` shell ("AI Architect"/"Specs"), with active-tab styling applied via `data-active:`- **and** `dark:data-active:`-prefixed override classes (`bg-accent-dim`/`text-brand`, reusing `project-sidebar.tsx`/`share-dialog.tsx`'s existing "active" convention) keyed off Base UI's own `data-active` DOM attribute — not local `activeTab`-state-computed className, which a QA-caught bugfix round found was silently overridden by `components/ui/tabs.tsx`'s own baked-in `data-active:bg-background`/`dark:data-active:bg-input/30` default rule sets due to a `tailwind-merge` conflict-group mismatch. Both modifier prefixes are required because this app's `<html>` always carries the `dark` class, so both of the base component's competing rule sets are live simultaneously.
@@ -257,12 +273,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 21 not yet started)
+(none — spec 22 not yet started)
 
 ## Next Up
 
-- Analyst pass for feature spec 21 (Canvas Autosave).
-- Human review/merge of spec 20's PR #14 and the still-open PRs for specs 12–19.
+- Analyst pass for feature spec 22 (Design Agent API).
+- Human review/merge of spec 21's PR #15 and the still-open PRs for specs 12–20.
 
 ## Open Questions
 

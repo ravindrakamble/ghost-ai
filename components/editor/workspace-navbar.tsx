@@ -1,5 +1,7 @@
 import { LayoutTemplate, MessageSquareText, Share2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { SaveStatusIndicator } from "@/components/editor/save-status-indicator"
+import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 
 interface WorkspaceNavbarProps {
   projectName: string
@@ -7,6 +9,8 @@ interface WorkspaceNavbarProps {
   onToggleAiSidebar: () => void
   onOpenShare: () => void
   onOpenTemplates: () => void
+  /** Canvas autosave status (spec 21), rendered via `SaveStatusIndicator`. */
+  saveStatus: CanvasSaveStatus
 }
 
 /**
@@ -15,6 +19,11 @@ interface WorkspaceNavbarProps {
  * Share dialog (spec 09); the AI sidebar toggle is real local UI state
  * controlling the placeholder's visibility; Templates opens the starter
  * templates modal (spec 18), mirroring `onOpenShare`'s prop shape.
+ *
+ * `saveStatus` (spec 21) renders via `SaveStatusIndicator` in the button
+ * row's leading slot — the slot a manual "Save" button might otherwise
+ * occupy, since none exists anywhere in this codebase (see that component's
+ * own docblock and spec 21's Analyst Brief, Open Questions #1).
  */
 export function WorkspaceNavbar({
   projectName,
@@ -22,11 +31,13 @@ export function WorkspaceNavbar({
   onToggleAiSidebar,
   onOpenShare,
   onOpenTemplates,
+  saveStatus,
 }: WorkspaceNavbarProps) {
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-surface-border bg-surface px-4">
       <h1 className="truncate text-sm font-semibold text-copy-primary">{projectName}</h1>
       <div className="flex items-center gap-2">
+        <SaveStatusIndicator status={saveStatus} />
         <Button variant="outline" size="sm" className="gap-1.5" onClick={onOpenTemplates}>
           <LayoutTemplate />
           Templates
