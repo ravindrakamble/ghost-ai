@@ -46,3 +46,6 @@ next-env.d.ts
 
 # prisma generated client (build artifact)
 /generated/
+
+# trigger.dev local dev cache
+.trigger/
