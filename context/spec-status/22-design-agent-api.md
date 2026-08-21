@@ -116,3 +116,77 @@ Brief ready for Senior Developer at `context/spec-status/22-design-agent-api.md`
 
 - No live Trigger.dev project is provisioned in this environment (`TRIGGER_PROJECT_REF`/`TRIGGER_SECRET_KEY` both absent) — same category of human-provisioning gap already logged for Liveblocks/Blob in specs 10/21. Neither route nor the task has been exercised against a real Trigger.dev backend; only the lazy-instantiation failure path (missing key → handled error, not a crash) and full request-handler logic (with the SDK mocked) are verified.
 - Per this spec's explicit scope: no AI provider call, no node/edge generation, no canvas/Liveblocks mutation anywhere in this diff — confirmed via `git diff` that no `components/*` file is touched.
+
+## QA Report
+
+**Overall verdict: FAIL**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — pass (no output, no errors).
+- `npx eslint .` — pass (0 errors; 1 pre-existing warning in `.agents/skills/clerk-tanstack-patterns/.../__root.tsx`, confirmed unrelated to this spec's diff).
+- `npx next build` — pass, with no `TRIGGER_SECRET_KEY`/`TRIGGER_PROJECT_REF` set in the environment (confirmed absent from both `.env` and `.env.local` before running). Build output lists `/api/ai/design` and `/api/ai/design/token` as dynamic (f) routes, confirming `lib/trigger.ts`'s lazy-instantiation pattern genuinely holds - module import alone (during page-data collection) never throws.
+- `npx vitest run --no-file-parallelism` — pass, 389/389 tests across 49 files.
+- `npx prisma migrate status` — pass, "Database schema is up to date!" against the real Prisma Postgres database; the add_task_run migration is genuinely applied, not just generated.
+
+All mechanical gate items pass.
+
+### Acceptance criteria checklist
+
+1. 401 unauthenticated / 404 missing project / 403 non-member, before any Trigger.dev call or Prisma write — Pass. `app/api/ai/design/route.ts` checks `getCallerIdentity()` first (401), then body validation, then `getProjectAccess`; `route.test.ts` explicitly asserts the trigger and Prisma create mocks were never called in the 401/404/403 cases.
+2. Valid owner-or-collaborator request triggers the task and creates one TaskRun row — Pass, verified in code and in `route.test.ts`'s success-path test (collaborator case also covered, not just owner).
+3. Returns `{ runId }`, not a token — Pass, `route.ts` returns `NextResponse.json({ runId: triggeredRun.runId })` only.
+4. TaskRun schema shape (runId unique, projectId, userId, createdAt, index on runId, compound index on userId+projectId) — Pass, confirmed directly against `prisma/schema.prisma` and the generated migration.sql; a real relation/onDelete Cascade to Project was added beyond the literal field list, matching ProjectCollaborator's existing pattern (reasonable per the brief's Open Questions #7, not scope creep).
+5. token route 401 for unauthenticated — Pass, tested first, before body/Prisma/Trigger.dev are touched.
+6. Non-owned or nonexistent runId does not return a usable token — Pass, 404 for unknown runId, 403 for a runId owned by a different caller, both tested with the token-creation mock asserted never called.
+7. Owned runId issues a run-scoped token with 1-hour expiration — Pass, `lib/trigger.ts` createDesignRunToken calls auth.createPublicToken with scopes read runs [runId] and expirationTime "1h", verified directly in `lib/trigger.test.ts`.
+8. trigger/design-agent.ts exports a task callable with prompt/roomId that logs/echoes and does nothing else — Pass, runDesignAgent only logs and returns received/prompt/roomId; no AI/canvas/Liveblocks code path exists anywhere in the file.
+9. No AI provider call anywhere in the diff — Pass, confirmed via the scoped diff against spec/21-canvas-autosave — no Gemini/ai-sdk reference outside of prose comments/spec-status doc text.
+10. No canvas/node/edge/Liveblocks mutation anywhere in the diff — Pass, same diff check; no components file touched, no Liveblocks import anywhere in the new code.
+11. Request handlers stay thin, task logic lives only in trigger/design-agent.ts — Pass. Both routes are auth, then parse/validate, then access/ownership check, then one lib/trigger.ts call, then one Prisma call, then response; no task logic inlined.
+12. Full standard gate passes, including with no TRIGGER_SECRET_KEY set — Pass, reproduced independently above, not just trusting the Dev's report.
+
+All 12 acceptance criteria independently re-verified and pass.
+
+### Architecture invariants
+
+- Invariant 1 (no long-running AI work in a request handler) — confirmed. Both routes only call `lib/trigger.ts`'s thin wrapper (a single SDK call each) and a single Prisma read/write; the actual task body lives solely in `trigger/design-agent.ts`, executed by Trigger.dev's own runtime, not inline in either route.
+- Invariant 2 (metadata vs. blob storage kept separate) — n/a to this spec (no blob/artifact writes introduced); TaskRun correctly lives in Postgres via Prisma only.
+- Invariant 3 (auth/ownership enforced at every mutation boundary) — confirmed. `POST /api/ai/design` gates via `getProjectAccess` before the Prisma write; `POST /api/ai/design/token` gates via a TaskRun.userId-specific check (not a broader project-membership check) before token issuance, correctly preventing a project collaborator from grabbing another collaborator's run token.
+- Invariant 4/5 — not implicated by this spec (no client component or canvas-schema change introduced).
+
+No invariant violations found.
+
+### Standards compliance
+
+- No raw Tailwind color classes (zinc-/slate-) or hex literals introduced — confirmed via grep across every changed file; this is a backend-only spec with zero styling surface.
+- No `any` introduced anywhere in the diff — confirmed via grep across all new/changed .ts files (only prose-comment/test-description matches for the word "any").
+- `components/ui/*` untouched — confirmed via `git diff --stat` against the spec/21-canvas-autosave base; no components file appears in the diff at all.
+- Manual type guards (isValidDesignRequestBody/isValidTokenRequestBody) used for input validation, consistent with the brief's Open Questions #8 recommendation and this repo's existing convention (isValidCanvasBody from spec 21) — no new validation library added.
+- `lib/trigger.ts` genuinely follows the lazy-instantiation-on-first-call pattern from `lib/liveblocks.ts`/`lib/canvas-blob.ts` — re-verified independently (not just trusting the Dev's claim) by running `npx next build` with TRIGGER_SECRET_KEY confirmed absent from both .env and .env.local; build succeeded and both new routes compiled as dynamic routes.
+
+### Error handling
+
+- Bad input on POST /api/ai/design: invalid JSON returns 400; missing/blank prompt/roomId/projectId returns 400; roomId not equal to projectId returns 400 (rejected as malformed per Open Questions #4's stricter option) — all tested.
+- Unauthorized/missing/non-member project returns 401/404/403 on POST /api/ai/design, tested with downstream calls asserted never invoked.
+- Upstream Trigger.dev trigger failure returns 502, Prisma write correctly skipped (tested); Prisma write failure after a successful trigger returns 500 (tested) — a real run now exists in Trigger.dev with no corresponding TaskRun row in this specific failure mode, an inherent two-phase-write gap rather than a defect in this diff (no compensating action is specified anywhere in the brief), so not logged as a bug.
+- POST /api/ai/design/token: invalid JSON / non-string runId returns 400; unknown runId returns 404; runId owned by a different caller returns 403; upstream token-issuance failure returns 502 — all tested.
+
+### Housekeeping
+
+Fails. `context/progress-tracker.md` was not updated to reflect spec 22's actual implementation state:
+
+- The Current Phase section still reads "Phase 22: Design Agent API - not yet started" (line 6).
+- The In Progress section still reads "(none - spec 22 not yet started)" (line 276).
+- The Next Up section still lists "Analyst pass for feature spec 22 (Design Agent API)" as the next action (line 280) - stale; both the Analyst brief and the Dev's implementation are already done.
+- No entry for spec 22 exists under Completed at all.
+
+This is a genuine regression from this repo's own established convention, not a stylistic nitpick: the commit history for context/progress-tracker.md shows spec 21's feat(21-canvas-autosave) commit did update the Phase/Current Goal/In Progress/Next Up sections as part of the same implementation commit (confirmed via git show 648a2bb --stat), with the full Completed write-up (including QA/PO notes) added later in a separate docs: mark spec 21 completed commit. Spec 22's feat(22-design-agent-api) commit (8358f04) touched no file under context/ except context/spec-status/22-design-agent-api.md - git show 8358f04 --stat confirms context/progress-tracker.md is absent from that commit's file list entirely. This also violates AGENTS.md's explicit, top-level instruction: "Update context/progress-tracker.md after each meaningful implementation change."
+
+### Issues found
+
+- [Bug -> Dev] context/progress-tracker.md not updated for spec 22's implementation. File: context/progress-tracker.md, lines 6, 276, 280. Expected: at minimum, the Current Phase / Current Goal / In Progress / Next Up sections updated to reflect "Senior Developer pass complete, awaiting QA" (mirroring exactly what spec 21's feat commit did in progress-tracker.md's equivalent sections at that point in its own pipeline), with the file list and gate results recorded. This is a coordination-critical document other agents (Product Owner, and the Analyst kicking off the next spec) read to determine pipeline state - leaving it stale is misleading, not cosmetic.
+
+No other bugs and no spec gaps found. All 12 acceptance criteria pass on their own merits, all mechanical gates are genuinely green (independently reproduced, not just trusted from the Dev's report), and no architecture invariant or standards violation was found anywhere in the diff.
+
+QA failed — see issues above. Routing to Dev only (no spec gap; the brief itself is clear and was followed correctly in every other respect).

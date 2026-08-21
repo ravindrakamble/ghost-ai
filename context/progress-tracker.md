@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 22: Design Agent API — not yet started.
+- Phase 22: Design Agent API — Senior Developer pass complete, awaiting QA.
 
 ## Current Goal
-- Analyst brief for feature spec 22 (Design Agent API) at `context/feature-specs/22-design-agent-api.md`.
+- QA re-review of feature spec 22 (Design Agent API) at `context/spec-status/22-design-agent-api.md` — first QA pass found only this progress-tracker section stale (a lightweight bump the Senior Developer's commit normally makes, per spec 21's precedent, but this round's implementation instruction incorrectly told the Dev not to touch this file), fixed directly rather than routed through a full Dev bugfix round.
 
 ## Completed
 
@@ -273,11 +273,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 22 not yet started)
+- Feature spec 22: Design Agent API — implemented by Senior Developer on `spec/22-design-agent-api`, awaiting QA re-review. Bootstraps Trigger.dev from scratch (`@trigger.dev/sdk`, `trigger.config.ts`, `trigger/design-agent.ts`, `lib/trigger.ts` following `lib/liveblocks.ts`'s lazy-instantiation pattern), new `TaskRun` Prisma model (migration applied), `app/api/ai/design/route.ts` (new, `POST` — trigger + record run, returns `{ runId }`), `app/api/ai/design/token/route.ts` (new, `POST` — run-scoped 1-hour token, ownership gated on `TaskRun.userId`). Full file list, decisions, and test coverage in `context/spec-status/22-design-agent-api.md`'s Dev Notes. `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (389/389 across 49 files), `npx next build` (with no `TRIGGER_SECRET_KEY` set) all pass. First QA pass: FAIL on a single progress-tracker staleness issue only (see Current Goal above), fixed directly; all 12 acceptance criteria and the full mechanical gate independently passed on that same QA pass.
 
 ## Next Up
 
-- Analyst pass for feature spec 22 (Design Agent API).
+- QA re-review of feature spec 22 (Design Agent API).
 - Human review/merge of spec 21's PR #15 and the still-open PRs for specs 12–20.
 
 ## Open Questions
