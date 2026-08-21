@@ -41,6 +41,7 @@ model Project {
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
   collaborators  ProjectCollaborator[]
+  taskRuns       TaskRun[]
 
   @@index([ownerId])
   @@index([createdAt])
@@ -56,4 +57,19 @@ model ProjectCollaborator {
   @@unique([projectId, email])
   @@index([email])
   @@index([projectId, createdAt])
+}
+
+/// Tracks Trigger.dev background task runs (spec 22's design-agent task, plus
+/// future task types) so ownership can be verified before a run-scoped public
+/// token is issued (`app/api/ai/design/token/route.ts`).
+model TaskRun {
+  id        String   @id @default(cuid())
+  runId     String   @unique
+  projectId String
+  userId    String
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([userId, projectId])
 }
