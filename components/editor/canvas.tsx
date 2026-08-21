@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState, type MouseEvent as ReactMouseEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
 import {
   Background,
   BackgroundVariant,
@@ -38,6 +38,7 @@ import { StarterTemplatesModal } from "@/components/editor/starter-templates-mod
 import type { CanvasTemplate } from "@/components/editor/starter-templates"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
+import { useCanvasAutosave, type CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { createDroppedNode } from "@/lib/canvas-shapes"
 import {
@@ -84,6 +85,24 @@ const DEFAULT_EDGE_OPTIONS: DefaultEdgeOptions = {
  */
 const ZOOM_TRANSITION_DURATION_MS = 200
 
+/**
+ * Shallow runtime shape-check for `GET /api/projects/[projectId]/canvas`'s
+ * response body (spec 21) — just enough to confirm `nodes`/`edges` are
+ * arrays before applying them into the room, matching this codebase's
+ * existing shallow-validation convention for other route responses (e.g.
+ * `hooks/use-collaborators.ts`'s `parseJson`). Deliberately not a deep
+ * per-node/per-edge shape check: this response only ever contains whatever
+ * this same project's own `PUT` previously uploaded, round-tripped through
+ * Vercel Blob — not arbitrary third-party input.
+ */
+function isCanvasSnapshotBody(
+  value: unknown,
+): value is { nodes: CanvasNodeAlias[]; edges: CanvasEdgeAlias[] } {
+  if (typeof value !== "object" || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return Array.isArray(candidate.nodes) && Array.isArray(candidate.edges)
+}
+
 interface CanvasProps {
   /** Liveblocks room ID — the current project's ID (spec 10's convention). */
   roomId: string
@@ -97,6 +116,20 @@ interface CanvasProps {
    */
   isTemplatesModalOpen: boolean
   setIsTemplatesModalOpen: (open: boolean) => void
+  /**
+   * Pushes the canvas autosave hook's status (spec 21) up to
+   * `WorkspaceShell`, which owns the state so `WorkspaceNavbar`'s
+   * `SaveStatusIndicator` can render it. This is a callback-prop push-up,
+   * not the same "parent owns state, child reads it directly" direction
+   * spec 18 established for `isTemplatesModalOpen` above — that boolean's
+   * owner (`WorkspaceShell`) could pass it straight through because nothing
+   * about *computing* it required being inside the room boundary. Save
+   * status is only known inside `CanvasFlow`, beneath the Liveblocks
+   * `RoomProvider`/`ClientSideSuspense` boundary `WorkspaceShell` sits
+   * outside of (`useCanvasAutosave` itself needs the room's synced
+   * `nodes`/`edges`), so it has to flow back up via a callback instead.
+   */
+  onSaveStatusChange: (status: CanvasSaveStatus) => void
 }
 
 /**
@@ -106,7 +139,12 @@ interface CanvasProps {
  * canvas *foundation* only — no persistence, no custom node/edge visuals,
  * no `Controls` panel, and no AI-generated content (spec 11's Scope Limits).
  */
-export function Canvas({ roomId, isTemplatesModalOpen, setIsTemplatesModalOpen }: CanvasProps) {
+export function Canvas({
+  roomId,
+  isTemplatesModalOpen,
+  setIsTemplatesModalOpen,
+  onSaveStatusChange,
+}: CanvasProps) {
   return (
     <div className="relative flex-1 bg-base">
       <LiveblocksProvider authEndpoint="/api/liveblocks-auth">
@@ -122,8 +160,10 @@ export function Canvas({ roomId, isTemplatesModalOpen, setIsTemplatesModalOpen }
               */}
               <ReactFlowProvider>
                 <CanvasFlow
+                  projectId={roomId}
                   isTemplatesModalOpen={isTemplatesModalOpen}
                   setIsTemplatesModalOpen={setIsTemplatesModalOpen}
+                  onSaveStatusChange={onSaveStatusChange}
                 />
               </ReactFlowProvider>
             </ClientSideSuspense>
@@ -275,13 +315,45 @@ function CanvasError() {
  * `<PresenceAvatars>`/`<LiveCursors>` render as further siblings of
  * `<ReactFlow>`/`ShapePanel`/`CanvasControlBar`/`StarterTemplatesModal` —
  * same convention, no new context. See spec 19's Analyst Brief.
+ *
+ * Spec 21 (Canvas Autosave) adds two things, both scoped to this component
+ * since it's the only place the room's real `nodes`/`edges` live:
+ *
+ * 1. An initial-load effect (`hasAttemptedInitialLoadRef`-guarded, so it
+ *    only ever runs its actual logic once per mount even though `nodes`/
+ *    `edges` are in its dependency array for `exhaustive-deps` correctness):
+ *    if the room is genuinely empty on mount (both `nodes` and `edges` have
+ *    zero length — reliable here since `useLiveblocksFlow({ suspense: true,
+ *    ... })` plus the outer `ClientSideSuspense` already guarantee the
+ *    initial Storage sync has completed by the time this component's body
+ *    runs), it fetches `GET /api/projects/[projectId]/canvas`. A non-OK
+ *    response (404 "no saved canvas," or any other failure) or invalid body
+ *    shape is treated identically to "nothing to load" — the canvas simply
+ *    starts empty, matching spec 11's original baseline. A valid snapshot is
+ *    applied via one `room.batch(...)` wrapping both `onNodesChange`/
+ *    `onEdgesChange` "add" calls, the same atomic-Storage-write convention
+ *    spec 18 established for template import, so a remote collaborator never
+ *    observes a partial load. If the room already has *any* existing
+ *    content, the fetch is skipped entirely (acceptance criterion 8) — never
+ *    attempted regardless of whether a saved blob also exists.
+ * 2. `useCanvasAutosave`, gated by `isReadyForAutosave` (only flipped to
+ *    `true` once the above load-or-skip decision has settled) so a debounced
+ *    save can't fire against the room's momentarily-empty starting state and
+ *    overwrite a real saved snapshot before it's even been loaded back in.
+ *    Its returned status is pushed up to `WorkspaceShell` via the
+ *    `onSaveStatusChange` prop (see `Canvas`'s own docblock above for why
+ *    this is a callback push-up rather than a direct pass-through).
  */
 function CanvasFlow({
+  projectId,
   isTemplatesModalOpen,
   setIsTemplatesModalOpen,
+  onSaveStatusChange,
 }: {
+  projectId: string
   isTemplatesModalOpen: boolean
   setIsTemplatesModalOpen: (open: boolean) => void
+  onSaveStatusChange: (status: CanvasSaveStatus) => void
 }) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, onDelete } = useLiveblocksFlow<
     CanvasNodeAlias,
@@ -298,6 +370,70 @@ function CanvasFlow({
   const canRedo = useCanRedo()
   const room = useRoom()
   const updateMyPresence = useUpdateMyPresence()
+
+  const [isReadyForAutosave, setIsReadyForAutosave] = useState(false)
+  const hasAttemptedInitialLoadRef = useRef(false)
+
+  /**
+   * Spec 21 (Canvas Autosave): on mount, decide whether to load a
+   * previously-saved canvas snapshot into the room. See this component's own
+   * docblock above for the full mechanism. `nodes`/`edges` are read at
+   * effect-run time (not `useLiveblocksFlow`'s current values re-checked on
+   * every future call) — `hasAttemptedInitialLoadRef` guards the real work
+   * to a single run per mount, so later `nodes`/`edges` changes just cause
+   * this effect to re-fire and immediately return.
+   */
+  useEffect(() => {
+    if (hasAttemptedInitialLoadRef.current) {
+      return
+    }
+    hasAttemptedInitialLoadRef.current = true
+
+    let cancelled = false
+
+    async function loadInitialCanvas() {
+      if (nodes.length === 0 && edges.length === 0) {
+        try {
+          const response = await fetch(`/api/projects/${projectId}/canvas`)
+          if (response.ok) {
+            const body: unknown = await response.json()
+            if (!cancelled && isCanvasSnapshotBody(body)) {
+              room.batch(() => {
+                onNodesChange(body.nodes.map((item) => ({ type: "add" as const, item })))
+                onEdgesChange(body.edges.map((item) => ({ type: "add" as const, item })))
+              })
+            }
+          }
+          // A non-OK response (404: no saved canvas yet, or any other
+          // failure) means there's nothing to load — the canvas simply
+          // starts empty (acceptance criterion 10).
+        } catch {
+          // Network/parse failure — treated the same as "nothing to load."
+        }
+      }
+
+      if (!cancelled) {
+        setIsReadyForAutosave(true)
+      }
+    }
+
+    void loadInitialCanvas()
+
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, room, onNodesChange, onEdgesChange, nodes, edges])
+
+  const saveStatus = useCanvasAutosave({
+    projectId,
+    nodes,
+    edges,
+    enabled: isReadyForAutosave,
+  })
+
+  useEffect(() => {
+    onSaveStatusChange(saveStatus)
+  }, [saveStatus, onSaveStatusChange])
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {

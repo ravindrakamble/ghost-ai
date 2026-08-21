@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 21: Canvas Autosave — not yet started.
+- Phase 21: Canvas Autosave — Senior Developer pass complete, awaiting QA.
 
 ## Current Goal
-- Analyst pass for feature spec 21 (Canvas Autosave) at `context/feature-specs/21-canvas-autosave.md`.
+- QA review of feature spec 21 (Canvas Autosave) at `context/spec-status/21-canvas-autosave.md`.
 
 ## Completed
 
@@ -257,11 +257,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 21 not yet started)
+- Feature spec 21: Canvas Autosave — implemented by Senior Developer on `spec/21-canvas-autosave`, awaiting QA. `lib/canvas-blob.ts` (new, `@vercel/blob` upload/fetch helpers), `app/api/projects/[projectId]/canvas/route.ts` (new, `PUT`/`GET`), `hooks/use-canvas-autosave.ts` (new, debounced autosave hook), `components/editor/save-status-indicator.tsx` (new), `components/editor/canvas.tsx`/`workspace-navbar.tsx`/`workspace-shell.tsx` (modified). Full file list, decisions, and test coverage in `context/spec-status/21-canvas-autosave.md`'s Dev Notes. `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (362/362 across 45 files), `npx next build` all pass.
 
 ## Next Up
 
-- Analyst pass for feature spec 21 (Canvas Autosave).
+- QA review of feature spec 21 (Canvas Autosave).
 - Human review/merge of spec 20's PR #14 and the still-open PRs for specs 12–19.
 
 ## Open Questions

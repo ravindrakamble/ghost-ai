@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
 import { act } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Canvas } from "./canvas";
 import { CANVAS_TEMPLATES } from "./starter-templates";
 import { CANVAS_EDGE_TYPE, CANVAS_NODE_TYPE, DEFAULT_NODE_COLOR } from "@/types/canvas";
@@ -45,6 +45,8 @@ const {
   useOthersConnectionIdsMock,
   useOtherMock,
   useUserMock,
+  useCanvasAutosaveMock,
+  fetchMock,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
   useLiveblocksFlowMock: vi.fn(),
@@ -75,6 +77,19 @@ const {
   useOthersConnectionIdsMock: vi.fn(),
   useOtherMock: vi.fn(),
   useUserMock: vi.fn(),
+  // Spec 21 (Canvas Autosave): `useCanvasAutosave` itself is unit-tested in
+  // `hooks/use-canvas-autosave.test.ts` (debounce timing, status
+  // transitions, stale-response discarding) — mocked here so this file only
+  // has to verify *wiring* (right projectId/nodes/edges/enabled args, and
+  // that its returned status reaches `onSaveStatusChange`), not re-prove the
+  // hook's own internals through a much heavier Liveblocks-mocked surface.
+  useCanvasAutosaveMock: vi.fn(),
+  // `CanvasFlow`'s own initial-load-or-skip effect (spec 21) calls the real
+  // global `fetch` directly (not through a mocked hook) for
+  // `GET /api/projects/[projectId]/canvas` — stubbed globally so this file's
+  // many pre-existing tests (which never exercise autosave/load behavior
+  // themselves) don't hit a real network call on every mount.
+  fetchMock: vi.fn(),
 }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
@@ -128,6 +143,10 @@ vi.mock("@liveblocks/react/suspense", () => ({
 
 vi.mock("@liveblocks/react-flow", () => ({
   useLiveblocksFlow: useLiveblocksFlowMock,
+}));
+
+vi.mock("@/hooks/use-canvas-autosave", () => ({
+  useCanvasAutosave: useCanvasAutosaveMock,
 }));
 
 vi.mock("@clerk/nextjs", () => ({
@@ -197,6 +216,7 @@ function renderCanvas(overrides: Partial<Parameters<typeof Canvas>[0]> = {}) {
     roomId: "project-123",
     isTemplatesModalOpen: false,
     setIsTemplatesModalOpen: vi.fn(),
+    onSaveStatusChange: vi.fn(),
     ...overrides,
   };
   render(<Canvas {...props} />);
@@ -227,6 +247,17 @@ beforeEach(() => {
   useOthersConnectionIdsMock.mockReturnValue([]);
   useOtherMock.mockReturnValue(undefined);
   useUserMock.mockReturnValue({ user: { id: "current-test-user" } });
+
+  // Spec 21 defaults: no autosave status to report, and a GET
+  // `.../canvas` that resolves as "no saved canvas yet" — individual tests
+  // override this to exercise the load/skip/error branches.
+  useCanvasAutosaveMock.mockReturnValue("idle");
+  fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
+  vi.stubGlobal("fetch", fetchMock);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("Canvas", () => {
@@ -557,6 +588,135 @@ describe("Canvas", () => {
 
       expect(flowToScreenPositionMock).toHaveBeenCalledWith({ x: 10, y: 20 });
       expect(screen.getByText("Other Person")).toBeInTheDocument();
+    });
+  });
+
+  describe("canvas autosave (spec 21)", () => {
+    const existingNode = {
+      id: "existing-node",
+      type: CANVAS_NODE_TYPE,
+      position: { x: 0, y: 0 },
+      width: 160,
+      height: 80,
+      data: { label: "Existing", color: DEFAULT_NODE_COLOR, textColor: "#EDEDED", shape: "rectangle" },
+    };
+    const existingEdge = { id: "existing-edge", type: CANVAS_EDGE_TYPE, source: "a", target: "b", data: {} };
+
+    it("skips loading entirely when the room already has existing nodes", async () => {
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [existingNode],
+        edges: [],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+
+      renderCanvas();
+      await act(async () => {});
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      // Room already has content, so the load-or-skip decision settles
+      // synchronously — the autosave hook should be re-invoked with
+      // `enabled: true` without ever calling the GET route.
+      expect(useCanvasAutosaveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: true }),
+      );
+    });
+
+    it("skips loading entirely when the room already has existing edges (nodes still empty)", async () => {
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [],
+        edges: [existingEdge],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+
+      renderCanvas();
+      await act(async () => {});
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("loads nothing when the project has no saved canvas (GET returns a non-OK response)", async () => {
+      renderCanvas();
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith("/api/projects/project-123/canvas");
+      });
+
+      expect(onNodesChange).not.toHaveBeenCalled();
+      expect(onEdgesChange).not.toHaveBeenCalled();
+      expect(roomBatchMock).not.toHaveBeenCalled();
+    });
+
+    it("loads a previously-saved snapshot into an empty room via a single room.batch", async () => {
+      const savedNode = {
+        id: "saved-node",
+        type: CANVAS_NODE_TYPE,
+        position: { x: 5, y: 5 },
+        width: 160,
+        height: 80,
+        data: { label: "Saved", color: DEFAULT_NODE_COLOR, textColor: "#EDEDED", shape: "rectangle" },
+      };
+      const savedEdge = { id: "saved-edge", type: CANVAS_EDGE_TYPE, source: "x", target: "y", data: {} };
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ nodes: [savedNode], edges: [savedEdge] }),
+      });
+
+      renderCanvas();
+
+      await waitFor(() => {
+        expect(onNodesChange).toHaveBeenCalled();
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith("/api/projects/project-123/canvas");
+      expect(roomBatchMock).toHaveBeenCalled();
+
+      const [nodeChanges] = onNodesChange.mock.calls[0] as [Array<{ type: string; item: unknown }>];
+      expect(nodeChanges).toEqual([{ type: "add", item: savedNode }]);
+
+      const [edgeChanges] = onEdgesChange.mock.calls[0] as [Array<{ type: string; item: unknown }>];
+      expect(edgeChanges).toEqual([{ type: "add", item: savedEdge }]);
+
+      // Both mutations must run inside the batch, same convention as
+      // spec 18's template-import fix.
+      const batchCallOrder = roomBatchMock.mock.invocationCallOrder[0];
+      expect(onNodesChange.mock.invocationCallOrder[0]).toBeGreaterThan(batchCallOrder);
+      expect(onEdgesChange.mock.invocationCallOrder[0]).toBeGreaterThan(batchCallOrder);
+    });
+
+    it("treats a malformed GET response body (missing nodes/edges arrays) as nothing to load", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ nodes: "not-an-array" }) });
+
+      renderCanvas();
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith("/api/projects/project-123/canvas");
+      });
+
+      expect(onNodesChange).not.toHaveBeenCalled();
+      expect(onEdgesChange).not.toHaveBeenCalled();
+    });
+
+    it("wires useCanvasAutosave with the room's projectId/nodes/edges", () => {
+      renderCanvas({ roomId: "project-abc" });
+
+      expect(useCanvasAutosaveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "project-abc", nodes: [], edges: [] }),
+      );
+    });
+
+    it("pushes useCanvasAutosave's returned status up via onSaveStatusChange", () => {
+      useCanvasAutosaveMock.mockReturnValue("saved");
+      const onSaveStatusChange = vi.fn();
+
+      renderCanvas({ onSaveStatusChange });
+
+      expect(onSaveStatusChange).toHaveBeenCalledWith("saved");
     });
   });
 });

@@ -178,6 +178,18 @@ Standalone right-side slide-over (`components/editor/ai-sidebar.tsx`, spec 20), 
 - **Chat bubbles**: user bubbles render right-aligned (`justify-end`) with `border-brand`/`bg-accent-dim`/`text-copy-primary`; assistant bubbles render left-aligned (`justify-start`) with `border-surface-border`/`bg-subtle`/`text-ai-text`. Exported as a standalone `ChatBubble` component so both roles' styling is real, tested code even though only the user role is reachable through this spec's own local-only submit flow (no AI reply mechanism exists yet).
 - **Specs tab** (`components/editor/specs-tab.tsx`): a "Generate Spec" button (enabled-looking, no wired handler yet — inert until specs 27/29 wire real generation/persistence) and exactly one static demo spec card (`rounded-2xl`/`border-surface-border`/`bg-elevated`, a `FileText` icon, a placeholder title/snippet, and a visually-disabled download icon button via the shadcn `Button`'s native `disabled` prop) — no data fetching, no real spec list.
 
+### Save Status Indicator
+
+`SaveStatusIndicator` (`components/editor/save-status-indicator.tsx`, spec 21) renders a small, non-interactive `saving | saved | error` element in `WorkspaceNavbar`'s button row, in the leading slot a manual "Save" button might otherwise occupy — no such button exists anywhere in this codebase (confirmed via grep), and this spec's own text describes only automatic, debounced autosave with no manual "Save Now" trigger. Renders nothing for the initial `"idle"` state (no save attempted yet this session), so the navbar never shows a stale status before any change has happened.
+
+- **Saving**: `Loader2` (`h-4 w-4 animate-spin`, same spin convention `share-dialog.tsx` already uses for its own in-flight buttons) plus "Saving…", both `text-copy-muted`.
+- **Saved**: `Check` plus "Saved", both `text-state-success`.
+- **Save failed**: `AlertCircle` plus "Save failed", both `text-state-error` (the same token `share-dialog.tsx` already uses for its own inline error text).
+
+Backed by `hooks/use-canvas-autosave.ts`'s `useCanvasAutosave`, which watches the room's Liveblocks-synced `nodes`/`edges` and debounces writes to `PUT /api/projects/[projectId]/canvas` (`CANVAS_AUTOSAVE_DEBOUNCE_MS = 1500`, a Dev-level choice within the spec's own recommended 1–2s range — same "reasonable unpinned value" precedent as `ZOOM_TRANSITION_DURATION_MS`/`NODE_MIN_SIZE`). The hook itself only lives inside `CanvasFlow` (`components/editor/canvas.tsx`), beneath the Liveblocks room boundary `WorkspaceShell` sits outside of, so its status is pushed back up to `WorkspaceShell` (the actual state owner) via an `onSaveStatusChange` callback prop threaded through `Canvas` — a deliberate deviation from spec 18's "parent owns state, child reads it directly" `isTemplatesModalOpen` convention, since nothing about *computing* that boolean required being inside the room boundary the way autosave's status does.
+
+On mount, `CanvasFlow` also checks whether the room already has any nodes/edges before possibly loading a previously-saved snapshot (`GET /api/projects/[projectId]/canvas`) into it — skipped entirely if the room already has content, so a returning collaborator's active session is never overwritten. A loaded snapshot is applied via one `room.batch(...)` wrapping both `onNodesChange`/`onEdgesChange` "add" calls, the same atomic-Storage-write convention spec 18 established for starter-template import.
+
 ## Component Library
 
 shadcn/ui on top of Tailwind. No custom design system. Components live in `components/ui/`. Use the `shadcn` CLI to add new components rather than writing them from scratch.
