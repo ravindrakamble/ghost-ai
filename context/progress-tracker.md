@@ -3,12 +3,27 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 22: Design Agent API — not yet started.
+- Phase 23: Design Agent Logic — not yet started.
 
 ## Current Goal
-- Analyst brief for feature spec 22 (Design Agent API) at `context/feature-specs/22-design-agent-api.md`.
+- Analyst pass for feature spec 23 (Design Agent Logic) at `context/feature-specs/23-design-agent-logic.md`.
 
 ## Completed
+
+- Feature spec 22: Design Agent API
+  - `package.json`/`package-lock.json` — added `@trigger.dev/sdk@^4.5.12`, the first Trigger.dev dependency in this repo.
+  - `trigger.config.ts` (new, project root) — Trigger.dev project config (project ref, task dirs, maxDuration); read only by the Trigger.dev CLI, never imported by the Next.js app.
+  - `trigger/design-agent.ts` (new) — minimal task shell (`DESIGN_AGENT_TASK_ID = "design-agent"`, `runDesignAgent`, `designAgentTask`). Logs/echoes `{ prompt, roomId }`; no AI provider call, no node/edge generation, no Liveblocks/canvas mutation — that is spec 23's job.
+  - `lib/trigger.ts` (new) — `triggerDesignAgent`/`createDesignRunToken`, following `lib/liveblocks.ts`'s/`lib/canvas-blob.ts`'s lazy-instantiation pattern so a missing `TRIGGER_SECRET_KEY` doesn't break `next build`'s page-data collection.
+  - `prisma/schema.prisma` (modified) — new `TaskRun` model (`id`, `runId` unique, `projectId`, `userId`, `createdAt`, index on `runId`, compound index on `[userId, projectId]`, `@relation` to `Project` with `onDelete: Cascade`), migration applied against the real Prisma Postgres database.
+  - `app/api/ai/design/route.ts` (new) — `POST`: auth → body validation (`roomId === projectId` enforced) → `getProjectAccess` (owner-or-collaborator) → `triggerDesignAgent` → `prisma.taskRun.create` → returns `{ runId }`.
+  - `app/api/ai/design/token/route.ts` (new) — `POST`: auth → body validation → `TaskRun` lookup → `TaskRun.userId`-scoped ownership check → `createDesignRunToken` (1-hour expiration) → returns `{ token }`.
+  - Tests: `trigger/design-agent.test.ts`, `lib/trigger.test.ts`, `app/api/ai/design/route.test.ts`, `app/api/ai/design/token/route.test.ts` (all new). 389/389 tests passing across 49 files.
+  - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all pass — the last confirmed with no `TRIGGER_SECRET_KEY`/`TRIGGER_PROJECT_REF` set, validating the lazy-instantiation pattern.
+  - QA: round 1 FAIL on a single docs-only issue (`context/progress-tracker.md` left stale by the Dev commit), fixed directly; all 12 acceptance criteria and the full mechanical gate independently passed in round 1. Round 2 re-review PASS, confirming the fix and no regression.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is prerequisite infrastructure for Success Criterion 4 ("AI can generate an architecture into the shared room from a prompt") — it does not land that criterion itself (no AI call, no generation happens here), but delivers the durable-background-task plumbing the criterion depends on, consistent with Goal 4 ("Generation runs as a durable background task") and Architecture Invariant 1 ("Request handlers do not run long-lived AI work"). Independently re-verified via `git diff spec/21-canvas-autosave...HEAD` (this branch's real parent) — not just trusting Dev/QA claims — that no `components/*` file, AI provider code, or Liveblocks/canvas mutation was introduced, and read `route.ts`/`token/route.ts`/`lib/trigger.ts`/`trigger/design-agent.ts`/the `TaskRun` Prisma model directly. No touches to any `project-overview.md` Out of Scope item or this spec's own out-of-scope callouts (AI provider call, node/edge generation, AI presence, chat/sidebar wiring, spec-generation route, rate limiting). No live Trigger.dev project provisioned in this environment (`TRIGGER_SECRET_KEY`/`TRIGGER_PROJECT_REF` both absent) — same category of human-provisioning gap as Liveblocks/Blob in specs 10/21, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #16](https://github.com/ravindrakamble/ghost-ai/pull/16) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/22-design-agent-api.md`.
 
 - Feature spec 21: Canvas Autosave
   - `lib/canvas-blob.ts` (new) — shared `@vercel/blob` upload/fetch helpers (`uploadCanvasSnapshot`/`fetchCanvasSnapshot`, `canvasBlobPathname`), storing/reading canvas JSON at `canvas/{projectId}.json`. Follows `lib/liveblocks.ts`'s lazy-token pattern (`requireBlobToken()` throws only when actually called), so a missing `BLOB_READ_WRITE_TOKEN` doesn't break `next build`'s page-data collection.
@@ -273,12 +288,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 22 not yet started)
+- (none — spec 23 not yet started)
 
 ## Next Up
 
-- Analyst pass for feature spec 22 (Design Agent API).
-- Human review/merge of spec 21's PR #15 and the still-open PRs for specs 12–20.
+- Analyst pass for feature spec 23 (Design Agent Logic).
+- Human review/merge of spec 22's PR #16 and the still-open PRs for specs 12–21.
 
 ## Open Questions
 
