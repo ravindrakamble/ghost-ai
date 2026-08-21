@@ -115,3 +115,103 @@ Brief ready for Senior Developer at `context/spec-status/21-canvas-autosave.md`.
 - No live network verification against a real Vercel Blob store — `BLOB_READ_WRITE_TOKEN` is not provisioned in this environment (same gap the brief's Dependencies section flags). All Blob interaction is unit-tested against a mocked `@vercel/blob` module.
 - No live two-tab/multiplayer verification of the load-skip-on-existing-content behavior or the atomic batched load, consistent with every prior canvas spec (11–20) in this pipeline — recommended as a human smoke test alongside those.
 - `lib/project-access.ts#getProjectAccess`'s docstring ("a *view*-access gate for `/editor/[roomId]` only") is now slightly stale, since this spec also reuses it as a *mutation* gate for `PUT /api/projects/[projectId]/canvas`. Not edited, per the brief's Open Questions #4 leaving this as a Dev-level call — flagging for QA/PO rather than silently rewriting the docstring's scope claim.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — pass (no output, no errors).
+- `npx eslint .` — pass (0 errors; 1 pre-existing warning in `.agents/skills/.../__root.tsx`, unrelated to this spec).
+- `npx next build` — pass. `/api/projects/[projectId]/canvas` compiles and is listed as a dynamic route; build succeeds with no `BLOB_READ_WRITE_TOKEN` set in this environment, confirming the lazy-token pattern in `lib/canvas-blob.ts` works as designed.
+- `npx vitest run --no-file-parallelism` — pass, 362/362 tests across 45 files.
+
+### Acceptance criteria checklist
+
+1. `@vercel/blob` installed and is the only storage mechanism for canvas JSON — **Pass**. `package.json` diff adds it; `lib/canvas-blob.ts` is the only module importing `put`/`get` from it.
+2. `Project.canvasJsonPath` is the sole Postgres persistence point for the blob reference; JSON body never written to Postgres — **Pass**. `route.ts`'s `PUT` only ever writes `{ canvasJsonPath }` to Prisma.
+3. `PUT` accepts JSON from authenticated owner/collaborator, uploads to `canvas/{projectId}.json`, updates `canvasJsonPath`, 401/404/403 precedence — **Pass**, verified in code and `route.test.ts` (auth-first ordering, 400 on invalid JSON/non-array body, 500 + skipped Prisma update on Blob failure, verified for a collaborator caller specifically, not just an owner).
+4. `GET` reads `canvasJsonPath`, fetches JSON server-side, returns JSON body (never raw blob URL) — **Pass**, tests explicitly assert the blob URL string never appears in the response body.
+5. No-saved-canvas project returns a defined, non-throwing response — **Pass**, 404 via the existing `errorResponse` envelope, for both `canvasJsonPath === null` and a corrupt/missing blob.
+6. Hook watches nodes/edges and debounces PUT writes — **Pass**, `CANVAS_AUTOSAVE_DEBOUNCE_MS = 1500`, timer reset per change verified in `use-canvas-autosave.test.ts` ("resets the debounce timer on every nodes/edges change, saving only once after the last change").
+7. Hook exposes `saving | saved | error` reflected in UI — **Pass**, `SaveStatusIndicator` renders each state; `idle` renders nothing (reasonable, documented choice).
+8. Room already has nodes/edges → load skipped entirely — **Pass**, `CanvasFlow`'s initial-load effect checks `nodes.length === 0 && edges.length === 0` before ever fetching; tested separately for nodes-only and edges-only non-empty cases.
+9. Empty room + saved `canvasJsonPath` → snapshot fetched and applied — **Pass**, applied via one `room.batch(...)` wrapping both `onNodesChange`/`onEdgesChange` adds, matching spec 18's atomic-write convention; tested including mutation-order-after-batch.
+10. Empty room + no saved canvas → nothing loads — **Pass**, non-OK GET (404) treated as "nothing to load," canvas starts empty.
+11. Save-status indicator visible in workspace UI — **Pass**, `SaveStatusIndicator` rendered in `WorkspaceNavbar`'s button row, wired end-to-end from `CanvasFlow` → `onSaveStatusChange` → `WorkspaceShell` state → `WorkspaceNavbar` prop.
+12. Standard gates pass — **Pass** (see Mechanical gate above).
+
+All 12 acceptance criteria pass.
+
+### Architecture invariants
+
+- No long-running AI work in a request handler — n/a to this spec; `PUT`/`GET` only perform a Blob call plus a single Prisma write/read each. Confirmed no Trigger.dev or AI work introduced.
+- Metadata (Postgres) and generated artifacts (Blob) kept separate — confirmed; `canvasJsonPath` is a URL reference only, JSON body never touches Postgres.
+- Auth/ownership enforced at every mutation boundary — confirmed; both `PUT` and `GET` call `getProjectAccess` before any Prisma/Blob work, with the standard 401/404/403 precedence.
+- Client components used only where interactivity/real-time state requires — unaffected; only `canvas.tsx` (already a client component) gained new hook usage.
+- Canvas schema consistency between user-created and imported content — unaffected by this spec; snapshot round-trips whatever shape is already in the room.
+
+No invariant violations found.
+
+### Standards compliance
+
+- No raw Tailwind color classes (`zinc-`/`slate-`/`gray-`) or hex literals in changed files — confirmed via grep, none found. `SaveStatusIndicator` uses `text-copy-muted`/`text-state-success`/`text-state-error`, all of which are real tokens defined in `app/globals.css`.
+- No `any` introduced — confirmed via review of `lib/canvas-blob.ts`, `route.ts`, `use-canvas-autosave.ts`, `canvas.tsx` (unknown + type guards used at every untrusted-input boundary: `isCanvasSnapshot`, `isValidCanvasBody`, `isCanvasSnapshotBody`).
+- `components/ui/*` untouched by this spec — confirmed via `git diff --stat` against the spec-21 commit range.
+- `context/ui-context.md` and `context/progress-tracker.md` both updated to reflect what was actually built (new "Save Status Indicator" section; phase/in-progress/next-up entries updated).
+
+### Error handling
+
+- Bad input (`PUT` invalid JSON, non-array nodes/edges) → 400, tested.
+- Unauthenticated / missing project / non-member → 401/404/403 on both routes, tested.
+- Missing/corrupt saved canvas → 404 on `GET`, tested (both `canvasJsonPath === null` and `fetchCanvasSnapshot` returning `null`).
+- Upstream Blob failures surfaced as 500 rather than silently swallowed as "no canvas" (`fetchCanvasSnapshot`/`uploadCanvasSnapshot` let genuine errors propagate; route handlers catch and return 500) — tested for both `PUT` and `GET`.
+- Client-side load fetch failure (network/parse error, non-OK response) degrades gracefully to "start empty" rather than surfacing an error to the user — matches acceptance criterion 10's intent, tested in `canvas.test.tsx`.
+- Autosave hook: stale in-flight response can't clobber a later status; pending save is cancelled on unmount — both tested.
+
+### Housekeeping
+
+- `context/progress-tracker.md` updated: Phase/Goal/In-Progress/Next-Up entries all reflect spec 21's actual state (Senior Developer pass complete, awaiting QA), with file list and gate results recorded. Confirmed accurate against the actual diff.
+
+### Issues found
+
+None blocking. Two minor, non-blocking observations, neither of which affects any acceptance criterion or invariant:
+
+- `lib/project-access.ts#getProjectAccess`'s docstring still says "a *view*-access gate for `/editor/[roomId]` only," but is now also reused as this spec's mutation gate for `PUT /api/projects/[projectId]/canvas`. This is cosmetic (the function's actual behavior — owner-or-collaborator, correct 401/404/403 shape — is exactly right for this use), but the docstring's scope claim is stale. Not required to block PASS, but worth a follow-up doc fix whenever convenient. `[Bug → Dev]` (trivial, doc-only — no behavior change needed, just update the docstring's stated scope to also cover this mutation use, or note both call sites).
+- `SaveStatusIndicator` renders nothing for `"idle"`, and the autosave hook's debounced effect fires once `isReadyForAutosave` flips true even if nothing actually changed since the initial load (e.g. a freshly-loaded snapshot immediately re-PUTs itself 1.5s after load). This is a harmless no-op re-save (same content re-uploaded), not a correctness bug, and not required by any acceptance criterion to avoid — flagging only as a minor efficiency note, not an issue requiring a fix.
+
+Neither item is a spec gap — the brief's Open Questions already anticipated and made a reasonable call on every ambiguous point (debounce interval, auth model, 404 shape, atomic batching, no manual Save button), and the Senior Developer's Dev Notes correctly cite each decision back to the brief.
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Against Success Criteria / project-overview.md
+
+- **Success Criterion 6** ("Project metadata and generated artifacts are stored in the correct layers") is this spec's direct target, and it lands correctly: `Project.canvasJsonPath` (Postgres) holds only the blob reference; the canvas JSON body itself is never written to Postgres (confirmed by reading `route.ts` — `PUT` only ever writes `{ canvasJsonPath }`, `lib/canvas-blob.ts` is the sole `@vercel/blob` consumer). This is the metadata/artifact-layer split the architecture doc requires, not just a QA-checked technicality.
+- This spec is also genuine product-necessity work, not busywork: without it, closing the editor tab loses all canvas work, which would undermine every other success criterion downstream (a collaboratively-built graph that can't survive a page reload can't later be turned into a spec — Goal 6/Criterion 5). Framing it as prerequisite infrastructure "before adding AI generation" (per the spec's own first line) is accurate — spec 22+ generating content into the room would be far riskier without a working save/reload path already in place.
+- `project-overview.md`'s Features section says "Canvas snapshots persisted to the filesystem" — this spec persists to Vercel Blob instead. This is not scope drift: `architecture-context.md`'s Storage Model and this pipeline's own spec 05/06 history already establish Blob (not the literal filesystem) as the real artifact-storage target; "filesystem" reads as stale wording in the overview doc, not a directive this spec violated. Confirmed no separate filesystem-writing code was introduced.
+
+### Scope check (Out of Scope wall + this spec's own callouts)
+
+Independently diffed `spec/20-ai-sidebar-shell..spec/21-canvas-autosave` (this branch's real parent) rather than trusting Dev Notes/QA's account: 19 files changed, all of them exactly the ones itemized in Concrete Deliverables and Dev Notes' "Files added/modified." Specifically confirmed:
+- No `prisma/schema.prisma` change in the diff — `canvasJsonPath` is reused as the brief says, not re-added.
+- No `app/api/ai/*`, no Trigger.dev reference, no touch to `ai-sidebar.tsx`/`ai-architect-tab.tsx`/`specs-tab.tsx` (spec 20's files) — AI generation stays out, as required.
+- Read `route.ts`, `lib/canvas-blob.ts`, `hooks/use-canvas-autosave.ts`, and the relevant `canvas.tsx` diff hunk directly: auth gate is owner-or-collaborator via the existing `getProjectAccess` (correct call per Open Questions #4 — an owner-only gate would have wrongly blocked collaborator autosave, a real product bug this brief specifically headed off), the `GET` route never returns the raw blob URL (only the parsed JSON body), exactly one snapshot is kept per project (`allowOverwrite: true`, no history), and the room-batch load matches spec 18's established atomic-write convention.
+- No manual "Save Now" action was added — correctly out of scope per the brief's own Open Questions #1 disposition; the non-interactive `SaveStatusIndicator` is a reasonable resolution of a genuine spec-text gap (the original spec assumed a Save button that doesn't exist anywhere in this codebase), not an invented feature.
+- Nothing here touches the Out of Scope wall's "Production object storage migration" or "Versioned spec history" items.
+
+### progress-tracker.md accuracy
+
+The "In Progress" entry (line 260) and "Current Phase"/"Current Goal" (still reading "awaiting QA") are now stale now that QA has passed — this is expected at this stage (QA/Dev only note in-progress state; moving this to "Completed" is this review's own job) and will be corrected below as part of PR creation, not a defect in what's there today. The Deferred — Production Hardening section's Blob-visibility note is still accurate and appropriately not resolved by this spec.
+
+### Rough edges (acceptable at this stage, not blocking)
+
+- `lib/project-access.ts#getProjectAccess`'s stale "view-access only" docstring (QA's issue #1) — cosmetic, correctly non-blocking; doesn't affect any later spec's ability to build on this route.
+- The harmless immediate re-save-after-load no-op (QA's issue #2) — an efficiency nit, not a correctness or product issue.
+- No live network verification against a real Vercel Blob store, and no live two-tab verification of the load-skip-on-existing-content behavior — consistent with every prior canvas spec's (11–20) recommended human smoke test, not a new gap introduced here.
+
+No changes requested. This spec is ready for the human's final call.
