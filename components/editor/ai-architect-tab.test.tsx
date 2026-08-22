@@ -80,6 +80,65 @@ describe("AiArchitectTab", () => {
   });
 });
 
+describe("AiArchitectTab — aiStatus (spec 24)", () => {
+  it("renders no status line and an enabled Send-icon button when aiStatus is null/absent", () => {
+    render(<AiArchitectTab />);
+
+    expect(screen.queryByText(/ghost ai is working/i)).not.toBeInTheDocument();
+    const sendButton = screen.getByRole("button", { name: /send message/i });
+    expect(sendButton.querySelector("svg.animate-spin")).not.toBeInTheDocument();
+  });
+
+  it.each(["start", "processing"] as const)(
+    "shows the status line, disables the textarea/Send button, and swaps to a spinner while stage is %s",
+    (stage) => {
+      render(<AiArchitectTab aiStatus={{ stage, text: "Designing your system…" }} />);
+
+      expect(screen.getByText("Designing your system…")).toBeInTheDocument();
+
+      const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+      expect(textarea).toBeDisabled();
+
+      const sendButton = screen.getByRole("button", { name: /send message/i });
+      expect(sendButton).toBeDisabled();
+      expect(sendButton.querySelector("svg.animate-spin")).toBeInTheDocument();
+    },
+  );
+
+  it.each(["complete", "error"] as const)(
+    "shows no status line and re-enables the input once stage reaches %s",
+    (stage) => {
+      render(<AiArchitectTab aiStatus={{ stage, text: "Done" }} />);
+
+      expect(screen.queryByText("Done")).not.toBeInTheDocument();
+
+      const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+      expect(textarea).not.toBeDisabled();
+
+      // Still subject to the pre-existing empty-input disabled rule.
+      const sendButton = screen.getByRole("button", { name: /send message/i });
+      expect(sendButton).toBeDisabled();
+
+      fireEvent.change(textarea, { target: { value: "Design a CDN" } });
+      expect(sendButton).not.toBeDisabled();
+      expect(sendButton.querySelector("svg.animate-spin")).not.toBeInTheDocument();
+    },
+  );
+
+  it("falls back to default status text when aiStatus.text is omitted (valid per the optional schema)", () => {
+    render(<AiArchitectTab aiStatus={{ stage: "start" }} />);
+
+    expect(screen.getByText("Ghost AI is working…")).toBeInTheDocument();
+  });
+
+  it("does not disable or dim starter chips, the message list, or anything outside the input row while generating", () => {
+    render(<AiArchitectTab aiStatus={{ stage: "processing", text: "Working…" }} />);
+
+    const chip = screen.getByRole("button", { name: "Design an e-commerce backend" });
+    expect(chip).not.toBeDisabled();
+  });
+});
+
 describe("ChatBubble", () => {
   it("renders a user message right-aligned", () => {
     render(<ChatBubble message={{ id: "1", role: "user", content: "Hi there" }} />);

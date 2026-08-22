@@ -8,6 +8,7 @@ import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
 import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import type { Project } from "@/types/project"
+import type { AiStatusMessage } from "@/types/tasks"
 
 interface WorkspaceShellProps {
   project: Project
@@ -47,12 +48,18 @@ interface WorkspaceShellProps {
  * inside `CanvasFlow` (`useCanvasAutosave` needs the room's synced
  * `nodes`/`edges`) and gets pushed back up through that callback. See
  * `Canvas`'s own docblock for the full reasoning.
+ *
+ * `aiStatus` (spec 24) follows the exact same shape: owned here, the setter
+ * (`setAiStatus`) is passed down to `Canvas` as `onAiStatusChange` (the room's
+ * `ai-status-feed` subscription is only valid inside `CanvasFlow`), and the
+ * resulting value is threaded down to `AiSidebar` as a plain prop.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
   const [isShareOpen, setIsShareOpen] = useState(false)
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false)
   const [saveStatus, setSaveStatus] = useState<CanvasSaveStatus>("idle")
+  const [aiStatus, setAiStatus] = useState<AiStatusMessage | null>(null)
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
@@ -77,8 +84,13 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
           isTemplatesModalOpen={isTemplatesModalOpen}
           setIsTemplatesModalOpen={setIsTemplatesModalOpen}
           onSaveStatusChange={setSaveStatus}
+          onAiStatusChange={setAiStatus}
         />
-        <AiSidebar isOpen={isAiSidebarOpen} onClose={() => setIsAiSidebarOpen(false)} />
+        <AiSidebar
+          isOpen={isAiSidebarOpen}
+          onClose={() => setIsAiSidebarOpen(false)}
+          aiStatus={aiStatus}
+        />
       </div>
       <ShareDialog
         open={isShareOpen}

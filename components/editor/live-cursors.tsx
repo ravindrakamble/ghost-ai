@@ -1,5 +1,6 @@
 "use client"
 
+import { Loader2 } from "lucide-react"
 import { shallow, useOther, useOthersConnectionIds } from "@liveblocks/react/suspense"
 import { useViewport, type XYPosition } from "@xyflow/react"
 import { useCurrentUserId } from "@/hooks/use-current-user-id"
@@ -22,6 +23,18 @@ interface CursorPresence {
   name: string
   color: string
   cursor: XYPosition | null
+  /**
+   * Spec 24 (AI Presence State): the pinned `Presence.thinking` field
+   * (`liveblocks.config.ts`), read directly off `other.presence` — decorates
+   * the name badge with a small spinner while `true`. Note this only ever
+   * has anything to attach to when `other.cursor` is also non-null (the
+   * early-return below is unchanged) — spec 23's own presence semantics
+   * leave the AI's `cursor` `null` for most of `start`/early-`processing`,
+   * so the spinner is a best-effort secondary signal, not the reliable one
+   * (that's the sidebar status line, spec 24's Analyst Brief, Open
+   * Questions #3).
+   */
+  thinking: boolean
 }
 
 /**
@@ -64,6 +77,7 @@ function LiveCursor({
       name: candidate.info.name,
       color: candidate.info.color,
       cursor: candidate.presence.cursor,
+      thinking: candidate.presence.thinking,
     }),
     shallow,
   )
@@ -112,9 +126,13 @@ function LiveCursor({
         />
       </svg>
       <span
-        className="rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap text-copy-primary"
+        className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap text-copy-primary"
         style={{ backgroundColor: "var(--cursor-color)" }}
       >
+        {/* Spec 24: small spinner while this participant's presence
+         reports `thinking: true` (e.g. Ghost AI mid-run) — nothing when
+         `false`/absent. */}
+        {other.thinking ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
         {other.name}
       </span>
     </div>

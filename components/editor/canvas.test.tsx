@@ -47,6 +47,7 @@ const {
   useUserMock,
   useCanvasAutosaveMock,
   fetchMock,
+  useAiStatusFeedMock,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
   useLiveblocksFlowMock: vi.fn(),
@@ -90,6 +91,13 @@ const {
   // many pre-existing tests (which never exercise autosave/load behavior
   // themselves) don't hit a real network call on every mount.
   fetchMock: vi.fn(),
+  // Spec 24: `useAiStatusFeed`'s own internals (real `useEventListener`
+  // subscription, validation, latest-only state) are unit-tested in
+  // `hooks/use-ai-status-feed.test.ts` — mocked here so this file only
+  // verifies *wiring* (that `CanvasFlow` calls it and pushes the result up
+  // via `onAiStatusChange`), the same convention already established for
+  // `useCanvasAutosaveMock` above.
+  useAiStatusFeedMock: vi.fn(),
 }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
@@ -147,6 +155,10 @@ vi.mock("@liveblocks/react-flow", () => ({
 
 vi.mock("@/hooks/use-canvas-autosave", () => ({
   useCanvasAutosave: useCanvasAutosaveMock,
+}));
+
+vi.mock("@/hooks/use-ai-status-feed", () => ({
+  useAiStatusFeed: useAiStatusFeedMock,
 }));
 
 vi.mock("@clerk/nextjs", () => ({
@@ -217,6 +229,7 @@ function renderCanvas(overrides: Partial<Parameters<typeof Canvas>[0]> = {}) {
     isTemplatesModalOpen: false,
     setIsTemplatesModalOpen: vi.fn(),
     onSaveStatusChange: vi.fn(),
+    onAiStatusChange: vi.fn(),
     ...overrides,
   };
   render(<Canvas {...props} />);
@@ -254,6 +267,10 @@ beforeEach(() => {
   useCanvasAutosaveMock.mockReturnValue("idle");
   fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
   vi.stubGlobal("fetch", fetchMock);
+
+  // Spec 24 default: no ai-status-feed message observed yet this session —
+  // individual tests override this to exercise the push-up wiring.
+  useAiStatusFeedMock.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -717,6 +734,26 @@ describe("Canvas", () => {
       renderCanvas({ onSaveStatusChange });
 
       expect(onSaveStatusChange).toHaveBeenCalledWith("saved");
+    });
+  });
+
+  describe("ai presence state (spec 24)", () => {
+    it("calls useAiStatusFeed (subscribed inside the room boundary) and pushes null up by default", () => {
+      const onAiStatusChange = vi.fn();
+
+      renderCanvas({ onAiStatusChange });
+
+      expect(useAiStatusFeedMock).toHaveBeenCalled();
+      expect(onAiStatusChange).toHaveBeenCalledWith(null);
+    });
+
+    it("pushes useAiStatusFeed's returned message up via onAiStatusChange", () => {
+      useAiStatusFeedMock.mockReturnValue({ stage: "processing", text: "Designing your system…" });
+      const onAiStatusChange = vi.fn();
+
+      renderCanvas({ onAiStatusChange });
+
+      expect(onAiStatusChange).toHaveBeenCalledWith({ stage: "processing", text: "Designing your system…" });
     });
   });
 });

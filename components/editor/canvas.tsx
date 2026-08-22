@@ -38,6 +38,7 @@ import { StarterTemplatesModal } from "@/components/editor/starter-templates-mod
 import type { CanvasTemplate } from "@/components/editor/starter-templates"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
+import { useAiStatusFeed } from "@/hooks/use-ai-status-feed"
 import { useCanvasAutosave, type CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { createDroppedNode } from "@/lib/canvas-shapes"
@@ -47,6 +48,7 @@ import {
   type CanvasEdge as CanvasEdgeAlias,
   type CanvasNode as CanvasNodeAlias,
 } from "@/types/canvas"
+import type { AiStatusMessage } from "@/types/tasks"
 import "@xyflow/react/dist/style.css"
 import "@liveblocks/react-flow/styles.css"
 
@@ -130,6 +132,16 @@ interface CanvasProps {
    * `nodes`/`edges`), so it has to flow back up via a callback instead.
    */
   onSaveStatusChange: (status: CanvasSaveStatus) => void
+  /**
+   * Pushes the latest validated `ai-status-feed` message (spec 24, via
+   * `hooks/use-ai-status-feed.ts`) up to `WorkspaceShell`, which threads it
+   * down to `AiSidebar`/`AiArchitectTab` as a plain prop. Same
+   * callback-push-up shape as `onSaveStatusChange` above (spec 21) and for
+   * the same reason: the room's `ai-status-feed` subscription is only valid
+   * inside `CanvasFlow`, beneath the `RoomProvider` boundary `WorkspaceShell`
+   * sits outside of — see spec 24's Analyst Brief, Open Questions #1.
+   */
+  onAiStatusChange: (status: AiStatusMessage | null) => void
 }
 
 /**
@@ -144,6 +156,7 @@ export function Canvas({
   isTemplatesModalOpen,
   setIsTemplatesModalOpen,
   onSaveStatusChange,
+  onAiStatusChange,
 }: CanvasProps) {
   return (
     <div className="relative flex-1 bg-base">
@@ -164,6 +177,7 @@ export function Canvas({
                   isTemplatesModalOpen={isTemplatesModalOpen}
                   setIsTemplatesModalOpen={setIsTemplatesModalOpen}
                   onSaveStatusChange={onSaveStatusChange}
+                  onAiStatusChange={onAiStatusChange}
                 />
               </ReactFlowProvider>
             </ClientSideSuspense>
@@ -343,17 +357,28 @@ function CanvasError() {
  *    Its returned status is pushed up to `WorkspaceShell` via the
  *    `onSaveStatusChange` prop (see `Canvas`'s own docblock above for why
  *    this is a callback push-up rather than a direct pass-through).
+ *
+ * Spec 24 (AI Presence State) subscribes to the room's `ai-status-feed`
+ * (`useAiStatusFeed()`, valid here for the same reason `useUndo`/
+ * `useUpdateMyPresence` already are — `CanvasFlow` sits inside
+ * `RoomProvider`) and pushes the latest validated message up via the new
+ * `onAiStatusChange` prop, the exact same callback-push-up shape
+ * `onSaveStatusChange` already established. This component does not read or
+ * render anything AI-status-related itself — `AiArchitectTab` (outside the
+ * room boundary) is the actual consumer.
  */
 function CanvasFlow({
   projectId,
   isTemplatesModalOpen,
   setIsTemplatesModalOpen,
   onSaveStatusChange,
+  onAiStatusChange,
 }: {
   projectId: string
   isTemplatesModalOpen: boolean
   setIsTemplatesModalOpen: (open: boolean) => void
   onSaveStatusChange: (status: CanvasSaveStatus) => void
+  onAiStatusChange: (status: AiStatusMessage | null) => void
 }) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, onDelete } = useLiveblocksFlow<
     CanvasNodeAlias,
@@ -434,6 +459,15 @@ function CanvasFlow({
   useEffect(() => {
     onSaveStatusChange(saveStatus)
   }, [saveStatus, onSaveStatusChange])
+
+  // Spec 24 (AI Presence State): the room's latest validated `ai-status-feed`
+  // message, pushed up to `WorkspaceShell` via `onAiStatusChange` — see this
+  // component's own docblock above.
+  const aiStatus = useAiStatusFeed()
+
+  useEffect(() => {
+    onAiStatusChange(aiStatus)
+  }, [aiStatus, onAiStatusChange])
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {
