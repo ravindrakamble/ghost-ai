@@ -1,6 +1,7 @@
 "use client"
 
 import { Pencil, Plus, Trash2, X } from "lucide-react"
+import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useProjectDialogsContext } from "@/components/editor/project-dialogs-provider"
 import { Button } from "@/components/ui/button"
@@ -64,6 +65,7 @@ export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
                     key={project.id}
                     project={project}
                     isActive={project.id === roomId}
+                    onNavigate={onClose}
                     onRename={() => openRenameDialog(project)}
                     onDelete={() => openDeleteDialog(project)}
                   />
@@ -78,16 +80,18 @@ export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
                 </p>
               ) : (
                 sharedProjects.map((project) => (
-                  <div
+                  <Link
                     key={project.id}
-                    className={`truncate rounded-lg px-2 py-1.5 text-sm ${
+                    href={`/editor/${project.id}`}
+                    onClick={onClose}
+                    className={`block truncate rounded-lg px-2 py-1.5 text-sm ${
                       project.id === roomId
                         ? "bg-accent-dim text-brand"
-                        : "text-copy-primary"
+                        : "text-copy-primary hover:bg-subtle"
                     }`}
                   >
                     {project.name}
-                  </div>
+                  </Link>
                 ))
               )}
             </TabsContent>
@@ -108,11 +112,13 @@ export function ProjectSidebar({ isOpen, onClose }: ProjectSidebarProps) {
 function ProjectItem({
   project,
   isActive,
+  onNavigate,
   onRename,
   onDelete,
 }: {
   project: Project
   isActive: boolean
+  onNavigate: () => void
   onRename: () => void
   onDelete: () => void
 }) {
@@ -122,11 +128,13 @@ function ProjectItem({
         isActive ? "bg-accent-dim" : "hover:bg-subtle"
       }`}
     >
-      <span
-        className={`truncate text-sm ${isActive ? "text-brand" : "text-copy-primary"}`}
+      <Link
+        href={`/editor/${project.id}`}
+        onClick={onNavigate}
+        className={`min-w-0 flex-1 truncate text-sm ${isActive ? "text-brand" : "text-copy-primary"}`}
       >
         {project.name}
-      </span>
+      </Link>
       <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
         <Button variant="ghost" size="icon-sm" onClick={onRename}>
           <Pencil />

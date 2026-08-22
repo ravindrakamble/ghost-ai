@@ -54,4 +54,32 @@ describe("ProjectSidebar", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Shared" }));
     expect(screen.getByText("Shared Project").className).not.toContain("text-brand");
   });
+
+  it("links each owned project name to its editor route", () => {
+    useParamsMock.mockReturnValue({ roomId: "p1" });
+
+    render(<ProjectSidebar isOpen onClose={() => {}} />);
+
+    expect(screen.getByText("Project One").closest("a")).toHaveAttribute("href", "/editor/p1");
+    expect(screen.getByText("Project Two").closest("a")).toHaveAttribute("href", "/editor/p2");
+  });
+
+  it("links each shared project name to its editor route", () => {
+    useParamsMock.mockReturnValue({ roomId: "p3" });
+
+    render(<ProjectSidebar isOpen onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Shared" }));
+
+    expect(screen.getByText("Shared Project").closest("a")).toHaveAttribute("href", "/editor/p3");
+  });
+
+  it("closes the sidebar when a project name is clicked", () => {
+    useParamsMock.mockReturnValue({ roomId: "p1" });
+    const onClose = vi.fn();
+
+    render(<ProjectSidebar isOpen onClose={onClose} />);
+    fireEvent.click(screen.getByText("Project Two"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
