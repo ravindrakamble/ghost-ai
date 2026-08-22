@@ -5,7 +5,7 @@ import { AiSidebar } from "./ai-sidebar";
 
 describe("AiSidebar", () => {
   it("renders the header (bot icon, title, subtitle) and preserves the floating/slide/border treatment", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
+    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
 
     expect(screen.getByText("AI Workspace")).toBeInTheDocument();
     expect(screen.getByText("Collaborate with Ghost AI")).toBeInTheDocument();
@@ -27,7 +27,7 @@ describe("AiSidebar", () => {
   });
 
   it("reflects isOpen via translate transform and aria-hidden when closed", () => {
-    render(<AiSidebar isOpen={false} onClose={vi.fn()} aiStatus={null} />);
+    render(<AiSidebar isOpen={false} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
 
     const aside = screen.getByText("AI Workspace").closest("aside") as HTMLElement;
     expect(aside.className).toContain("translate-x-full");
@@ -36,14 +36,14 @@ describe("AiSidebar", () => {
 
   it("calls onClose when the header close button is clicked", () => {
     const onClose = vi.fn();
-    render(<AiSidebar isOpen={true} onClose={onClose} aiStatus={null} />);
+    render(<AiSidebar isOpen={true} onClose={onClose} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /close ai sidebar/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("renders exactly two tabs, AI Architect and Specs, with AI Architect active by default", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
+    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
 
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(2);
@@ -54,7 +54,7 @@ describe("AiSidebar", () => {
   });
 
   it("switches to the Specs tab content on click, distinguishing the active tab via tokens", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
+    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
 
     const architectTab = screen.getByRole("tab", { name: "AI Architect" });
     const specsTab = screen.getByRole("tab", { name: "Specs" });
@@ -85,7 +85,7 @@ describe("AiSidebar", () => {
   });
 
   it("has no Liveblocks, /api/ai, or Trigger.dev references anywhere in its rendered output", () => {
-    const { container } = render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
+    const { container } = render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
     const html = container.innerHTML;
 
     expect(html).not.toMatch(/liveblocks/i);
@@ -95,7 +95,13 @@ describe("AiSidebar", () => {
 
   it("forwards aiStatus straight through to AiArchitectTab (spec 24)", () => {
     render(
-      <AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={{ stage: "processing", text: "Designing…" }} />,
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        aiStatus={{ stage: "processing", text: "Designing…" }}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+      />,
     );
 
     expect(screen.getByText("Designing…")).toBeInTheDocument();
@@ -105,7 +111,13 @@ describe("AiSidebar", () => {
 
   it("does not dim or block tab switching or the close button while a run is active", () => {
     render(
-      <AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={{ stage: "start", text: "Working…" }} />,
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        aiStatus={{ stage: "start", text: "Working…" }}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+      />,
     );
 
     const specsTab = screen.getByRole("tab", { name: "Specs" });
@@ -113,5 +125,35 @@ describe("AiSidebar", () => {
     expect(specsTab).toHaveAttribute("aria-selected", "true");
 
     expect(screen.getByRole("button", { name: /close ai sidebar/i })).not.toBeDisabled();
+  });
+
+  it("forwards chatMessages straight through to AiArchitectTab (spec 25)", () => {
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        aiStatus={null}
+        chatMessages={[
+          { id: "1", sender: "Ada", role: "user", content: "Hello Ghost AI", timestamp: 1700000000000 },
+        ]}
+        sendChatMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Hello Ghost AI")).toBeInTheDocument();
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+  });
+
+  it("forwards sendChatMessage straight through to AiArchitectTab, called with the trimmed input on submit (spec 25)", () => {
+    const sendChatMessage = vi.fn();
+    render(
+      <AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={sendChatMessage} />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(sendChatMessage).toHaveBeenCalledWith("Design a queue");
   });
 });

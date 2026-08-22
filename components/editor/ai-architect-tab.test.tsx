@@ -1,7 +1,19 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { AiArchitectTab, ChatBubble } from "./ai-architect-tab";
+import type { AiChatMessage } from "@/types/tasks";
+
+function makeMessage(overrides: Partial<AiChatMessage> = {}): AiChatMessage {
+  return {
+    id: "msg-1",
+    sender: "Ada",
+    role: "user",
+    content: "Design an inventory system",
+    timestamp: Date.UTC(2026, 0, 1, 12, 0),
+    ...overrides,
+  };
+}
 
 describe("AiArchitectTab", () => {
   it("shows the empty state with the three exact starter prompt chips when there are no messages", () => {
@@ -26,37 +38,64 @@ describe("AiArchitectTab", () => {
     expect(screen.getByRole("button", { name: "Build a CI/CD pipeline" })).toBeInTheDocument();
   });
 
-  it("submits on Enter (without Shift), appending a local user bubble and clearing the input", () => {
-    render(<AiArchitectTab />);
-
-    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "Design an inventory system" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    expect(screen.getByText("Design an inventory system")).toBeInTheDocument();
-    expect(textarea.value).toBe("");
-    // Empty state is gone now that a message exists.
-    expect(screen.queryByText(/describe the system you want to design/i)).not.toBeInTheDocument();
-  });
-
   it("does not submit on Shift+Enter, allowing a newline instead", () => {
-    render(<AiArchitectTab />);
+    const sendMessage = vi.fn();
+    render(<AiArchitectTab sendMessage={sendMessage} />);
 
     const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "line one" } });
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
 
-    // The typed text stays in the textarea only — no chat bubble was
-    // appended, proven by the empty state (and its chips) still rendering.
+    // The typed text stays in the textarea only — no send call was made.
     expect(textarea.value).toBe("line one");
-    expect(screen.getByRole("button", { name: "Design an e-commerce backend" })).toBeInTheDocument();
-    expect(
-      screen.getByText(/describe the system you want to design/i)
-    ).toBeInTheDocument();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an empty or whitespace-only message", () => {
+    const sendMessage = vi.fn();
+    render(<AiArchitectTab sendMessage={sendMessage} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "   " } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("AiArchitectTab — chatMessages/sendMessage (spec 25)", () => {
+  it("renders every persisted message in order, showing sender/timestamp/content", () => {
+    const messages: AiChatMessage[] = [
+      makeMessage({ id: "1", sender: "Ada", content: "First message" }),
+      makeMessage({ id: "2", sender: "Bot", role: "assistant", content: "Second message" }),
+    ];
+
+    render(<AiArchitectTab chatMessages={messages} />);
+
+    const rendered = screen.getAllByText(/^(First|Second) message$/).map((node) => node.textContent);
+    expect(rendered).toEqual(["First message", "Second message"]);
+    expect(screen.getAllByText("Ada")).toHaveLength(1);
+    expect(screen.getAllByText("Bot")).toHaveLength(1);
+    // Empty state is gone once real messages exist.
+    expect(screen.queryByText(/describe the system you want to design/i)).not.toBeInTheDocument();
+  });
+
+  it("submits via Enter (without Shift), calling sendMessage with the trimmed content and clearing the input on success", () => {
+    const sendMessage = vi.fn();
+    render(<AiArchitectTab sendMessage={sendMessage} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "  Design an inventory system  " } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(sendMessage).toHaveBeenCalledWith("Design an inventory system");
+    expect(textarea.value).toBe("");
+    expect(screen.queryByText(/failed to send/i)).not.toBeInTheDocument();
   });
 
   it("submits via the Send button and disables it while the input is empty", () => {
-    render(<AiArchitectTab />);
+    const sendMessage = vi.fn();
+    render(<AiArchitectTab sendMessage={sendMessage} />);
 
     const sendButton = screen.getByRole("button", { name: /send message/i });
     expect(sendButton).toBeDisabled();
@@ -66,17 +105,49 @@ describe("AiArchitectTab", () => {
     expect(sendButton).not.toBeDisabled();
 
     fireEvent.click(sendButton);
-    expect(screen.getByText("Design a chat app")).toBeInTheDocument();
+    expect(sendMessage).toHaveBeenCalledWith("Design a chat app");
   });
 
-  it("does not submit an empty or whitespace-only message", () => {
+  it("preserves the input and shows an inline error indicator when sendMessage throws (failed send)", () => {
+    const sendMessage = vi.fn(() => {
+      throw new Error("boom");
+    });
+    render(<AiArchitectTab sendMessage={sendMessage} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a CDN" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(sendMessage).toHaveBeenCalledWith("Design a CDN");
+    // Input is preserved, not cleared.
+    expect(textarea.value).toBe("Design a CDN");
+    expect(screen.getByText(/failed to send/i)).toBeInTheDocument();
+  });
+
+  it("clears a stale error indicator once the user edits the input again", () => {
+    const sendMessage = vi.fn(() => {
+      throw new Error("boom");
+    });
+    render(<AiArchitectTab sendMessage={sendMessage} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a CDN" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(screen.getByText(/failed to send/i)).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "Design a CDN v2" } });
+    expect(screen.queryByText(/failed to send/i)).not.toBeInTheDocument();
+  });
+
+  it("throws (and shows the failure state) when no sendMessage prop is wired up yet", () => {
     render(<AiArchitectTab />);
 
     const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "   " } });
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(screen.getByRole("button", { name: "Design an e-commerce backend" })).toBeInTheDocument();
+    expect(textarea.value).toBe("Design a queue");
+    expect(screen.getByText(/failed to send/i)).toBeInTheDocument();
   });
 });
 
@@ -140,20 +211,34 @@ describe("AiArchitectTab — aiStatus (spec 24)", () => {
 });
 
 describe("ChatBubble", () => {
-  it("renders a user message right-aligned", () => {
-    render(<ChatBubble message={{ id: "1", role: "user", content: "Hi there" }} />);
+  it("renders a user message right-aligned with sender/timestamp/content", () => {
+    render(<ChatBubble message={makeMessage({ role: "user", sender: "Ada", content: "Hi there" })} />);
 
-    const bubble = screen.getByText("Hi there");
-    const row = bubble.parentElement as HTMLElement;
-    expect(row.className).toContain("justify-end");
+    const bubble = screen.getByText("Hi there").closest("div")?.parentElement as HTMLElement;
+    expect(bubble.className).toContain("justify-end");
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+    expect(screen.getByText("Hi there")).toBeInTheDocument();
   });
 
   it("renders an assistant message left-aligned with the AI text token", () => {
-    render(<ChatBubble message={{ id: "2", role: "assistant", content: "Sure, here's a plan" }} />);
+    render(
+      <ChatBubble
+        message={makeMessage({ role: "assistant", sender: "Ghost AI", content: "Sure, here's a plan" })}
+      />,
+    );
 
-    const bubble = screen.getByText("Sure, here's a plan");
-    const row = bubble.parentElement as HTMLElement;
-    expect(row.className).toContain("justify-start");
-    expect(bubble.className).toContain("text-ai-text");
+    const contentEl = screen.getByText("Sure, here's a plan");
+    const bubble = contentEl.closest("div")?.parentElement as HTMLElement;
+    expect(bubble.className).toContain("justify-start");
+    expect(bubble.querySelector(".text-ai-text")).not.toBeNull();
+  });
+
+  it("shows a formatted (non-empty) timestamp string", () => {
+    render(<ChatBubble message={makeMessage({ timestamp: Date.UTC(2026, 0, 1, 12, 0) })} />);
+
+    // Exact format is locale/timezone-dependent (see the component's own
+    // docblock) — only assert something time-like rendered, not an exact
+    // clock value.
+    expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument();
   });
 });

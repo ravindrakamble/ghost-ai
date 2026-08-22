@@ -8,7 +8,19 @@ import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
 import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import type { Project } from "@/types/project"
-import type { AiStatusMessage } from "@/types/tasks"
+import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
+
+/**
+ * Default `sendChatMessage` before `CanvasFlow`'s real `useAiChatFeed()`
+ * mutation reaches this component (the room hasn't connected/pushed one up
+ * yet). Throws rather than silently no-opping, so a message sent in that
+ * narrow window surfaces through `AiArchitectTab`'s own try/catch as a
+ * genuine "failed to send" state (preserving the input) instead of quietly
+ * discarding it — see spec 25's Analyst Brief, Open Questions #5.
+ */
+function chatNotReadyYet(): never {
+  throw new Error("Chat is not ready yet — the canvas room hasn't connected.")
+}
 
 interface WorkspaceShellProps {
   project: Project
@@ -53,6 +65,17 @@ interface WorkspaceShellProps {
  * (`setAiStatus`) is passed down to `Canvas` as `onAiStatusChange` (the room's
  * `ai-status-feed` subscription is only valid inside `CanvasFlow`), and the
  * resulting value is threaded down to `AiSidebar` as a plain prop.
+ *
+ * `chatMessages`/`sendChatMessage` (spec 25) extend the same pattern
+ * bidirectionally: `chatMessages` flows up from `CanvasFlow` via
+ * `onChatMessagesChange` exactly like `aiStatus` does, but `sendChatMessage`
+ * — the real, room-connected function a user's Send click must call — has
+ * to flow the other way, since `AiArchitectTab` (where the click happens)
+ * sits outside the room boundary `CanvasFlow` is inside. `CanvasFlow` pushes
+ * its `useAiChatFeed()`-built `sendMessage` up via `onSendChatMessageChange`
+ * (same callback-push-up direction as everything else here), and this
+ * component threads that value back *down* to `AiSidebar`/`AiArchitectTab`
+ * as a plain prop — see spec 25's Analyst Brief, Open Questions #3.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
@@ -60,6 +83,8 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false)
   const [saveStatus, setSaveStatus] = useState<CanvasSaveStatus>("idle")
   const [aiStatus, setAiStatus] = useState<AiStatusMessage | null>(null)
+  const [chatMessages, setChatMessages] = useState<AiChatMessage[]>([])
+  const [sendChatMessage, setSendChatMessage] = useState<SendChatMessage>(() => chatNotReadyYet)
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
@@ -85,11 +110,15 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
           setIsTemplatesModalOpen={setIsTemplatesModalOpen}
           onSaveStatusChange={setSaveStatus}
           onAiStatusChange={setAiStatus}
+          onChatMessagesChange={setChatMessages}
+          onSendChatMessageChange={(sendMessage) => setSendChatMessage(() => sendMessage)}
         />
         <AiSidebar
           isOpen={isAiSidebarOpen}
           onClose={() => setIsAiSidebarOpen(false)}
           aiStatus={aiStatus}
+          chatMessages={chatMessages}
+          sendChatMessage={sendChatMessage}
         />
       </div>
       <ShareDialog

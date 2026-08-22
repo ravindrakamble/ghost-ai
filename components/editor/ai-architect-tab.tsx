@@ -1,10 +1,10 @@
 "use client"
 
-import { useRef, useState, type KeyboardEvent } from "react"
-import { Bot, Loader2, Send } from "lucide-react"
+import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
+import { AlertCircle, Bot, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import type { AiStatusMessage } from "@/types/tasks"
+import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
 
 const STARTER_PROMPTS = [
   "Design an e-commerce backend",
@@ -12,33 +12,48 @@ const STARTER_PROMPTS = [
   "Build a CI/CD pipeline",
 ] as const
 
-interface ChatMessage {
-  id: string
-  role: "user" | "assistant"
-  content: string
+/**
+ * Formats an `AiChatMessage.timestamp` (epoch-ms) for display next to a
+ * bubble's sender name. Locale pinned to `"en-US"` for a deterministic
+ * format *shape* across environments (this repo's test runner's own system
+ * locale isn't controlled) — the exact clock time is still whatever the
+ * local/test timezone resolves it to, which is expected and untested
+ * precisely for that reason (see `ai-architect-tab.test.tsx`).
+ */
+function formatMessageTimestamp(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
 }
 
 /**
  * A single chat bubble. Exported separately (rather than inlined in the
  * message list) so both the user- and assistant-role styling (acceptance
  * criterion 7) can be unit tested directly — the assistant branch isn't
- * reachable through this spec's own local-only submit flow (no AI reply
- * exists yet; that's specs 25/26's job to wire), but the styling contract is
- * real code either way, not aspirational.
+ * reachable through this spec's own send path (no AI reply exists yet;
+ * that's spec 26's job to wire), but the styling contract is real code
+ * either way, not aspirational.
+ *
+ * Spec 25 extends this from a content-only bubble (spec 20) to also show
+ * `sender` and a formatted `timestamp`, per the spec's own "show sender,
+ * timestamp, and message content" text — real, persisted `AiChatMessage`
+ * shape (`types/tasks.ts`), not the old local-only `ChatMessage` shape.
  */
-export function ChatBubble({ message }: { message: ChatMessage }) {
+export function ChatBubble({ message }: { message: AiChatMessage }) {
   const isUser = message.role === "user"
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
+        className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
           isUser
             ? "border border-brand bg-accent-dim text-copy-primary"
             : "border border-surface-border bg-subtle text-ai-text"
         }`}
       >
-        {message.content}
+        <div className="mb-1 flex items-center gap-2 text-xs text-copy-muted">
+          <span className="font-medium">{message.sender}</span>
+          <span>{formatMessageTimestamp(message.timestamp)}</span>
+        </div>
+        <p className="whitespace-pre-wrap">{message.content}</p>
       </div>
     </div>
   )
@@ -54,6 +69,23 @@ interface AiArchitectTabProps {
    * rendered standalone (e.g. in a test) with nothing wired up.
    */
   aiStatus?: AiStatusMessage | null
+  /**
+   * Ordered, schema-validated `ai-chat` messages (spec 25) — the real,
+   * persisted, room-wide chat feed, replacing this component's previous
+   * local-only `useState<ChatMessage[]>` array (spec 20). Defaults to an
+   * empty array so this component still renders sensibly standalone (e.g.
+   * in a test) with nothing wired up.
+   */
+  chatMessages?: AiChatMessage[]
+  /**
+   * The real, room-connected function to send a chat message (spec 25),
+   * threaded down from `WorkspaceShell` → `AiSidebar`. Defaults to a
+   * function that throws, matching `WorkspaceShell`'s own "not ready yet"
+   * default for the same window before `CanvasFlow`'s real mutation reaches
+   * this component — a send attempted in that window surfaces as a genuine
+   * failure (input preserved, error shown), not a silent no-op.
+   */
+  sendMessage?: SendChatMessage
 }
 
 /** Stages during which a design-agent run is actively working — matches
@@ -67,28 +99,47 @@ const ACTIVE_GENERATION_STAGES: ReadonlySet<AiStatusMessage["stage"]> = new Set(
  * line itself must still render something legible rather than nothing. */
 const DEFAULT_GENERATING_TEXT = "Ghost AI is working…"
 
+/** Default `sendMessage` before a real, room-connected one reaches this
+ * component as a prop — see `AiArchitectTabProps.sendMessage`'s own doc. */
+function chatNotReadyYet(): never {
+  throw new Error("Chat is not ready yet.")
+}
+
 /**
- * AI Architect tab (spec 20/24) — chat UI shell. Submitting (Enter without
- * Shift, or the Send button) appends an ephemeral user bubble to this
- * component's own `useState`, with no assistant reply, no persistence, and
- * no network call (see spec 20's Open Questions #3; spec 26 wires the real
- * submit flow later).
+ * AI Architect tab (spec 20/24/25) — chat UI shell. Submitting (Enter
+ * without Shift, or the Send button) calls the real `sendMessage` prop
+ * (spec 25, `hooks/use-ai-chat-feed.ts` via `CanvasFlow`) with the trimmed
+ * input. The rendered message list is the real, persisted `chatMessages`
+ * prop — not local component state (spec 20's own docblock flagged that
+ * local array as something "spec 25 owns," fully replaced here, not run
+ * alongside).
  *
- * Spec 24 adds the shared "AI is working" signal on top of that same local
- * shell: a non-blocking status line (icon + `aiStatus.text`) while
- * `aiStatus.stage` is `"start"`/`"processing"`, disabling the input/Send
- * button for that same window, and swapping the Send icon for a spinner —
- * all driven purely by the room-broadcast `ai-status-feed`, not local
- * submit-flow state (that stays spec 26's job to layer on top, per this
- * spec's Analyst Brief, Open Questions #5). Nothing else in this component
- * — starter chips, the message list, tab switching (owned by `AiSidebar`) —
- * is disabled or dimmed (this spec's own explicit Scope Limit).
+ * On a successful send, the input clears. On a failed send — the outgoing
+ * message failing `AiChatMessageSchema`'s own validation, or the underlying
+ * Storage mutation itself throwing (e.g. genuinely disconnected from the
+ * room) — the input's contents are preserved and a small inline error
+ * indicator appears (`text-state-error`, matching `SaveStatusIndicator`'s
+ * existing error convention). See spec 25's Analyst Brief, Open Questions
+ * #5.
+ *
+ * Spec 24's shared "AI is working" signal sits on top of the same shell: a
+ * non-blocking status line (icon + `aiStatus.text`) while `aiStatus.stage`
+ * is `"start"`/`"processing"`, disabling the input/Send button for that same
+ * window, and swapping the Send icon for a spinner — all driven purely by
+ * the room-broadcast `ai-status-feed`, not local submit-flow state (that
+ * stays spec 26's job to layer on top, per spec 24's Analyst Brief, Open
+ * Questions #5). Nothing else in this component — starter chips, the
+ * message list, tab switching (owned by `AiSidebar`) — is disabled or
+ * dimmed (both specs' own explicit Scope Limit).
  */
-export function AiArchitectTab({ aiStatus = null }: AiArchitectTabProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+export function AiArchitectTab({
+  aiStatus = null,
+  chatMessages = [],
+  sendMessage = chatNotReadyYet,
+}: AiArchitectTabProps) {
   const [input, setInput] = useState("")
+  const [sendError, setSendError] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const nextMessageId = useRef(0)
 
   const isGenerating = aiStatus !== null && ACTIVE_GENERATION_STAGES.has(aiStatus.stage)
 
@@ -96,12 +147,25 @@ export function AiArchitectTab({ aiStatus = null }: AiArchitectTabProps) {
     const trimmed = input.trim()
     if (!trimmed) return
 
-    nextMessageId.current += 1
-    setMessages((prev) => [
-      ...prev,
-      { id: `msg-${nextMessageId.current}`, role: "user", content: trimmed },
-    ])
-    setInput("")
+    try {
+      sendMessage(trimmed)
+      setInput("")
+      setSendError(false)
+    } catch {
+      // Preserve the input's contents on failure (spec 25's acceptance
+      // criterion 4) — no `setInput("")` here.
+      setSendError(true)
+    }
+  }
+
+  function handleInputChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    setInput(event.target.value)
+    // A fresh edit means the user is trying again — clear a stale error
+    // from a previous failed attempt rather than leaving it showing
+    // indefinitely next to text that's already changed.
+    if (sendError) {
+      setSendError(false)
+    }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -119,7 +183,7 @@ export function AiArchitectTab({ aiStatus = null }: AiArchitectTabProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto p-4">
-        {messages.length === 0 ? (
+        {chatMessages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <Bot className="h-8 w-8 text-copy-muted" />
             <p className="text-sm text-copy-muted">
@@ -140,7 +204,7 @@ export function AiArchitectTab({ aiStatus = null }: AiArchitectTabProps) {
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            {messages.map((message) => (
+            {chatMessages.map((message) => (
               <ChatBubble key={message.id} message={message} />
             ))}
           </div>
@@ -161,11 +225,22 @@ export function AiArchitectTab({ aiStatus = null }: AiArchitectTabProps) {
             <span className="truncate">{aiStatus?.text ?? DEFAULT_GENERATING_TEXT}</span>
           </div>
         ) : null}
+        {/*
+          Spec 25: small inline error indicator on a failed send — same
+          `text-state-error`/icon convention `SaveStatusIndicator` (spec 21)
+          already established for its own "Save failed" state.
+        */}
+        {sendError ? (
+          <div className="flex items-center gap-2 text-xs text-state-error">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <span>Failed to send. Try again.</span>
+          </div>
+        ) : null}
         <div className="flex items-end gap-2">
           <Textarea
             ref={textareaRef}
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder="Describe your system..."
             aria-label="Message Ghost AI"

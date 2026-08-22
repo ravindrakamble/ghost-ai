@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 24: AI Presence State — Completed (QA PASS, Product Owner PASS, PR opened). Phase 25: Sidebar Chat Feed — not yet started.
+- Phase 24: AI Presence State — Completed (QA PASS, Product Owner PASS, PR opened). Phase 25: Sidebar Chat Feed — Senior Developer pass complete, QA next.
 
 ## Current Goal
-- Kick off feature spec 25 (Sidebar Chat Feed) with the Analyst; no work started yet.
+- QA review of feature spec 25 (Sidebar Chat Feed) per the Dev Notes at `context/spec-status/25-sidebar-chat-feed.md`.
 
 ## Completed
 
@@ -108,7 +108,7 @@ Update this file whenever the current phase, active feature, or implementation s
   - `components/editor/starter-templates-modal.tsx` (new) — `StarterTemplatesModal`, a `Dialog`-based (`components/ui/dialog.tsx`, same convention as `share-dialog.tsx`) scrollable card grid; each card shows name/description/preview/Import button; Import calls `onImport(template)` then closes.
   - `components/editor/workspace-navbar.tsx` (modified) — new `LayoutTemplate`-icon "Templates" button + `onOpenTemplates: () => void` prop, mirroring `onOpenShare`.
   - `components/editor/workspace-shell.tsx` (modified) — owns `isTemplatesModalOpen` local state (mirrors `isShareOpen`), wires the navbar button, passes the open-state/setter down to `<Canvas>` as new props (same direction `roomId` already flows).
-  - `components/editor/canvas.tsx` (modified) — `Canvas`/`CanvasFlow` forward the new open-state props straight through, no new context; `CanvasFlow` renders `<StarterTemplatesModal>` and owns `handleImportTemplate`. Import clears the canvas via `onDelete({ nodes, edges })` (the real, previously-unused `useLiveblocksFlow` removal channel — the brief's originally-sketched `{ type: "remove" }` `NodeChange`/`EdgeChange` was verified to be a genuine no-op in the installed `@liveblocks/react-flow` source) and adds the template's nodes/edges via `onNodesChange`/`onEdgesChange` (`"add"`-only entries), then calls `fitView`. All three mutation calls are wrapped in one `room.batch(...)` (via `useRoom()` from `@liveblocks/react/suspense`) so they flush as a single Storage commit/broadcast — added in a QA-forced bugfix round after the initial 3-separate-mutation version let a remote collaborator observe a transient empty-canvas frame mid-import. `fitView`'s own internal `fitViewQueued`/`nodesInitialized` deferral (verified via `@xyflow/react`/`@xyflow/system` source) makes the synchronous post-batch call correctly frame the new diagram's real bounds with no manual rAF/effect deferral needed.
+  - `components/editor/canvas.tsx` (modified) — `Canvas`/`CanvasFlow` forward the new open-state props straight through, no new context; `CanvasFlow` renders `<StarterTemplatesModal>` and owns `handleImportTemplate`. Import clears the canvas via `onDelete({ nodes, edges })` (the real, previously-unused `useLiveblocksFlow` removal channel — the brief's originally-sketched `{ type: "remove" }` `NodeChange`/`EdgeChange` was verified to be a genuine no-op in the installed `@liveblocks/react-flow` source) and adds the template's nodes/edges via `onNodesChange`/`onEdgesChange` (`"add"`-only entries), then calls `fitView`. All three mutation calls are wrapped in one `room.batch(...)` (via `useRoom()` from `@liveblocks/react/suspense`), so they coalesce into one Storage commit/broadcast instead of three — added in a QA-forced bugfix round after the initial 3-separate-mutation version let a remote collaborator observe a transient empty-canvas frame mid-import. `fitView`'s own internal `fitViewQueued`/`nodesInitialized` deferral (verified via `@xyflow/react`/`@xyflow/system` source) makes the synchronous post-batch call correctly frame the new diagram's real bounds with no manual rAF/effect deferral needed.
   - `context/ui-context.md` (modified) — new "Starter Templates" section under Canvas (modal styling, SVG preview mechanism/rationale, navbar entry point, the `onDelete`-vs-`{type:"remove"}` deviation, the `room.batch(...)` import mechanism).
   - Tests: `starter-templates.test.ts`, `starter-template-preview.test.tsx`, `starter-templates-modal.test.tsx`, `workspace-navbar.test.tsx` (all new), `canvas.test.tsx` and `workspace-shell.test.tsx` (extended). 280/280 tests passing across 35 files (up from 257/31 at the end of spec 17) with `--no-file-parallelism` — default parallelism showed environment-driven (not spec-related) flaky file timeouts on this machine, consistent with prior specs' documented flakiness.
   - `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npx next build` all pass (both the initial pass and the bugfix round).
@@ -321,11 +321,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none currently — spec 25, Sidebar Chat Feed, has not yet been picked up by the Analyst)
+- Feature spec 25: Sidebar Chat Feed — Senior Developer pass complete (implementation + tests + full gate passing), QA review next. See `context/spec-status/25-sidebar-chat-feed.md` for the full Dev Notes (files added/changed, skills used, key decisions, test coverage). Summary: added `zod` (first use in this codebase) and a real `AiChatMessageSchema`/`AiChatMessage` (`types/tasks.ts`, additive alongside spec 24's `AiStatusMessage`/`isAiStatusMessage`, kept fully independent per acceptance criterion 6); new `hooks/use-ai-chat-feed.ts` wrapping Liveblocks' `useStorage`/`useMutation`/`useSelf` for the `ai-chat` Storage `LiveList`, validating every read and every outgoing message against the schema; `liveblocks.config.ts` gained a `Storage` type (`messages: LiveList<AiChatMessage>`); `canvas.tsx`'s `RoomProvider` gained `initialStorage={{ messages: new LiveList([]) }}`, and `CanvasFlow` pushes the validated message list up (`onChatMessagesChange`) and the real `sendMessage` function down (`onSendChatMessageChange`) via new bidirectional callback props threaded through `workspace-shell.tsx`/`ai-sidebar.tsx`; `ai-architect-tab.tsx`'s local-only spec-20 message state is fully replaced by the persisted `chatMessages` prop rendered through an extended `ChatBubble` (sender + formatted timestamp + content), with a real send/clear/error-indicator flow (input preserved and an inline `text-state-error` indicator shown on a failed send, per `SaveStatusIndicator`'s existing convention). 494/494 tests passing across 54 files (up from 459/53 at the end of spec 24); `tsc`/`eslint`/`vitest`/`next build` all pass. No touches to `trigger/design-agent.ts`, `lib/design-agent-ai.ts`, `lib/design-agent-room.ts`, `app/api/ai/design*`, `hooks/use-ai-status-feed.ts`, or `live-cursors.tsx` — spec 23/24's already-delivered territory, untouched per this spec's own explicit scope.
 
 ## Next Up
 
-- Analyst brief for feature spec 25 (Sidebar Chat Feed) — not yet started.
+- QA review for feature spec 25 (Sidebar Chat Feed), per the Dev Notes at `context/spec-status/25-sidebar-chat-feed.md`.
 - Human review/merge of spec 24's PR and the still-open PRs for specs 12–23.
 
 ## Open Questions

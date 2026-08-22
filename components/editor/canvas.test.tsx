@@ -48,6 +48,8 @@ const {
   useCanvasAutosaveMock,
   fetchMock,
   useAiStatusFeedMock,
+  useAiChatFeedMock,
+  roomProviderPropsRef,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
   useLiveblocksFlowMock: vi.fn(),
@@ -98,6 +100,16 @@ const {
   // via `onAiStatusChange`), the same convention already established for
   // `useCanvasAutosaveMock` above.
   useAiStatusFeedMock: vi.fn(),
+  // Spec 25: `useAiChatFeed`'s own internals (real `useStorage`/`useMutation`
+  // subscription, Zod validation, `sendMessage`) are unit-tested in
+  // `hooks/use-ai-chat-feed.test.ts` — mocked here for the same "verify
+  // wiring only" reason as `useAiStatusFeedMock` above.
+  useAiChatFeedMock: vi.fn(),
+  // `RoomProvider`'s full props (including the new `initialStorage`, which
+  // doesn't serialize meaningfully through JSON.stringify since it holds a
+  // real `LiveList` instance) — captured via a ref the same way
+  // `reactFlowPropsRef` captures `ReactFlow`'s props below.
+  roomProviderPropsRef: { current: null as { initialStorage?: { messages: unknown } } | null },
 }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
@@ -112,19 +124,23 @@ vi.mock("@liveblocks/react/suspense", () => ({
       {children}
     </div>
   ),
-  RoomProvider: ({
-    children,
-    id,
-    initialPresence,
-  }: {
+  RoomProvider: (props: {
     children: ReactNode;
     id: string;
     initialPresence: unknown;
-  }) => (
-    <div data-testid="room-provider" data-room-id={id} data-initial-presence={JSON.stringify(initialPresence)}>
-      {children}
-    </div>
-  ),
+    initialStorage?: { messages: unknown };
+  }) => {
+    roomProviderPropsRef.current = props;
+    return (
+      <div
+        data-testid="room-provider"
+        data-room-id={props.id}
+        data-initial-presence={JSON.stringify(props.initialPresence)}
+      >
+        {props.children}
+      </div>
+    );
+  },
   ClientSideSuspense: ({ children }: { children: ReactNode }) => <>{children}</>,
   useErrorListener: (callback: ErrorListenerCallback) => {
     errorListenerRef.current = callback;
@@ -159,6 +175,10 @@ vi.mock("@/hooks/use-canvas-autosave", () => ({
 
 vi.mock("@/hooks/use-ai-status-feed", () => ({
   useAiStatusFeed: useAiStatusFeedMock,
+}));
+
+vi.mock("@/hooks/use-ai-chat-feed", () => ({
+  useAiChatFeed: useAiChatFeedMock,
 }));
 
 vi.mock("@clerk/nextjs", () => ({
@@ -230,6 +250,8 @@ function renderCanvas(overrides: Partial<Parameters<typeof Canvas>[0]> = {}) {
     setIsTemplatesModalOpen: vi.fn(),
     onSaveStatusChange: vi.fn(),
     onAiStatusChange: vi.fn(),
+    onChatMessagesChange: vi.fn(),
+    onSendChatMessageChange: vi.fn(),
     ...overrides,
   };
   render(<Canvas {...props} />);
@@ -271,6 +293,11 @@ beforeEach(() => {
   // Spec 24 default: no ai-status-feed message observed yet this session —
   // individual tests override this to exercise the push-up wiring.
   useAiStatusFeedMock.mockReturnValue(null);
+
+  // Spec 25 default: no chat messages yet, a fresh sendMessage spy —
+  // individual tests override this to exercise the bidirectional wiring.
+  useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage: vi.fn() });
+  roomProviderPropsRef.current = null;
 });
 
 afterEach(() => {
@@ -754,6 +781,47 @@ describe("Canvas", () => {
       renderCanvas({ onAiStatusChange });
 
       expect(onAiStatusChange).toHaveBeenCalledWith({ stage: "processing", text: "Designing your system…" });
+    });
+  });
+
+  describe("ai chat feed (spec 25)", () => {
+    it("initializes RoomProvider's Storage with an empty messages LiveList", () => {
+      renderCanvas();
+
+      expect(roomProviderPropsRef.current?.initialStorage?.messages).toBeDefined();
+      const messages = roomProviderPropsRef.current?.initialStorage?.messages as { length: number };
+      expect(messages.length).toBe(0);
+    });
+
+    it("calls useAiChatFeed (subscribed inside the room boundary) and pushes an empty list up by default", () => {
+      const onChatMessagesChange = vi.fn();
+
+      renderCanvas({ onChatMessagesChange });
+
+      expect(useAiChatFeedMock).toHaveBeenCalled();
+      expect(onChatMessagesChange).toHaveBeenCalledWith([]);
+    });
+
+    it("pushes useAiChatFeed's returned messages up via onChatMessagesChange", () => {
+      const messages = [
+        { id: "1", sender: "Ada", role: "user" as const, content: "Hello", timestamp: 1 },
+      ];
+      useAiChatFeedMock.mockReturnValue({ messages, sendMessage: vi.fn() });
+      const onChatMessagesChange = vi.fn();
+
+      renderCanvas({ onChatMessagesChange });
+
+      expect(onChatMessagesChange).toHaveBeenCalledWith(messages);
+    });
+
+    it("pushes useAiChatFeed's returned sendMessage function down via onSendChatMessageChange", () => {
+      const sendMessage = vi.fn();
+      useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage });
+      const onSendChatMessageChange = vi.fn();
+
+      renderCanvas({ onSendChatMessageChange });
+
+      expect(onSendChatMessageChange).toHaveBeenCalledWith(sendMessage);
     });
   });
 });

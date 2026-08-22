@@ -13,12 +13,18 @@ vi.mock("@/components/editor/canvas", () => ({
     isTemplatesModalOpen,
     onSaveStatusChange,
     onAiStatusChange,
+    onChatMessagesChange,
+    onSendChatMessageChange,
   }: {
     roomId: string;
     isTemplatesModalOpen: boolean;
     setIsTemplatesModalOpen: (open: boolean) => void;
     onSaveStatusChange: (status: "idle" | "saving" | "saved" | "error") => void;
     onAiStatusChange: (status: { stage: string; text?: string } | null) => void;
+    onChatMessagesChange: (
+      messages: { id: string; sender: string; role: "user" | "assistant"; content: string; timestamp: number }[],
+    ) => void;
+    onSendChatMessageChange: (sendMessage: (content: string) => void) => void;
   }) => (
     <div
       data-testid="canvas"
@@ -43,6 +49,29 @@ vi.mock("@/components/editor/canvas", () => ({
       */}
       <button type="button" onClick={() => onAiStatusChange({ stage: "processing", text: "Designing…" })}>
         simulate ai status
+      </button>
+      {/*
+        Spec 25: same push-up shape for the `ai-chat` message list, plus the
+        bidirectional `sendMessage` function push-down — these two buttons
+        stand in for `CanvasFlow`'s real `useAiChatFeed()` result so
+        `WorkspaceShell`'s wiring to `AiSidebar` can be verified here without
+        re-mounting the real Liveblocks room stack.
+      */}
+      <button
+        type="button"
+        onClick={() =>
+          onChatMessagesChange([
+            { id: "1", sender: "Ada", role: "user", content: "Hello Ghost AI", timestamp: 1700000000000 },
+          ])
+        }
+      >
+        simulate chat messages
+      </button>
+      <button
+        type="button"
+        onClick={() => onSendChatMessageChange(() => {})}
+      >
+        simulate send ready
       </button>
     </div>
   ),
@@ -146,5 +175,48 @@ describe("WorkspaceShell", () => {
     expect(screen.getByText("Designing…")).toBeInTheDocument();
     const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
     expect(textarea).toBeDisabled();
+  });
+
+  it("passes onChatMessagesChange down to Canvas and threads the resulting messages through to the AI sidebar (spec 25)", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+
+    expect(screen.queryByText("Hello Ghost AI")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /simulate chat messages/i }));
+
+    expect(screen.getByText("Hello Ghost AI")).toBeInTheDocument();
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+  });
+
+  it("passes onSendChatMessageChange down to Canvas and threads the resulting function through to the AI sidebar (spec 25)", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /simulate send ready/i }));
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    // The stand-in sendMessage is a genuine no-op (not the default
+    // "not ready yet" thrower) — a successful send clears the input and
+    // shows no error indicator.
+    expect(textarea.value).toBe("");
+    expect(screen.queryByText(/failed to send/i)).not.toBeInTheDocument();
+  });
+
+  it("defaults sendChatMessage to a function that fails (input preserved, error shown) before Canvas pushes a real one", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(textarea.value).toBe("Design a queue");
+    expect(screen.getByText(/failed to send/i)).toBeInTheDocument();
   });
 });
