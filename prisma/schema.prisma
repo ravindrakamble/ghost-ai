@@ -42,6 +42,7 @@ model Project {
   updatedAt      DateTime            @updatedAt
   collaborators  ProjectCollaborator[]
   taskRuns       TaskRun[]
+  specs          ProjectSpec[]
 
   @@index([ownerId])
   @@index([createdAt])
@@ -72,4 +73,24 @@ model TaskRun {
 
   @@index([runId])
   @@index([userId, projectId])
+}
+
+/// Metadata for a generated technical spec (spec 27's `generate-spec` task
+/// output, persisted by spec 28). The Markdown content itself lives in Vercel
+/// Blob at `specs/{projectId}/{specId}.md` (`lib/spec-blob.ts`) — this model
+/// holds only the reference, never the content
+/// (`code-standards.md`: "Do not store large generated content directly in
+/// the database"). No `userId` field: access is derived from the project
+/// relationship via `getProjectAccess`, not per-spec ownership. No unique
+/// constraint on `projectId` — multiple independently-downloadable specs per
+/// project are expected, one per generation run, never overwritten (spec 28's
+/// Analyst Brief, Open Questions #5).
+model ProjectSpec {
+  id        String   @id @default(cuid())
+  projectId String
+  filePath  String
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
 }

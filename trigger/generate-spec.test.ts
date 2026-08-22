@@ -22,6 +22,28 @@ vi.mock("@/lib/generate-spec-ai", () => ({
   generateSpecMarkdown: generateSpecMarkdownMock,
 }))
 
+const { uploadSpecMarkdownMock } = vi.hoisted(() => ({
+  uploadSpecMarkdownMock: vi.fn(),
+}))
+
+vi.mock("@/lib/spec-blob", () => ({
+  uploadSpecMarkdown: uploadSpecMarkdownMock,
+}))
+
+const { prismaMock } = vi.hoisted(() => ({
+  prismaMock: {
+    projectSpec: {
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+  },
+}))
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: prismaMock,
+}))
+
 import { GENERATE_SPEC_TASK_ID, generateSpecTask, runGenerateSpec } from "./generate-spec"
 
 // `task(...)` is only ever called once, at module import time (module-scope
@@ -41,6 +63,14 @@ const VALID_PAYLOAD: GenerateSpecPayload = {
 beforeEach(() => {
   vi.clearAllMocks()
   generateSpecMarkdownMock.mockResolvedValue("# Spec\n\nGenerated content.")
+  prismaMock.projectSpec.create.mockResolvedValue({ id: "spec_1", projectId: "room-1", filePath: "" })
+  uploadSpecMarkdownMock.mockResolvedValue("https://blob.example/specs/room-1/spec_1.md")
+  prismaMock.projectSpec.update.mockResolvedValue({
+    id: "spec_1",
+    projectId: "room-1",
+    filePath: "https://blob.example/specs/room-1/spec_1.md",
+  })
+  prismaMock.projectSpec.delete.mockResolvedValue({ id: "spec_1" })
 })
 
 describe("runGenerateSpec", () => {
@@ -50,6 +80,7 @@ describe("runGenerateSpec", () => {
     expect(result).toEqual({
       roomId: "room-1",
       projectId: "room-1",
+      specId: "spec_1",
       markdown: "# Spec\n\nGenerated content.",
     })
     expect(generateSpecMarkdownMock).toHaveBeenCalledWith({
@@ -63,7 +94,7 @@ describe("runGenerateSpec", () => {
     await runGenerateSpec(VALID_PAYLOAD)
 
     const stages = metadataSetMock.mock.calls.map((call: unknown[]) => (call[1] as { stage: string }).stage)
-    expect(stages).toEqual(["start", "processing", "complete"])
+    expect(stages).toEqual(["start", "processing", "processing", "complete"])
     expect(metadataSetMock.mock.calls[0][0]).toBe("status")
   })
 
@@ -82,12 +113,74 @@ describe("runGenerateSpec", () => {
     expect(generateSpecMarkdownMock).toHaveBeenCalledWith({ chatHistory: [], nodes: [], edges: [] })
   })
 
-  it("logs completion with the room/project ids and markdown length", async () => {
+  it("logs completion with the room/project ids, specId, and markdown length", async () => {
     await runGenerateSpec(VALID_PAYLOAD)
 
     expect(loggerLogMock).toHaveBeenCalledWith(
       "generate-spec task completed",
-      expect.objectContaining({ roomId: "room-1", projectId: "room-1" }),
+      expect.objectContaining({ roomId: "room-1", projectId: "room-1", specId: "spec_1" }),
+    )
+  })
+})
+
+describe("runGenerateSpec — persistence", () => {
+  it("creates a placeholder ProjectSpec row, uploads to Blob using the generated id, then updates filePath", async () => {
+    await runGenerateSpec(VALID_PAYLOAD)
+
+    expect(prismaMock.projectSpec.create).toHaveBeenCalledWith({
+      data: { projectId: "room-1", filePath: "" },
+    })
+    expect(uploadSpecMarkdownMock).toHaveBeenCalledWith(
+      "room-1",
+      "spec_1",
+      "# Spec\n\nGenerated content.",
+    )
+    expect(prismaMock.projectSpec.update).toHaveBeenCalledWith({
+      where: { id: "spec_1" },
+      data: { filePath: "https://blob.example/specs/room-1/spec_1.md" },
+    })
+  })
+
+  it("never persists anything when Gemini generation fails", async () => {
+    generateSpecMarkdownMock.mockRejectedValue(new Error("gemini down"))
+
+    await expect(runGenerateSpec(VALID_PAYLOAD)).rejects.toThrow("gemini down")
+
+    expect(prismaMock.projectSpec.create).not.toHaveBeenCalled()
+    expect(uploadSpecMarkdownMock).not.toHaveBeenCalled()
+  })
+
+  it("deletes the placeholder row and rethrows when the Blob upload fails", async () => {
+    uploadSpecMarkdownMock.mockRejectedValue(new Error("blob down"))
+
+    await expect(runGenerateSpec(VALID_PAYLOAD)).rejects.toThrow("blob down")
+
+    expect(prismaMock.projectSpec.delete).toHaveBeenCalledWith({ where: { id: "spec_1" } })
+    expect(prismaMock.projectSpec.update).not.toHaveBeenCalled()
+
+    const errorCall = metadataSetMock.mock.calls.find(
+      (call: unknown[]) => (call[1] as { stage: string }).stage === "error",
+    )
+    expect(errorCall).toBeDefined()
+  })
+
+  it("deletes the placeholder row and rethrows when the filePath update fails", async () => {
+    prismaMock.projectSpec.update.mockRejectedValue(new Error("db down"))
+
+    await expect(runGenerateSpec(VALID_PAYLOAD)).rejects.toThrow("db down")
+
+    expect(prismaMock.projectSpec.delete).toHaveBeenCalledWith({ where: { id: "spec_1" } })
+  })
+
+  it("logs (but does not rethrow) a secondary failure while cleaning up the placeholder row", async () => {
+    uploadSpecMarkdownMock.mockRejectedValue(new Error("blob down"))
+    prismaMock.projectSpec.delete.mockRejectedValue(new Error("cleanup also failed"))
+
+    await expect(runGenerateSpec(VALID_PAYLOAD)).rejects.toThrow("blob down")
+
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "Failed to clean up an orphaned ProjectSpec row after a persistence failure",
+      expect.objectContaining({ projectId: "room-1", specId: "spec_1" }),
     )
   })
 })
