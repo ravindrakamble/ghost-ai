@@ -331,9 +331,11 @@ export function AiArchitectTab({
   /**
    * Reacts to this client's own triggered run reaching a terminal state
    * (acceptance criteria 6/7) — pushes the final AI-authored/error message
-   * exactly once per `runId` (`handledRunIdRef` guard), without calling any
-   * local `setState` in the effect body itself (see `handledRunIdRef`'s own
-   * doc above).
+   * exactly once per `runId` (`handledRunIdRef` guard), then clears the
+   * local `runId`/`publicToken` state the same way the pre-`runId`
+   * POST-failure path in `submitDesignRequest`'s own `catch` block already
+   * does, so `enabled: Boolean(runId && publicToken)` correctly falls back
+   * to "no run associated with this client" once the run has settled.
    */
   useEffect(() => {
     if (!isRunSettled || !runId || !realtimeRun) return
@@ -345,6 +347,9 @@ export function AiArchitectTab({
     } else {
       pushAgentMessage(buildDesignAgentFailureMessage(realtimeRun.error?.message))
     }
+
+    setRunId(null)
+    setPublicToken(null)
   }, [isRunSettled, runId, realtimeRun, pushAgentMessage])
 
   const submitDesignRequest = useCallback(

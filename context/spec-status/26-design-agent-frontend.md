@@ -129,3 +129,96 @@ Brief ready for Senior Developer at `context/spec-status/26-design-agent-fronten
 - Per this spec's own Scope Limits, no backend/Trigger.dev logic was touched, no final graph is fetched, and no manual canvas node/edge mutation was added anywhere in this diff — confirmed via `git diff --name-only` that `trigger/design-agent.ts`, `lib/design-agent-ai.ts`, `lib/design-agent-room.ts`, and every `app/api/ai/design*` route are genuinely untouched, and a diff-scoped grep confirms no new hardcoded hex color (including the raw spec text's own mentioned `#62C073`) appears anywhere in the diff — only existing `--accent-ai`/`text-ai-text`/`bg-ai` tokens and spec 20/24/25's already-established chat-bubble/status-line/error-indicator styling are reused.
 
 Implementation ready for QA at `context/spec-status/26-design-agent-frontend.md`.
+
+### Bug #1 fix (QA round)
+
+- **What changed:** `components/editor/ai-architect-tab.tsx`'s completion `useEffect` (reacting to `isRunSettled`) now calls `setRunId(null)` and `setPublicToken(null)` after `pushAgentMessage(...)`, on both the success (`realtimeRun.isSuccess`) and failure branches — same reset the pre-`runId` `catch` block in `submitDesignRequest` already performed. This satisfies acceptance criteria 6 and 7's literal "the local `runId`/token state is cleared" text on the `useRealtimeRun`-settled paths, not just the pre-`runId` POST-failure path.
+- **Key Decision #7 correction:** the original justification for *not* adding this reset (that it would reintroduce `react-hooks/set-state-in-effect`) does not hold against the actual, already-restructured effect. Confirmed directly: added the two `setState` calls, ran `npx eslint components/editor/ai-architect-tab.tsx` — zero errors, zero warnings. The rule only fires against the earlier "derive-and-set" pattern the first draft used (computing terminal state via a *second* effect that mirrored `realtimeRun` into local state), not against this effect's own "compute `isRunSettled` at render time via a `useRef` double-fire guard, then plain-call `setState` once inside the effect body" shape — a single `setState` call inside an effect, gated by a ref (not by another piece of reactive state derived from the same effect's own inputs), doesn't trip the rule.
+- **Tests updated:** `components/editor/ai-architect-tab.test.tsx` — the success-path test ("pushes an AI-authored success message and re-enables the input...") and the run-failure-path test ("pushes an error message (including the run's own error detail)...") both now assert `useRealtimeRunMock` is last called with `(undefined, { accessToken: undefined, enabled: false, ... })` after the run settles, replacing the prior stale assertion/comment that local state was "left as-is (not reset)". The "only pushes the success message once per run" regression test needed no change — clearing `runId` on settle makes `isRunSettled` fall back to `false` on the next render regardless of what the mock continues to return, so the double-fire guard's own correctness is unaffected.
+- **Full gate re-run, all clean:** `npx tsc --noEmit` (clean), `npx eslint .` (zero errors/warnings on any file this diff touches; the full-repo run's 53 errors/1339 warnings remain entirely pre-existing `.trigger/tmp/` build artifacts, unrelated to this diff), `npx vitest run --no-file-parallelism` (512/512 passing across 54 files), `npx next build` (passes via Turbopack, same 13-route list, no new route).
+
+## QA Report
+
+**Overall verdict: FAIL**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — PASS (clean, no output).
+- `npx eslint .` — PASS in the sense that matters: independently re-ran the full repo-wide lint and diffed every flagged file against `git diff --name-only main...HEAD`; zero overlap. All 53 errors / 1339 warnings sit under `.trigger/tmp/build-*` (generated Trigger.dev build artifacts) or `.agents/skills/clerk-tanstack-patterns/templates/...`, matching every prior spec's documented precedent. Zero errors/warnings on any of the 9 source/test files this diff touches.
+- `npx vitest run --no-file-parallelism` — PASS: 512/512 tests across 54 files, independently reproduced (not just trusted from the Dev Notes).
+- `npx next build` — PASS. Compiled successfully via Turbopack, same 13-route list as spec 25, no new route added.
+
+### Acceptance criteria (Analyst Brief, spec 26)
+
+1. PASS. handleSubmit (ai-architect-tab.tsx) calls sendMessage(trimmed) first; on success it fires submitDesignRequest, which POSTs /api/ai/design with { prompt, roomId: projectId, projectId } and reads { runId } from the response. Verified the request body shape against app/api/ai/design/route.ts's real isValidDesignRequestBody / roomId !== projectId check directly - matches exactly.
+2. PASS. submitDesignRequest then POSTs /api/ai/design/token with { runId } and reads { token }, storing both runId/publicToken in local useState. Verified against app/api/ai/design/token/route.ts's real response shape - matches exactly.
+3. PASS. useRealtimeRun(runId, { accessToken: publicToken, enabled }) is called from the genuinely installed @trigger.dev/react-hooks@4.5.12 (see "Verified independently" below).
+4. PASS. isSubmittingRun is set synchronously at the top of submitDesignRequest, before either fetch call, and is OR-ed (via isOwnRunInFlight) into isBusy, which gates both the Textarea's disabled prop and the Send button's disabled/spinner-swap.
+5. PASS. The status line itself stays gated on isGenerating (aiStatus-driven, spec 24's existing element) alone - no second status-strip component exists anywhere in the diff.
+6. FAIL (partial). The success message push is correct - the completion useEffect (ai-architect-tab.tsx lines 338-348) calls pushAgentMessage(DESIGN_AGENT_SUCCESS_MESSAGE) once isRunSettled and realtimeRun.isSuccess. But the criterion's second half - clearing local runId/token state - is not implemented anywhere on the success path. See Bug 1 below.
+7. FAIL (partial). The run-failure and pre-runId POST-failure message pushes are both correct and well-tested. The pre-runId failure path (submitDesignRequest's catch block) does reset runId/publicToken to null. But the run-settled-as-failed path (same completion effect as #6) does not clear runId/publicToken either. See Bug 1 below.
+8. PASS. No nodes/edges read or write appears anywhere in this diff.
+9. PASS. git diff --name-only main...HEAD (independently re-run) touches only the expected files; no app/api/ai/*, trigger/*, or lib/design-agent-* file appears.
+10. PASS. A diff-scoped grep for zinc-, slate-, hex color literals, and the raw spec text's own 62C073 across every changed file returns nothing.
+11. PASS - see Mechanical gate above, all four commands independently reproduced.
+
+### Bug #1 — `runId`/`publicToken` local state is never cleared once a run settles, contradicting acceptance criteria 6 and 7's explicit text [Bug → Dev]
+
+**Where:** `components/editor/ai-architect-tab.tsx`, lines 338–348 (the `useEffect` reacting to `isRunSettled`).
+
+**What's wrong:** Both acceptance criterion 6 and criterion 7 explicitly require clearing local `runId`/`publicToken` state once the client's own triggered run reaches a terminal state — success or failure. The implementation only clears that state in one of the three failure sub-paths named in the brief: `submitDesignRequest`'s `catch` block (a POST call failing before a `runId`/subscription ever existed). It does not clear it when `useRealtimeRun` itself reports the run completed (success) or failed — the completion effect only calls `pushAgentMessage(...)` and mutates `handledRunIdRef`, never `setRunId`/`setPublicToken`.
+
+**Why this is not just a naming nitpick:** The Dev Notes (Key Decision #7) explicitly acknowledge this omission is deliberate, and justify it on the grounds that re-adding the reset to that effect would reintroduce the exact `react-hooks/set-state-in-effect` ESLint violation the first draft was rewritten to avoid. I verified this justification empirically and it does not hold: I made a throwaway local copy of `ai-architect-tab.tsx`, added `setRunId(null)` and `setPublicToken(null)` immediately after the existing `pushAgentMessage(...)` calls inside that same effect (no other structural change — same `handledRunIdRef` guard, same early-returns), and ran `npx eslint` against it. Result: zero errors, zero warnings — the rule does not fire. I confirmed the rule itself is genuinely active and firing in this repo by separately reproducing the original naive "derive-and-set" pattern the Dev Notes describe finding in the first draft, which does still trigger `react-hooks/set-state-in-effect` as expected. The scratch files used for this check were deleted before finishing this review (`git status` is clean).
+
+**Why it matters practically, not just textually:** Because `runId`/`publicToken` are never reset, `enabled: Boolean(runId && publicToken)` stays `true` for the just-completed run indefinitely (until the next successful submission overwrites both). In practice `useRealtimeRun`'s own `closeOnComplete`/`stopOnCompletion` default (confirmed via `@trigger.dev/react-hooks`'s real source, `dist/esm/hooks/useRealtime.js`) means the underlying stream subscription itself does stop naturally, so this is not a live resource leak — but it is a real, user-visible divergence from the brief: if the sidebar is left open after a run settles, `runId`/`publicToken` (and by extension `enabled`) keep referring to a run that is no longer relevant, and nothing in the component's own state signals "no run is currently associated with this client" the way criterion 6/7's "cleared" language calls for.
+
+**Expected:** `setRunId(null)` and `setPublicToken(null)` (or an equivalent reset) called on both the success and failure branches of the completion effect, satisfying acceptance criteria 6 and 7's literal text, the same way the pre-`runId` failure path in `submitDesignRequest`'s `catch` block already does.
+
+**Note for Dev:** the existing test in `ai-architect-tab.test.tsx` — "pushes an AI-authored success message and re-enables the input..." (around line 329) — currently asserts the opposite; its own comment says local `runId`/`publicToken` state is "left as-is (not reset)". This test will need updating alongside the fix, not just the component.
+
+### Verified independently, not just trusted from Dev Notes
+
+- `@trigger.dev/react-hooks` is a genuine, exact-pinned dependency: `package.json`/`package-lock.json` both list `"4.5.12"` (no caret), and `node_modules/@trigger.dev/react-hooks/package.json` reports the same installed version — confirmed by direct read, not just a grep for the string.
+- `useRealtimeRun`'s real exported shape (`node_modules/@trigger.dev/react-hooks/dist/esm/hooks/useRealtime.d.ts`) and `RealtimeRun`'s real fields (`node_modules/@trigger.dev/core/dist/esm/v3/apiClient/runStream.d.ts`: `id: string`, `isCompleted`, `isFailed`, `isSuccess`, `error?: SerializedError` where `SerializedError.message: string`) match exactly what the Dev Notes and the component code claim — not assumed from training data.
+- Read `node_modules/@trigger.dev/react-hooks/dist/esm/hooks/useRealtime.js` directly to understand the SWR-cache-keyed-by-`useId()` behavior the Dev Notes describe (Key Decision #7's `handledRunIdRef`/`realtimeRun.id === runId` reasoning) — confirmed the hook's `run` value is never reset to `undefined` on `runId` change or on stream close, so a second submission within the same mounted `AiArchitectTab` genuinely would read a previous run's stale, already-completed data for a render or two without the `realtimeRun.id === runId` guard the component includes. Traced through both the first-submission and second-submission timelines by hand against this real source; the guard is correct and the "no stale/stuck state on a second submission" claim holds — this is a genuinely correct piece of the diff, independent of Bug #1 above.
+- `POST /api/ai/design` and `POST /api/ai/design/token`'s real request/response shapes (`app/api/ai/design/route.ts`, `app/api/ai/design/token/route.ts`) were read directly and match the client code's `{ prompt, roomId, projectId }` -> `{ runId }` and `{ runId }` -> `{ token }` exactly, including the `roomId !== projectId` rejection the client always avoids by sending the same value for both.
+- Diff-scoped grep for hardcoded colors (`zinc-`, `slate-`, hex literals, `62C073`) across every changed file: zero matches.
+- `components/ui/*`: zero files touched (`git diff main...HEAD -- components/ui/` returns nothing).
+- `git diff --name-only main...HEAD` confirms no `app/api/ai/*`, `trigger/*`, or `lib/design-agent-*` file appears in this diff.
+
+### Architecture invariants (architecture-context.md)
+
+1. No long-running AI work in a request handler — N/A, no request handler touched by this diff (only calls existing, unmodified routes).
+2. Metadata vs. blob storage separation — N/A, no Prisma/Blob code touched.
+3. Auth/ownership enforced at every mutation boundary — N/A for this diff's own code (no new HTTP mutation added); the two routes it calls already enforce project-membership (`/api/ai/design`) and `TaskRun.userId` ownership (`/api/ai/design/token`) — confirmed by reading both routes directly, neither modified by this diff.
+4. Client components only where needed — all modified components were already client components; no new unnecessary client boundary introduced.
+5. Canvas schema consistency — N/A, no canvas node/edge schema touched.
+6. Realtime Conventions (`ai-status-feed` vs. `ai-chat` staying separate) — followed: `sendAgentMessage` writes only to `ai-chat` (Storage `LiveList`), never `ai-status-feed`; `useRealtimeRun` is a third, independent mechanism (Trigger.dev's own realtime stream, not Liveblocks) and is never conflated with either feed.
+
+No invariant violations found.
+
+### Standards compliance (code-standards.md)
+
+- No `any` usage anywhere in the diff (spot-checked all 9 changed source files).
+- Tokens used throughout — no raw Tailwind grays or hex literals (verified above).
+- `types/tasks.ts`'s `SendAgentChatMessage` type keeps the same "validate unknown external input at system boundaries" posture as `SendChatMessage` — `isRunIdBody`/`isTokenBody` shallow-validate both fetch responses before trusting them, matching `canvas.tsx`'s own `isCanvasSnapshotBody` convention.
+- New hook logic lives in `hooks/use-ai-chat-feed.ts` (top-level `hooks/` folder), per the Hooks Convention — no new file created, additive to the existing spec-25 file.
+- Test files sit next to the code they cover; Vitest used throughout.
+
+### Error handling
+
+- A POST to `/api/ai/design` failing (non-OK or malformed body) is caught, pushes a detail-less failure message, and resets `runId`/`publicToken` — verified via test.
+- A POST to `/api/ai/design/token` failing after a `runId` was already obtained is caught the same way — verified via test, including confirming `useRealtimeRun` returns to `enabled: false` afterward.
+- `useRealtimeRun` reporting a failed/errored terminal state pushes an error message including `run.error.message` when present — verified via test — but does not clear local state (Bug #1).
+- `sendAgentMessage` itself throwing (e.g., the default "not ready yet" stub, or a genuinely disconnected room) is caught by `pushAgentMessage`'s own try/catch and logged via `console.error`, not left to crash the component or mask the original success/failure — verified via test.
+- Not covered by this diff, and explicitly disclosed as a known limitation in the Dev Notes: `useRealtimeRun`'s own top-level subscription `error` (distinct from a completed run's `run.error`) is never surfaced — if the token/subscription itself fails to connect, the client stays "busy" indefinitely with no terminal state to clear it. This is disclosed transparently, reasoned about, and lower-risk than the alternative the Dev Notes considered and rejected; not blocking this review, but flagged here for Product Owner awareness per the Dev's own request.
+
+### Housekeeping
+
+`context/progress-tracker.md`'s "In Progress" section accurately reflects what was actually built (the two-call submit sequence, `@trigger.dev/react-hooks` at `4.5.12`, `sendAgentMessage`, the callback threading, the untouched-files list, and the correct 512/54 test count). "Current Phase"/"Current Goal"/"Next Up" correctly show "Senior Developer pass complete, QA next" as of this diff.
+
+### Summary
+
+The two-call submit orchestration, the request/response shapes against both `/api/ai/design` and `/api/ai/design/token`, the `@trigger.dev/react-hooks` dependency and its real exported types, the pre-broadcast disabled/spinner timing fix, the reuse (not duplication) of spec 24's status line, the strict `SendChatMessage`/`SendAgentChatMessage` type separation, and the second-submission stale-data guard (`realtimeRun.id === runId`) are all correctly implemented and independently verified against the actual installed SDK/API routes, not just trusted from the Dev Notes. The one genuine bug (state not cleared per acceptance criteria 6/7's literal text, on the completion-effect path) is narrow in scope and has a straightforward fix — verified via an actual `eslint` run that the Dev's stated blocker for making that fix (re-triggering `react-hooks/set-state-in-effect`) does not in fact apply to the current, already-restructured effect.
+
+QA failed — see Bug #1 above. Routing to Dev only (no spec-gap items — the fix is a code change, not a product decision, and no other criterion or invariant was violated).

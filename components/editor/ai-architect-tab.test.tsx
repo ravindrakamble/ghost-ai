@@ -374,9 +374,16 @@ describe("AiArchitectTab — design agent submission (spec 26)", () => {
     });
 
     // The run is settled (`run.id === runId && run.isCompleted`) — the
-    // input/Send button are no longer busy, even though local `runId`/
-    // `publicToken` state itself is left as-is (not reset).
+    // input/Send button are no longer busy, and local `runId`/`publicToken`
+    // state is cleared, so `useRealtimeRun` returns to a disabled,
+    // no-runId subscription.
     expect(textarea).not.toBeDisabled();
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenLastCalledWith(
+        undefined,
+        expect.objectContaining({ accessToken: undefined, enabled: false }),
+      );
+    });
   });
 
   it("only pushes the success message once per run, even if the component re-renders again with the same settled run", async () => {
@@ -477,6 +484,15 @@ describe("AiArchitectTab — design agent submission (spec 26)", () => {
 
     await waitFor(() => {
       expect(sendAgentMessage).toHaveBeenCalledWith(expect.stringContaining("Gemini timed out"));
+    });
+
+    // Local `runId`/`publicToken` state is cleared on the failure path too,
+    // the same way the success path clears it.
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenLastCalledWith(
+        undefined,
+        expect.objectContaining({ accessToken: undefined, enabled: false }),
+      );
     });
   });
 
