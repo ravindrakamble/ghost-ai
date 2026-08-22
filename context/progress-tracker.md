@@ -3,13 +3,26 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 28: Spec Persistence & Download — Completed (QA PASS, Product Owner PASS, PR #25 opened against `main`, not yet merged). Phase 29: Spec UI Integration — Analyst brief complete, Senior Developer implementation complete, awaiting QA.
+- Phase 29: Spec UI Integration — Completed (QA PASS, Product Owner PASS, PR #26 opened against `main`, not yet merged). No feature spec 30 currently exists in `context/feature-specs/` — spec 29 was the last one defined. Next phase is either authoring a new feature spec (recommended: wiring the "Generate Spec" button, per spec 29's own Product Owner Review) or beginning the "Deferred — Production Hardening" pass below; human call.
 
 ## Current Goal
-- QA pass on feature spec 29 (Spec UI Integration), per `context/spec-status/29-spec-ui-integration.md`.
+- Human decision on what comes next: author a new feature spec (e.g. wiring the "Generate Spec" button so the generate -> persist -> view -> download loop is reachable end to end from the UI, per spec 29's Product Owner Review recommendation) or begin the "Deferred — Production Hardening" pass below.
 
 ## Completed
 
+- Feature spec 29: Spec UI Integration
+  - `hooks/use-project-specs.ts` (new) — `useProjectSpecs(projectId)`: plain fetch-and-`useState` hook, fetches `GET /api/projects/[projectId]/specs` (spec 28) on mount, exposes `{ specs, isLoading, error, refetch }`. Component-local state only — no Context, no module-level store.
+  - `components/editor/spec-preview-modal.tsx` (new) — `SpecPreviewModal`, a shadcn `Dialog`-based modal (same primitives `starter-templates-modal.tsx`/`share-dialog.tsx` use) that opens when a spec list item is clicked, fetches that spec's Markdown via plain `fetch()` against the existing download route (spec 28), and renders it through a newly-added `react-markdown` dependency with a small manual `components` mapping onto this app's own design tokens — genuinely formatted Markdown, not a `<pre>` dump. Provides a real `<a href download>` download action pointed at that same download route (one route, two client-side invocation mechanisms). Fetched content is cleared on close, never cached long-term.
+  - `components/editor/specs-tab.tsx` (rewritten) — replaces spec 20's static demo card with `useProjectSpecs`-backed real data: loading/error(+Retry)/empty states, then a shadcn `ScrollArea`-scrollable list of items (`filename` + formatted `createdAt`), each clickable to open `SpecPreviewModal` and each carrying its own `<a href download>` download action. The "Generate Spec" button is untouched — present, enabled-looking, no handler (a real, transparently-flagged gap; see Product Owner Review below).
+  - `components/editor/ai-sidebar.tsx` (modified, minimal) — threads the already-received `projectId` prop straight through to `<SpecsTab projectId={projectId} />`; widened the "specs" `TabsContent`'s className to match the "architect" tab's own existing className exactly (`flex-1 overflow-y-auto` -> `flex flex-1 flex-col overflow-hidden`) so `SpecsTab`'s internal `ScrollArea` gets a real bounded height. Header/tab triggers/positioning untouched.
+  - `package.json`/`package-lock.json` (modified) — added `react-markdown@^10.1.0` as a new production dependency, the only Markdown renderer available in this codebase.
+  - Tests: `hooks/use-project-specs.test.ts`, `components/editor/spec-preview-modal.test.tsx` (both new), `components/editor/specs-tab.test.tsx` (rewritten). 602/602 tests passing across 63 files (up from 584/61 at the end of spec 28).
+  - `npx tsc --noEmit`, `npx eslint .` (clean on every file this diff touches), `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - No file under `app/api/**`, `trigger/**`, `lib/spec-blob.ts`, or `prisma/schema.prisma` touched anywhere in this diff — this spec's own explicit Scope Limits; no `components/ui/*` file touched either.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 11 acceptance criteria independently re-verified against the code, full mechanical gate independently reproduced.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Independently re-verified via `git diff main...spec/29-spec-ui-integration` (not trusting Dev/QA claims) that no `app/api/**`, `trigger/**`, `lib/spec-blob.ts`, or `prisma/schema.prisma` file appears anywhere in the diff, and read `hooks/use-project-specs.ts`, `components/editor/spec-preview-modal.tsx`, `components/editor/specs-tab.tsx`, and the `ai-sidebar.tsx` diff directly. Confirmed this spec substantively advances the "Users can view and download generated specs" Features line and Core User Flow step 10 by making spec 27/28's previously API-only functionality reachable from the actual UI — not a technicality. Formed an independent view on the unwired "Generate Spec" button: judged it a legitimate, correctly-flagged scope boundary against the raw spec text (which the Analyst is required to implement against per `ai-workflow-rules.md`), not a defect in this spec's delivery — while flagging to the human that this is a real product gap (no spec currently defined wires the button, so the full generate -> view loop isn't reachable end-to-end from the UI yet) and recommending a follow-up feature spec for it. Also traced and corrected a citation-accuracy detail in the Analyst Brief's Open Questions #1 (the "future spec wiring up the frontend (spec 29)" phrase lives in this file's own Architecture Decisions section below, not `architecture-context.md` as cited — a real, if secondary, forward-looking expectation on record, not a misquote to dismiss, though it doesn't change the scope call).
+  - PR opened against `main`: [PR #26](https://github.com/ravindrakamble/ghost-ai/pull/26) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/29-spec-ui-integration.md`.
 - Feature spec 28: Spec Persistence & Download
   - `prisma/schema.prisma` (modified) — new `ProjectSpec` model (`id`, `projectId` relation to `Project` with `onDelete: Cascade`, `filePath`, `createdAt`, index on `[projectId, createdAt]`), no `userId` field (access derives from the project relationship via `getProjectAccess`, not per-spec ownership), no unique constraint on `projectId` (multiple independently-downloadable specs per project, per Open Questions #5). `Project` gains a `specs ProjectSpec[]` back-relation. Real migration (`20260822130551_add_project_spec`) created and applied against the provisioned Postgres database via `prisma migrate dev`.
   - `lib/spec-blob.ts` (new) — Blob upload/fetch helpers mirroring `lib/canvas-blob.ts`'s exact shape (`requireBlobToken`, lazy per-call token check, `SPEC_BLOB_ACCESS = "private"`). `uploadSpecMarkdown(projectId, specId, markdown)` writes to `specs/{projectId}/{specId}.md`; `fetchSpecMarkdown(blobUrl)` returns the raw Markdown string or `null` for "nothing there," letting a genuine upstream failure propagate and surface as a 500 rather than a miscategorized 404.
@@ -385,12 +398,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- Feature spec 29: Spec UI Integration — branch `spec/29-spec-ui-integration`. Senior Developer implementation complete (rewrote `components/editor/specs-tab.tsx` to fetch and render the real spec list via a new `hooks/use-project-specs.ts`, added `components/editor/spec-preview-modal.tsx` for Markdown preview + download, threaded `projectId` from `ai-sidebar.tsx` into `SpecsTab`, added `react-markdown` as a new production dependency). Full mechanical gate (`tsc`, `eslint`, `vitest`, `next build`) passing. Awaiting QA. Full trail in `context/spec-status/29-spec-ui-integration.md`.
+(none — spec 29 completed above; no feature spec 30 currently exists in `context/feature-specs/`)
 
 ## Next Up
 
-- QA pass on feature spec 29 (Spec UI Integration).
-- Human review/merge of spec 25/26/27/28's PRs and the still-open PRs for specs 12–24.
+- Human decision: author a new feature spec (recommended: wire the "Generate Spec" button to `POST /api/ai/spec` + `POST /api/ai/spec/token` + `useRealtimeRun`, mirroring `ai-architect-tab.tsx`'s spec-26 pattern, so the generate -> persist -> view -> download loop is reachable end to end from the UI) or begin the "Deferred — Production Hardening" pass below.
+- Human review/merge of spec 25/26/27/28/29's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
 
