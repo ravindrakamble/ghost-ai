@@ -34,6 +34,7 @@ interface FakeCursorPresence {
   name: string;
   color: string;
   cursor: { x: number; y: number } | null;
+  thinking?: boolean;
 }
 
 /** `useOther`'s real signature is `(connectionId, selector, isEqual)` — the
@@ -124,5 +125,43 @@ describe("LiveCursors", () => {
     const overlay = container.firstElementChild as HTMLElement;
     expect(overlay).toHaveAttribute("aria-hidden");
     expect(overlay.className).toContain("pointer-events-none");
+  });
+
+  describe("thinking spinner (spec 24)", () => {
+    it("shows a small spinner in the name badge when presence reports thinking: true", () => {
+      useOthersConnectionIdsMock.mockReturnValue([2]);
+      mockOthersByConnection({
+        2: { id: "ghost-ai-agent", name: "Ghost AI", color: "#6457F9", cursor: { x: 10, y: 20 }, thinking: true },
+      });
+
+      render(<LiveCursors flowToScreenPosition={vi.fn().mockReturnValue({ x: 0, y: 0 })} />);
+
+      const badge = screen.getByText("Ghost AI");
+      expect(badge.querySelector("svg")).toHaveClass("animate-spin");
+    });
+
+    it("shows no spinner when presence reports thinking: false", () => {
+      useOthersConnectionIdsMock.mockReturnValue([2]);
+      mockOthersByConnection({
+        2: { id: "user_other", name: "Other Person", color: "#6457F9", cursor: { x: 10, y: 20 }, thinking: false },
+      });
+
+      render(<LiveCursors flowToScreenPosition={vi.fn().mockReturnValue({ x: 0, y: 0 })} />);
+
+      const badge = screen.getByText("Other Person");
+      expect(badge.querySelector("svg")).not.toBeInTheDocument();
+    });
+
+    it("shows no spinner when the thinking field is absent from presence", () => {
+      useOthersConnectionIdsMock.mockReturnValue([2]);
+      mockOthersByConnection({
+        2: { id: "user_other", name: "Other Person", color: "#6457F9", cursor: { x: 10, y: 20 } },
+      });
+
+      render(<LiveCursors flowToScreenPosition={vi.fn().mockReturnValue({ x: 0, y: 0 })} />);
+
+      const badge = screen.getByText("Other Person");
+      expect(badge.querySelector("svg")).not.toBeInTheDocument();
+    });
   });
 });

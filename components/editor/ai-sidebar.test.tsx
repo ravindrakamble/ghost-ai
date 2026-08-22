@@ -5,7 +5,7 @@ import { AiSidebar } from "./ai-sidebar";
 
 describe("AiSidebar", () => {
   it("renders the header (bot icon, title, subtitle) and preserves the floating/slide/border treatment", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} />);
+    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
 
     expect(screen.getByText("AI Workspace")).toBeInTheDocument();
     expect(screen.getByText("Collaborate with Ghost AI")).toBeInTheDocument();
@@ -27,7 +27,7 @@ describe("AiSidebar", () => {
   });
 
   it("reflects isOpen via translate transform and aria-hidden when closed", () => {
-    render(<AiSidebar isOpen={false} onClose={vi.fn()} />);
+    render(<AiSidebar isOpen={false} onClose={vi.fn()} aiStatus={null} />);
 
     const aside = screen.getByText("AI Workspace").closest("aside") as HTMLElement;
     expect(aside.className).toContain("translate-x-full");
@@ -36,14 +36,14 @@ describe("AiSidebar", () => {
 
   it("calls onClose when the header close button is clicked", () => {
     const onClose = vi.fn();
-    render(<AiSidebar isOpen={true} onClose={onClose} />);
+    render(<AiSidebar isOpen={true} onClose={onClose} aiStatus={null} />);
 
     fireEvent.click(screen.getByRole("button", { name: /close ai sidebar/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("renders exactly two tabs, AI Architect and Specs, with AI Architect active by default", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} />);
+    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
 
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(2);
@@ -54,7 +54,7 @@ describe("AiSidebar", () => {
   });
 
   it("switches to the Specs tab content on click, distinguishing the active tab via tokens", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} />);
+    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
 
     const architectTab = screen.getByRole("tab", { name: "AI Architect" });
     const specsTab = screen.getByRole("tab", { name: "Specs" });
@@ -85,11 +85,33 @@ describe("AiSidebar", () => {
   });
 
   it("has no Liveblocks, /api/ai, or Trigger.dev references anywhere in its rendered output", () => {
-    const { container } = render(<AiSidebar isOpen={true} onClose={vi.fn()} />);
+    const { container } = render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} />);
     const html = container.innerHTML;
 
     expect(html).not.toMatch(/liveblocks/i);
     expect(html).not.toMatch(/\/api\/ai/i);
     expect(html).not.toMatch(/trigger\.dev/i);
+  });
+
+  it("forwards aiStatus straight through to AiArchitectTab (spec 24)", () => {
+    render(
+      <AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={{ stage: "processing", text: "Designing…" }} />,
+    );
+
+    expect(screen.getByText("Designing…")).toBeInTheDocument();
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    expect(textarea).toBeDisabled();
+  });
+
+  it("does not dim or block tab switching or the close button while a run is active", () => {
+    render(
+      <AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={{ stage: "start", text: "Working…" }} />,
+    );
+
+    const specsTab = screen.getByRole("tab", { name: "Specs" });
+    fireEvent.click(specsTab);
+    expect(specsTab).toHaveAttribute("aria-selected", "true");
+
+    expect(screen.getByRole("button", { name: /close ai sidebar/i })).not.toBeDisabled();
   });
 });

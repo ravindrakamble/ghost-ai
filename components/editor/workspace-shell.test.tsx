@@ -12,11 +12,13 @@ vi.mock("@/components/editor/canvas", () => ({
     roomId,
     isTemplatesModalOpen,
     onSaveStatusChange,
+    onAiStatusChange,
   }: {
     roomId: string;
     isTemplatesModalOpen: boolean;
     setIsTemplatesModalOpen: (open: boolean) => void;
     onSaveStatusChange: (status: "idle" | "saving" | "saved" | "error") => void;
+    onAiStatusChange: (status: { stage: string; text?: string } | null) => void;
   }) => (
     <div
       data-testid="canvas"
@@ -32,6 +34,15 @@ vi.mock("@/components/editor/canvas", () => ({
       */}
       <button type="button" onClick={() => onSaveStatusChange("saved")}>
         simulate save
+      </button>
+      {/*
+        Spec 24: same push-up shape for `ai-status-feed` — this button
+        stands in for `CanvasFlow`'s real `useAiStatusFeed()` push so
+        `WorkspaceShell`'s wiring to `AiSidebar` can be verified here without
+        re-mounting the real Liveblocks room stack.
+      */}
+      <button type="button" onClick={() => onAiStatusChange({ stage: "processing", text: "Designing…" })}>
+        simulate ai status
       </button>
     </div>
   ),
@@ -120,5 +131,20 @@ describe("WorkspaceShell", () => {
     fireEvent.click(screen.getByRole("button", { name: /simulate save/i }));
 
     expect(screen.getByText("Saved")).toBeInTheDocument();
+  });
+
+  it("passes onAiStatusChange down to Canvas and threads the resulting status through to the AI sidebar (spec 24)", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    // Open the AI sidebar so AiArchitectTab is rendered/queryable.
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+
+    expect(screen.queryByText("Designing…")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /simulate ai status/i }));
+
+    expect(screen.getByText("Designing…")).toBeInTheDocument();
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    expect(textarea).toBeDisabled();
   });
 });

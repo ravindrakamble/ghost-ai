@@ -6,10 +6,19 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AiArchitectTab } from "@/components/editor/ai-architect-tab"
 import { SpecsTab } from "@/components/editor/specs-tab"
+import type { AiStatusMessage } from "@/types/tasks"
 
 interface AiSidebarProps {
   isOpen: boolean
   onClose: () => void
+  /**
+   * Latest validated `ai-status-feed` message (spec 24), pushed down from
+   * `WorkspaceShell` (via `Canvas`'s `onAiStatusChange` callback) — forwarded
+   * straight through to `AiArchitectTab`, the only tab that renders anything
+   * off of it. No new state owned here, per the brief's "pass the real
+   * mechanism down as props" posture (specs 18/21 precedent).
+   */
+  aiStatus: AiStatusMessage | null
 }
 
 /** Active vs. inactive tab styling — see the brief's Open Questions #2:
@@ -46,11 +55,16 @@ const TAB_TRIGGER_CLASS_NAME =
  * close button calls the new `onClose` prop `WorkspaceShell` wires to
  * `setIsAiSidebarOpen(false)`.
  *
- * Presentational only: no Liveblocks (`ai-chat`/`ai-status-feed`), no
- * `/api/ai/*` calls, no Trigger.dev — those are specs 22/24/25/26/27/29's
+ * Presentational only — this file itself makes no Liveblocks calls, no
+ * `/api/ai/*` calls, and no Trigger.dev calls. Spec 24 adds the `aiStatus`
+ * prop above, a plain value forwarded straight through to `AiArchitectTab`
+ * (the room-scoped `ai-status-feed` subscription itself lives in
+ * `CanvasFlow`, inside the Liveblocks room boundary this component sits
+ * outside of — see `components/editor/canvas.tsx`'s docblock). `ai-chat`,
+ * `/api/ai/*` calls, and Trigger.dev triggering remain specs 25/26/27/29's
  * job, per the brief's Out-of-scope callouts.
  */
-export function AiSidebar({ isOpen, onClose }: AiSidebarProps) {
+export function AiSidebar({ isOpen, onClose, aiStatus }: AiSidebarProps) {
   const [activeTab, setActiveTab] = useState<"architect" | "specs">("architect")
 
   return (
@@ -87,7 +101,7 @@ export function AiSidebar({ isOpen, onClose }: AiSidebarProps) {
         </TabsList>
 
         <TabsContent value="architect" keepMounted className="flex flex-1 flex-col overflow-hidden">
-          <AiArchitectTab />
+          <AiArchitectTab aiStatus={aiStatus} />
         </TabsContent>
         <TabsContent value="specs" className="flex-1 overflow-y-auto">
           <SpecsTab />

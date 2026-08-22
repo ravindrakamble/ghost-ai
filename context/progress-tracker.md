@@ -3,12 +3,29 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 23: Design Agent Logic — Completed (QA PASS, Product Owner PASS, PR #18 open). Phase 24: AI Presence State — not yet started.
+- Phase 24: AI Presence State — Completed (QA PASS, Product Owner PASS, PR opened). Phase 25: Sidebar Chat Feed — not yet started.
 
 ## Current Goal
-- Analyst pass for feature spec 24 (AI Presence State) at `context/feature-specs/24-ai-presence-state.md`.
+- Kick off feature spec 25 (Sidebar Chat Feed) with the Analyst; no work started yet.
 
 ## Completed
+
+- Feature spec 24: AI Presence State
+  - `types/tasks.ts` (new) — the formal `ai-status-feed` schema this spec's own text names as its deliverable: `AiStatusStage` (`"start" | "processing" | "complete" | "error"`, matching spec 23's already-shipped stage values exactly) and `AiStatusMessage` (`{ stage: AiStatusStage; text?: string }`, `text` optional). `isAiStatusMessage` — a manual runtime type guard (no Zod, matching spec 23's precedent) rejecting a missing/invalid `stage` or non-string `text`.
+  - `lib/design-agent-room.ts` (modified, additive/import-only) — `DesignAgentStatusStage`/`DesignAgentStatusMessage` now alias/extend the canonical `types/tasks.ts` types instead of an independent duplicate, per the brief's Open Questions #2 recommendation. No behavior change to the broadcast logic itself.
+  - `hooks/use-ai-status-feed.ts` (new) — `useAiStatusFeed()`, wrapping Liveblocks' real `useEventListener` (`@liveblocks/react/suspense`) subscribed to `ai-status-feed`; validates every incoming event via `isAiStatusMessage` and keeps only the latest valid message in local state, discarding anything invalid. Must be called from inside the room's `RoomProvider` boundary.
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` (already inside `RoomProvider`) calls `useAiStatusFeed()` and pushes the latest value up to `WorkspaceShell` via a new `onAiStatusChange` callback prop, mirroring spec 21's `onSaveStatusChange` callback-push-up pattern exactly, per the brief's Open Questions #1 recommendation (no provider-tree restructuring).
+  - `components/editor/workspace-shell.tsx` (modified) — owns new `aiStatus: AiStatusMessage | null` state (mirrors `saveStatus`), wires `onAiStatusChange={setAiStatus}` into `<Canvas>`, threads `aiStatus` down to `<AiSidebar>`.
+  - `components/editor/ai-sidebar.tsx` (modified) — forwards `aiStatus` straight through to `<AiArchitectTab>`; no new state owned here.
+  - `components/editor/ai-architect-tab.tsx` (modified) — the actual UI: a non-blocking status line (`Loader2` spinner + `aiStatus.text`, `text-ai-text` token) visible only while `aiStatus.stage` is `"start"`/`"processing"`, rendering nothing otherwise (mirrors `SaveStatusIndicator`'s "nothing for idle" convention); the `Textarea`/Send `Button` gain a `disabled` condition for that same active-generation window (in addition to the existing empty-input check); the Send button swaps its `Send` icon for a spinning `Loader2` during that window. Tab switching, the Specs tab, and the close button are untouched.
+  - `components/editor/live-cursors.tsx` (modified) — `CursorPresence`'s `useOther` selector gains a `thinking: boolean` field (read from `candidate.presence.thinking`); the name badge renders a small `Loader2` spinner next to the name when `other.thinking` is `true`, nothing otherwise. No change to the existing null-cursor early return (per the brief's Open Questions #3, this means the spinner won't always be visible while Ghost AI is "thinking" — expected, not a bug; the sidebar status line is the reliable signal).
+  - Tests: `types/tasks.test.ts`, `hooks/use-ai-status-feed.test.ts` (both new); `components/editor/ai-architect-tab.test.tsx`, `components/editor/live-cursors.test.tsx`, `components/editor/canvas.test.tsx`, `components/editor/workspace-shell.test.tsx`, `components/editor/ai-sidebar.test.tsx` (all extended). 459/459 tests passing across 53 files (up from 427/51 at the end of spec 23).
+  - `npx tsc --noEmit`, `npx eslint .` (clean on every file this diff touches — pre-existing unrelated warnings/errors remain only in generated `.trigger/tmp/` build artifacts and third-party skill templates, untouched by this diff), `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - No changes to `trigger/design-agent.ts`, `lib/design-agent-ai.ts`, `app/api/ai/design*`, or the `TaskRun` model — this spec is a pure consumer of what spec 23 already broadcasts.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 10 acceptance criteria independently re-verified against the code, full mechanical gate independently reproduced, and the highest-risk claim (`lib/design-agent-room.ts`'s type-import alignment being genuinely import-only, no behavior change) independently confirmed via `git diff` and by spec 23's own test file needing zero edits.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Confirmed this spec is a genuine, non-technicality strengthening of Success Criterion 2 ("multiple users can collaborate in the same canvas simultaneously") — a design-agent run in progress (spec 23) is now visible and actionable (shared status line, disabled input, cursor spinner) to every connected participant, not just whoever is watching the raw Liveblocks room, while correctly deferring the actual generation-trigger flow to spec 26. Independently re-verified via `git diff main...HEAD` (this branch's real parent) — not just trusting Dev/QA claims — that no `trigger/*`, `app/api/*`, `prisma/*`, or `components/ui/*` file appears in the diff, and read `types/tasks.ts`/`hooks/use-ai-status-feed.ts`/`lib/design-agent-room.ts`/`canvas.tsx`/`workspace-shell.tsx`/`ai-sidebar.tsx`/`ai-architect-tab.tsx`/`live-cursors.tsx` directly rather than trusting either report's account. No live browser/multiplayer verification possible in this pipeline (consistent with specs 11–23) — recommended human smoke test (two tabs, one submitting a prompt once spec 26 lands, confirming the other tab's status/input/cursor react purely off the room broadcast) before considering this fully proven, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #20](https://github.com/ravindrakamble/ghost-ai/pull/20) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/24-ai-presence-state.md`.
 
 - Feature spec 23: Design Agent Logic
   - `trigger/design-agent.ts` (rewritten) — `runDesignAgent` replaces spec 22's log-and-echo shell with the real implementation: sets AI presence (`thinking: true`) → broadcasts `start` status → reads current Storage via `getCurrentDesignGraph` → broadcasts `processing` status → calls Gemini via `interpretDesignPrompt` → sets presence cursor to the last added/moved node → applies the full action batch atomically via `applyDesignAgentActions` → broadcasts `complete` status → returns `{ roomId, actionCount }`. On any failure: broadcasts an `error` status and always clears AI presence in a `finally` block (both wrapped in their own `.catch` so a secondary failure can't mask the original error).
@@ -304,12 +321,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- (none — spec 24 not yet started)
+(none currently — spec 25, Sidebar Chat Feed, has not yet been picked up by the Analyst)
 
 ## Next Up
 
-- Analyst pass for feature spec 24 (AI Presence State).
-- Human review/merge of spec 23's PR #18 and the still-open PRs for specs 12–22.
+- Analyst brief for feature spec 25 (Sidebar Chat Feed) — not yet started.
+- Human review/merge of spec 24's PR and the still-open PRs for specs 12–23.
 
 ## Open Questions
 

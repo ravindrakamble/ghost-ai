@@ -8,6 +8,7 @@ import type {
   CanvasNode as CanvasNodeAlias,
   NodeShape,
 } from "@/types/canvas"
+import type { AiStatusMessage, AiStatusStage } from "@/types/tasks"
 import type { DesignAgentAction, DesignAgentGraphEdge, DesignAgentGraphNode, DesignAgentGraphSummary } from "@/lib/design-agent-ai"
 
 /**
@@ -91,16 +92,25 @@ export async function clearDesignAgentPresence(roomId: string): Promise<void> {
   await setGhostAiPresence(roomId, { thinking: false, cursor: null }, CLEARED_PRESENCE_TTL_SECONDS)
 }
 
-export type DesignAgentStatusStage = "start" | "processing" | "complete" | "error"
+/**
+ * Now the canonical `types/tasks.ts#AiStatusStage`, formalized by spec 24 —
+ * this was originally a spec-23-local duplicate (`"start" | "processing" |
+ * "complete" | "error"`) broadcast ahead of that schema existing; re-exported
+ * under its original name so nothing importing it from this module needs to
+ * change. See spec 24's Analyst Brief, Open Questions #2.
+ */
+export type DesignAgentStatusStage = AiStatusStage
 
 /**
- * Minimal, forward-compatible `ai-status-feed` payload — spec 24 owns the
- * formal schema/validation (`types/tasks.ts`, not yet created); this spec
- * only needs to broadcast a shape that stays compatible with spec 24's own
- * stated "object with at least a `text: string` field." See the brief's
- * Open Questions #5.
+ * `ai-status-feed` payload, now built directly on the canonical
+ * `types/tasks.ts#AiStatusMessage` shape rather than an independently-typed
+ * duplicate — this module always sends a required `text: string`, which
+ * trivially satisfies `AiStatusMessage`'s optional `text?: string` (a
+ * required field is a valid instance of an optional one). Also extends
+ * `Record<string, Json | undefined>` so this stays structurally assignable
+ * to `@liveblocks/node`'s `broadcastEvent` payload type.
  */
-export interface DesignAgentStatusMessage extends Record<string, Json | undefined> {
+export interface DesignAgentStatusMessage extends AiStatusMessage, Record<string, Json | undefined> {
   text: string
   stage: DesignAgentStatusStage
 }
