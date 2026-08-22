@@ -67,6 +67,7 @@ Resolved ahead of spec 10 so later specs (19, 22, 24, 25) don't each make a diff
 - **`ai-status-feed`**: latest-message-only, no history needed by any consuming spec. Implemented via Liveblocks `room.broadcastEvent` — ephemeral, no Storage write.
 - **`ai-chat`**: ordered, persisted, and must replay to participants who join mid-conversation. Implemented via a Liveblocks Storage `LiveList` — not `broadcastEvent`, since that has no replay/history for new joiners.
 - Both stay room-scoped and separate from each other; neither is a general-purpose event bus.
+- **Spec-generation run progress** (spec 27's `generate-spec` task): published via Trigger.dev's own native run-metadata mechanism (`metadata.set`, `@trigger.dev/sdk`, consumable client-side through `@trigger.dev/react-hooks#useRealtimeRun`'s own metadata field) — not a second producer on `ai-status-feed`. Resolved this way because `ai-status-feed` is latest-message-only with a single existing producer (`trigger/design-agent.ts`); a second, structurally different producer risked a viewer being unable to tell which flow's status they were currently seeing, and `generate-spec` has no frontend wiring yet for a Liveblocks broadcast to reach anyway.
 
 ## Hooks Convention
 

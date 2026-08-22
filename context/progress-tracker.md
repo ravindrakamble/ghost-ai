@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 26: Design Agent Frontend — Completed (QA PASS after one bugfix round, Product Owner PASS, PR opened). Phase 27: Spec Generation Flow — not yet started.
+- Phase 26: Design Agent Frontend — Completed (QA PASS after one bugfix round, Product Owner PASS, PR opened). Phase 27: Spec Generation Flow — Senior Developer pass complete, QA not yet started.
 
 ## Current Goal
-- Analyst brief for feature spec 27 (Spec Generation Flow) per `context/feature-specs/27-spec-generation-flow.md`.
+- QA review of feature spec 27 (Spec Generation Flow) per `context/spec-status/27-spec-generation-flow.md`.
 
 ## Completed
 
@@ -354,12 +354,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- Feature spec 26 (Design Agent Frontend): Senior Developer pass complete on branch `spec/26-design-agent-frontend` — brief and implementation both at `context/spec-status/26-design-agent-frontend.md`. Wires the AI Architect tab's existing input/Send button to a real submit orchestration: pushes the prompt onto `ai-chat` (spec 25's `sendMessage`) → `POST /api/ai/design` → `POST /api/ai/design/token` → tracks the triggered run client-side via `useRealtimeRun` (`@trigger.dev/react-hooks`, newly installed and pinned to `4.5.12`) → pushes a final AI-authored or error-describing message onto `ai-chat` via a new `sendAgentMessage` function (additive to `hooks/use-ai-chat-feed.ts`, hardcoding `role: "assistant"`/`sender: "Ghost AI"`), threaded down the same `Canvas` → `WorkspaceShell` → `AiSidebar` → `AiArchitectTab` callback pattern specs 24/25 established. No backend/Trigger.dev/`app/api/ai/*` file touched (confirmed via `git diff --name-only`). 512/512 tests passing across 54 files; `tsc`/`eslint`/`next build` all clean. QA pass not yet started.
+- Feature spec 27 (Spec Generation Flow): Senior Developer pass complete on branch `spec/27-spec-generation-flow` — brief and implementation both at `context/spec-status/27-spec-generation-flow.md`. Backend-only, structurally parallel to spec 22/23's design-agent pair: `POST /api/ai/spec` (auth → Zod-validate `{ roomId, chatHistory, nodes, edges }`, no `projectId` accepted from the client → `getProjectAccess(roomId)` → `triggerGenerateSpec` → `TaskRun` create → `{ runId }`), `POST /api/ai/spec/token` (auth → Zod-validate `{ runId }` → `TaskRun.userId` ownership check → `createRunToken` → `{ token }`, 1-hour expiration), and `trigger/generate-spec.ts` (`generateSpecTask`, Zod-validates its payload before ever calling Gemini, calls `lib/generate-spec-ai.ts#generateSpecMarkdown` — `ai`'s `generateText`, not `generateObject` — and returns the Markdown as task output; publishes `start`/`processing`/`complete`/`error` status via Trigger.dev's own native `metadata.set` run-metadata mechanism, not a Liveblocks broadcast). `lib/trigger.ts`'s `createDesignRunToken` generalized to `createRunToken` and reused by both `/api/ai/design/token` and `/api/ai/spec/token` (renamed import updated in the design route too — no behavior change). No `components/*`, `types/canvas.ts`, or `types/tasks.ts` file touched; no `prisma/schema.prisma` change (`TaskRun` reused unmodified); no spec content persisted anywhere. 558/558 tests passing across 60 files (up from 512/54 at the end of spec 26); `tsc`/`eslint`/`next build` all clean. QA pass not yet started.
 
 ## Next Up
 
-- QA review of feature spec 26 (Design Agent Frontend), per `context/spec-status/26-design-agent-frontend.md`.
-- Human review/merge of spec 25's PR and the still-open PRs for specs 12–24.
+- QA review of feature spec 27 (Spec Generation Flow), per `context/spec-status/27-spec-generation-flow.md`.
+- Human review/merge of spec 25/26's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
 
@@ -386,6 +386,7 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
   - Prisma schema path in spec 21 corrected from `prisma/model/project.prisma` to `prisma/schema.prisma` — matches the actual single-file schema delivered in spec 05, not the multi-file `prisma/models/` split spec 05 originally described.
   - Token expiration: spec 22's design-run token route now sets 1-hour expiration, matching spec 27's spec-run token route (was previously only specified on 27).
   - New conventions documented in `architecture-context.md`: hooks go in a top-level `hooks/` folder going forward (spec 21's autosave hook updated from `/hook` accordingly; `components/editor/use-project-dialogs.ts` stays as a pre-convention exception), and the `ai-status-feed` / `ai-chat` Liveblocks mechanism is pinned down (`broadcastEvent` for status, Storage `LiveList` for chat) ahead of specs 22/24/25.
+- Spec 27's `generate-spec` task publishes its run progress via Trigger.dev's own native run-metadata mechanism (`metadata.set`), not a second producer on the Liveblocks `ai-status-feed` — recorded in `architecture-context.md` under "Realtime Conventions" so a future spec wiring up the frontend (spec 29) doesn't have to re-derive this from scratch. `lib/trigger.ts`'s `createDesignRunToken` was also generalized to `createRunToken` (task-agnostic) and is now shared by both `/api/ai/design/token` and `/api/ai/spec/token`.
 
 ## Session Notes
 
