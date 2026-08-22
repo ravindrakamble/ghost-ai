@@ -176,6 +176,21 @@ interface CanvasProps {
    * inside `CanvasFlow`. See spec 26's Analyst Brief, Concrete deliverables.
    */
   onSendAgentMessageChange: (sendAgentMessage: SendAgentChatMessage) => void
+  /**
+   * Pushes the room's live `nodes`/`edges` (spec 30, the full `CanvasNode[]`/
+   * `CanvasEdge[]` React Flow shapes already destructured from
+   * `useLiveblocksFlow`) up to `WorkspaceShell`, which threads them down to
+   * `SpecsTab` so its "Generate Spec" button can convert the current graph
+   * into `POST /api/ai/spec`'s narrower request shape. Same callback-push-up
+   * shape as `onChatMessagesChange` above, for the same reason — the room's
+   * synced state is only valid inside `CanvasFlow`, beneath the `RoomProvider`
+   * boundary `WorkspaceShell` sits outside of. Deliberately not named
+   * `onNodesChange`/`onEdgesChange` — those names are already React Flow's
+   * own change-list-dispatcher convention in this file, and reusing them here
+   * for a completely different payload (a full snapshot, not a change list)
+   * would be misleading. See spec 30's Analyst Brief, Open Questions #2.
+   */
+  onCanvasGraphChange: (nodes: CanvasNodeAlias[], edges: CanvasEdgeAlias[]) => void
 }
 
 /**
@@ -194,6 +209,7 @@ export function Canvas({
   onChatMessagesChange,
   onSendChatMessageChange,
   onSendAgentMessageChange,
+  onCanvasGraphChange,
 }: CanvasProps) {
   return (
     <div className="relative flex-1 bg-base">
@@ -222,6 +238,7 @@ export function Canvas({
                   onChatMessagesChange={onChatMessagesChange}
                   onSendChatMessageChange={onSendChatMessageChange}
                   onSendAgentMessageChange={onSendAgentMessageChange}
+                  onCanvasGraphChange={onCanvasGraphChange}
                 />
               </ReactFlowProvider>
             </ClientSideSuspense>
@@ -421,6 +438,15 @@ function CanvasError() {
  * (outside the room boundary) is where the user actually triggers a send —
  * see spec 25's Analyst Brief, Open Questions #3.
  *
+ * Spec 30 (Generate Spec Button) adds one more push-up: the room's live
+ * `nodes`/`edges` (already destructured from `useLiveblocksFlow` below) are
+ * pushed up via a new `onCanvasGraphChange` prop in a dedicated `useEffect`,
+ * mirroring `onChatMessagesChange`'s effect-based push exactly. `SpecsTab`
+ * (outside the room boundary) is where the "Generate Spec" button converts
+ * this snapshot into `POST /api/ai/spec`'s narrower request shape -- this
+ * component itself makes no `/api/ai/spec*` call and owns no `useRealtimeRun`
+ * subscription of its own.
+ *
  * Spec 26 (Design Agent Frontend) extends the same `useAiChatFeed()` call
  * with its own additive `sendAgentMessage` function (role: "assistant"),
  * pushed down via a new `onSendAgentMessageChange` prop — the bidirectional
@@ -440,6 +466,7 @@ function CanvasFlow({
   onChatMessagesChange,
   onSendChatMessageChange,
   onSendAgentMessageChange,
+  onCanvasGraphChange,
 }: {
   projectId: string
   isTemplatesModalOpen: boolean
@@ -449,6 +476,7 @@ function CanvasFlow({
   onChatMessagesChange: (messages: AiChatMessage[]) => void
   onSendChatMessageChange: (sendMessage: SendChatMessage) => void
   onSendAgentMessageChange: (sendAgentMessage: SendAgentChatMessage) => void
+  onCanvasGraphChange: (nodes: CanvasNodeAlias[], edges: CanvasEdgeAlias[]) => void
 }) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, onDelete } = useLiveblocksFlow<
     CanvasNodeAlias,
@@ -566,6 +594,13 @@ function CanvasFlow({
   useEffect(() => {
     onSendAgentMessageChange(sendAgentMessage)
   }, [sendAgentMessage, onSendAgentMessageChange])
+
+  // Spec 30 (Generate Spec Button): pushes the room's live nodes/edges up to
+  // `WorkspaceShell` -> `SpecsTab`, the exact same effect-based push shape as
+  // `onChatMessagesChange` above.
+  useEffect(() => {
+    onCanvasGraphChange(nodes, edges)
+  }, [nodes, edges, onCanvasGraphChange])
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {

@@ -28,6 +28,7 @@ vi.mock("@/components/editor/canvas", () => ({
     onChatMessagesChange,
     onSendChatMessageChange,
     onSendAgentMessageChange,
+    onCanvasGraphChange,
   }: {
     roomId: string;
     isTemplatesModalOpen: boolean;
@@ -39,6 +40,10 @@ vi.mock("@/components/editor/canvas", () => ({
     ) => void;
     onSendChatMessageChange: (sendMessage: (content: string) => void) => void;
     onSendAgentMessageChange: (sendAgentMessage: (content: string) => void) => void;
+    onCanvasGraphChange: (
+      nodes: { id: string; position: { x: number; y: number }; data: Record<string, unknown> }[],
+      edges: { id: string; source: string; target: string; data?: Record<string, unknown> }[],
+    ) => void;
   }) => (
     <div
       data-testid="canvas"
@@ -98,6 +103,29 @@ vi.mock("@/components/editor/canvas", () => ({
         onClick={() => onSendAgentMessageChange(() => {})}
       >
         simulate agent send ready
+      </button>
+      {/*
+        Spec 30: same push-up shape for the room's live canvas nodes/edges —
+        stands in for `CanvasFlow`'s real `useLiveblocksFlow()` result so
+        `WorkspaceShell`'s wiring to `AiSidebar` -> `SpecsTab` can be verified
+        here without re-mounting the real Liveblocks room stack.
+      */}
+      <button
+        type="button"
+        onClick={() =>
+          onCanvasGraphChange(
+            [
+              {
+                id: "n1",
+                position: { x: 0, y: 0 },
+                data: { label: "API", color: "#1F1F1F", textColor: "#EDEDED", shape: "rectangle" },
+              },
+            ],
+            [{ id: "e1", source: "n1", target: "n2", data: { label: "calls" } }],
+          )
+        }
+      >
+        simulate canvas graph
       </button>
     </div>
   ),
@@ -275,6 +303,39 @@ describe("WorkspaceShell", () => {
     expect(JSON.parse(designCall[1].body as string)).toMatchObject({
       roomId: "proj-77",
       projectId: "proj-77",
+    });
+  });
+
+  it("passes onCanvasGraphChange down to Canvas and threads the resulting nodes/edges through to the Specs tab's Generate Spec request (spec 30)", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === "/api/ai/spec") {
+        return Promise.resolve({ ok: false, json: async () => ({}) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ collaborators: [], specs: [] }) });
+    });
+
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /simulate canvas graph/i }));
+    fireEvent.click(screen.getByRole("tab", { name: "Specs" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /generate spec/i }));
+
+    await waitFor(() => {
+      const specCall = fetchMock.mock.calls.find(([url]) => url === "/api/ai/spec");
+      expect(specCall).toBeDefined();
+    });
+
+    const specCall = fetchMock.mock.calls.find(([url]) => url === "/api/ai/spec") as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(specCall[1].body as string)).toEqual({
+      roomId: "p1",
+      chatHistory: [],
+      nodes: [{ id: "n1", label: "API", shape: "rectangle", x: 0, y: 0 }],
+      edges: [{ id: "e1", sourceNodeId: "n1", targetNodeId: "n2", label: "calls" }],
     });
   });
 

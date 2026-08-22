@@ -3,10 +3,14 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 29: Spec UI Integration — Completed (QA PASS, Product Owner PASS, PR #26 merged into `main`). No feature spec 30 currently exists in `context/feature-specs/` — spec 29 was the last one defined. Next phase is either authoring a new feature spec (recommended: wiring the "Generate Spec" button, per spec 29's own Product Owner Review) or beginning the "Deferred — Production Hardening" pass below; human call.
+- Phase 29: Spec UI Integration — Completed (QA PASS, Product Owner PASS, PR #26 merged into `main`). Phase 30: Generate Spec Button — Analyst brief complete (`context/spec-status/30-generate-spec-button.md`), Senior Developer implementation complete on branch `spec/30-generate-spec-button`, awaiting QA. This wires the Specs tab's existing "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern) and closes the generate -> persist -> view -> download loop end to end from the UI.
 
 ## Current Goal
-- Human decision on what comes next: author a new feature spec (e.g. wiring the "Generate Spec" button so the generate -> persist -> view -> download loop is reachable end to end from the UI, per spec 29's Product Owner Review recommendation) or begin the "Deferred — Production Hardening" pass below.
+- QA pass on feature spec 30 (Generate Spec Button), per `context/spec-status/30-generate-spec-button.md`'s Dev Notes.
+
+## In Progress
+
+- Feature spec 30: Generate Spec Button — implemented, awaiting QA. See `context/spec-status/30-generate-spec-button.md`'s Dev Notes for the full file list, decisions, and test coverage. Branch: `spec/30-generate-spec-button`.
 
 ## Completed
 

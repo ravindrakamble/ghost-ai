@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AiArchitectTab } from "@/components/editor/ai-architect-tab"
 import { SpecsTab } from "@/components/editor/specs-tab"
+import type { CanvasEdge, CanvasNode } from "@/types/canvas"
 import type {
   AiChatMessage,
   AiStatusMessage,
@@ -55,6 +56,15 @@ interface AiSidebarProps {
    * `useRealtimeRun` subscription that calls it.
    */
   sendAgentMessage: SendAgentChatMessage
+  /**
+   * The room's live canvas nodes/edges (spec 30), pushed down from
+   * `WorkspaceShell` (via `Canvas`'s `onCanvasGraphChange` callback) —
+   * forwarded straight through to `SpecsTab`, the only tab that needs them
+   * (to build `POST /api/ai/spec`'s request body). Same "forward straight
+   * through" posture as every other prop here.
+   */
+  canvasNodes: CanvasNode[]
+  canvasEdges: CanvasEdge[]
 }
 
 /** Active vs. inactive tab styling — see the brief's Open Questions #2:
@@ -111,9 +121,14 @@ const TAB_TRIGGER_CLASS_NAME =
  * `flex-1 overflow-y-auto` to the same `flex flex-1 flex-col
  * overflow-hidden` the AI Architect tab's `TabsContent` already uses, so
  * `SpecsTab`'s own internal `ScrollArea` gets a real bounded height rather
- * than relying on this ancestor's overflow. Triggering a *new*
- * spec-generation run from the "Generate Spec" button remains out of scope
- * (see `SpecsTab`'s own docblock).
+ * than relying on this ancestor's overflow.
+ *
+ * Spec 30 wires the "Generate Spec" button: `chatMessages` (already threaded
+ * here since spec 25) and two new props, `canvasNodes`/`canvasEdges`, are
+ * forwarded straight through to `SpecsTab` too, which owns the actual
+ * `POST /api/ai/spec` -> token -> `useRealtimeRun` orchestration. No new
+ * state owned here — same "forward straight through" posture as everything
+ * else in this file.
  */
 export function AiSidebar({
   isOpen,
@@ -123,6 +138,8 @@ export function AiSidebar({
   chatMessages,
   sendChatMessage,
   sendAgentMessage,
+  canvasNodes,
+  canvasEdges,
 }: AiSidebarProps) {
   const [activeTab, setActiveTab] = useState<"architect" | "specs">("architect")
 
@@ -169,7 +186,12 @@ export function AiSidebar({
           />
         </TabsContent>
         <TabsContent value="specs" className="flex flex-1 flex-col overflow-hidden">
-          <SpecsTab projectId={projectId} />
+          <SpecsTab
+            projectId={projectId}
+            nodes={canvasNodes}
+            edges={canvasEdges}
+            chatMessages={chatMessages}
+          />
         </TabsContent>
       </Tabs>
     </aside>

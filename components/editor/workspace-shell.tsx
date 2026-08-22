@@ -8,6 +8,7 @@ import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
 import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import type { Project } from "@/types/project"
+import type { CanvasEdge, CanvasNode } from "@/types/canvas"
 import type {
   AiChatMessage,
   AiStatusMessage,
@@ -98,6 +99,15 @@ interface WorkspaceShellProps {
  * as `projectId` — the design-agent submit flow (`POST /api/ai/design`)
  * needs it directly, and `AiArchitectTab` sits outside the room boundary
  * where `roomId`/`projectId` would otherwise only be known.
+ *
+ * `canvasNodes`/`canvasEdges` (spec 30) follow the exact same shape as
+ * `chatMessages`: owned here, populated from `CanvasFlow`'s live
+ * `nodes`/`edges` via the new `onCanvasGraphChange` callback, defaulting to
+ * an empty array. Threaded down to `AiSidebar` -> `SpecsTab`, whose "Generate
+ * Spec" button converts the current snapshot into `POST /api/ai/spec`'s
+ * request body. `chatMessages` itself needed no new plumbing — it already
+ * existed here (spec 25) and is simply threaded one hop further, alongside
+ * `canvasNodes`/`canvasEdges`, to `SpecsTab` too.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
@@ -110,12 +120,19 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [sendAgentMessage, setSendAgentMessage] = useState<SendAgentChatMessage>(
     () => agentChatNotReadyYet,
   )
+  const [canvasNodes, setCanvasNodes] = useState<CanvasNode[]>([])
+  const [canvasEdges, setCanvasEdges] = useState<CanvasEdge[]>([])
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
   function handleOpenShare() {
     setIsShareOpen(true)
     void refetch()
+  }
+
+  function handleCanvasGraphChange(nodes: CanvasNode[], edges: CanvasEdge[]) {
+    setCanvasNodes(nodes)
+    setCanvasEdges(edges)
   }
 
   return (
@@ -138,6 +155,7 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
           onChatMessagesChange={setChatMessages}
           onSendChatMessageChange={(sendMessage) => setSendChatMessage(() => sendMessage)}
           onSendAgentMessageChange={(agentMessage) => setSendAgentMessage(() => agentMessage)}
+          onCanvasGraphChange={handleCanvasGraphChange}
         />
         <AiSidebar
           isOpen={isAiSidebarOpen}
@@ -147,6 +165,8 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
           chatMessages={chatMessages}
           sendChatMessage={sendChatMessage}
           sendAgentMessage={sendAgentMessage}
+          canvasNodes={canvasNodes}
+          canvasEdges={canvasEdges}
         />
       </div>
       <ShareDialog
