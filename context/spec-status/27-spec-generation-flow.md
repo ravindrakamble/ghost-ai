@@ -132,3 +132,110 @@ Confirmed directly: `TaskRun` (spec 22) already has exactly the fields this spec
 - **No live Trigger.dev run of `generate-spec` triggered in this pass** — the task is registered and unit-tested, but (unlike spec 23's Post-PASS section) no one-off script triggered a real run against the already-provisioned Trigger.dev project in this environment. Same recommended-not-blocking human smoke test as above covers this too.
 - Everything else named in the brief's own Out-of-scope callouts (frontend wiring, spec editor/viewer UI, persistence, rate limiting, billing/enterprise/versioning/mobile) is genuinely untouched — confirmed via `git status`/`git diff` that no `components/*` file appears anywhere in this diff.
 
+
+## QA Report
+
+**Verdict: FAIL** (one non-blocking, docs-only issue -- see Issues found below)
+
+### Mechanical gate (independently reproduced, not trusted from the Dev report)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Clean, no errors. |
+| `npx eslint .` | Clean on every file this diff touches (spot-checked individually: `lib/generate-spec-ai.ts`, `trigger/generate-spec.ts`, `app/api/ai/spec/route.ts`, `app/api/ai/spec/token/route.ts`, `lib/trigger.ts`, `app/api/ai/design/token/route.ts`, and all six new/extended test files -- zero output). Repo-wide run does surface 53 errors/1339 warnings, but 100% of them are confined to generated `.trigger/tmp/*.mjs` build artifacts, matching the pre-existing, already-logged category from specs 20/24 -- none in this diff's own files. |
+| `npx vitest run --no-file-parallelism` | 558/558 passing across 58 files (matches the Dev's own "Commands run"/"Test coverage" sections; see Housekeeping note below re: a stale "60 files" figure elsewhere in progress-tracker.md). |
+| `npx next build` | Succeeds. `/api/ai/spec` and `/api/ai/spec/token` both appear correctly in the route manifest as dynamic routes. |
+
+### Acceptance criteria checklist (against `context/feature-specs/27-spec-generation-flow.md` + the brief's own numbered list)
+
+1. **PASS** -- `SpecRequestBodySchema` (`app/api/ai/spec/route.ts`) has no `projectId` field; a client-supplied `projectId` is silently stripped by Zod's default "strip unknown keys" behavior on `z.object(...)`. `getProjectAccess(body.roomId)` and `triggerGenerateSpec({ projectId: body.roomId, roomId: body.roomId, ... })` both derive exclusively from the validated `roomId`. Directly exercised by a dedicated test ("derives both project access and the triggered task's projectId from roomId only, never a client-supplied projectId") that passes an attacker-controlled `projectId` in the body and asserts it never reaches `getProjectAccess`/`triggerGenerateSpec`/`prisma.taskRun.create`.
+2. **PASS** -- 401 happens before body parsing (`getCallerIdentity()` checked first in `POST`); 404/403 come from `getProjectAccess(roomId)`, both before `triggerGenerateSpec`/`prisma.taskRun.create` are ever called (confirmed by the route code and by tests asserting `triggerGenerateSpecMock`/`prismaMock.taskRun.create` were not called in each of these paths).
+3. **PASS** -- happy path triggers `generate-spec` via `triggerGenerateSpec`, creates exactly one `prisma.taskRun.create` call with `{ runId, projectId: roomId, userId }`, and returns `{ runId }`. Verified directly in code and by the route's own success-path test.
+4. **PASS** -- 401 before touching Prisma/Trigger.dev; unknown `runId` -> 404; `runId` owned by a different caller -> 403 (`TaskRun.userId !== identity.userId`). All three paths return before `createRunToken` is called.
+5. **PASS** -- `createRunToken(runId)` in `lib/trigger.ts` calls `auth.createPublicToken({ scopes: { read: { runs: [runId] } }, expirationTime: "1h" })` -- confirmed the literal `"1h"` constant and the single-run scope; returned directly as `{ token }`.
+6. **PASS** -- `GenerateSpecPayloadSchema.parse(payload)` runs before the task's `try` block, i.e. before Gemini or any `metadata.set` call. Confirmed the schema rejects non-array `nodes`/`edges`, a malformed `chatHistory` entry, and a node missing `x`/`y` -- each covered by a dedicated test asserting `generateSpecMarkdownMock` was never called. `generateSpecMarkdown` genuinely calls Gemini via `@ai-sdk/google`'s `generateText` and returns raw Markdown text as task output (`{ roomId, projectId, markdown }`).
+7. **PASS** -- confirmed via `git diff main...HEAD --name-only` that no path under `components/` appears anywhere in the 15-file diff.
+8. **PASS** -- no Prisma write beyond the one `taskRun.create` call in the route; `runGenerateSpec` only returns `{ roomId, projectId, markdown }` as task output, no Blob/filesystem write anywhere in `trigger/generate-spec.ts` or `lib/generate-spec-ai.ts`.
+9. **PASS** -- `lib/generate-spec-ai.ts` reuses the same `GEMINI_MODEL_ID`/lazy-`globalThis`-cached-`createGoogleGenerativeAI`/`requireGeminiApiKey` shape `lib/design-agent-ai.ts` already established, with only a distinct cache key (`specGenGoogleProvider`) to keep the two lazy caches independently resettable in tests -- not a new abstraction.
+10. **PASS** -- confirmed via `git diff` that neither `types/canvas.ts` nor `types/tasks.ts` appears in this diff. `chatHistory` is typed/validated as `AiChatMessage[]`/`AiChatMessageSchema` imported, not redefined.
+11. **PASS** -- both `app/api/ai/spec/route.ts` and `app/api/ai/spec/token/route.ts` contain no Gemini/Trigger.dev-triggering logic beyond calling `triggerGenerateSpec`/`createRunToken`; all Gemini/Markdown-generation logic lives in `trigger/generate-spec.ts`/`lib/generate-spec-ai.ts`. No violation of Architecture Invariant 1.
+12. **PASS** -- see Mechanical gate table above; independently reproduced, not taken on the Dev's word.
+
+### Architecture invariants (`context/architecture-context.md`)
+
+- Invariant 1 (no long-running AI work in a request handler) -- respected; verified above under criterion 11.
+- Invariant 2 (metadata vs. artifact storage separation) -- respected; this unit stores only the `TaskRun` metadata row, no artifact write of any kind.
+- Invariant 3 (auth/ownership enforced at every mutation) -- both routes gate on `getCallerIdentity`/`getProjectAccess`/`TaskRun.userId` before their one respective mutation (`taskRun.create`, token issuance).
+- Invariant 4/5 -- not applicable to this backend-only unit.
+- The new "Realtime Conventions" bullet in `architecture-context.md` accurately describes what `trigger/generate-spec.ts` actually does (`metadata.set`, no Liveblocks import) -- confirmed by reading the file: no `lib/design-agent-room.ts`/Liveblocks import anywhere in `trigger/generate-spec.ts`. Independently confirmed `metadata.set` is a real, callable export of the installed `@trigger.dev/sdk` package (not a speculative/fabricated API) via a direct `require()` check against `node_modules`.
+- Confirmed the `createDesignRunToken` -> `createRunToken` rename in `lib/trigger.ts`/`app/api/ai/design/token/route.ts`/`app/api/ai/design/token/route.test.ts` is a byte-for-byte rename with no behavioral change (`git diff` reviewed directly) -- the pre-existing spec-22/23 design-agent token route still passes its full test suite unmodified in behavior.
+
+### Standards compliance (`context/code-standards.md`)
+
+- No `any` usage in any changed file (the only matches for the string "any" are inside English prose comments).
+- No raw Tailwind color classes (`zinc-`/`slate-`) or hex literals anywhere in the diff -- expected, since this is a backend-only unit with no styling surface.
+- No `components/ui/*` file touched.
+- `interface` used for `GenerateSpecPayload`/`GenerateSpecResult`/`GenerateSpecGraphNode`/`GenerateSpecGraphEdge`/`GenerateSpecInput` per the brief's own explicit direction; Zod schemas kept as a separate, `.parse()`-enforced source of truth rather than silently drifting from the interfaces.
+- Route handlers stay thin; Prisma/Trigger.dev/Clerk boundaries mocked correctly in every new test file per this repo's established `vi.mock`/`vi.hoisted` convention.
+
+### Error handling
+
+- Bad input: Zod `safeParse`/`.parse()` rejects malformed bodies/payloads at both the route and task boundary, before any side effect.
+- Unauthorized: 401 checked first in both routes, before body parsing.
+- Missing/foreign records: 404 for an unknown project or unknown `runId`; 403 for a non-member project or a `runId` owned by someone else.
+- Upstream failures: a failed `triggerGenerateSpec`/`createRunToken` call returns 502 without a stray Prisma write; a failed `prisma.taskRun.create` after a successful trigger returns 500 (the run is already in flight at that point -- an accepted, pre-existing limitation shared with spec 22's design route, not something this spec regresses).
+- Task-level failure: `runGenerateSpec`'s `catch` block publishes an `error` status via `metadata.set`, itself wrapped in a nested `try/catch` so a secondary metadata-publish failure can't mask the original error -- directly tested.
+
+### Housekeeping
+
+- `context/progress-tracker.md`'s "In Progress" entry for spec 27 (line 357) is largely accurate and detailed, but states "558/558 tests passing across 60 files" -- the actual, independently-reproduced count (and the Dev's own "Test coverage"/"Commands run" sections in this same file) is 58 files. Minor, non-blocking, but worth a one-line fix so the tracker doesn't drift from the number every other section of this same document already gets right.
+- Everything else in `progress-tracker.md`'s spec-27 entry (files added/modified, the `createRunToken` generalization, the run-metadata decision, scope-limit confirmations) matches the actual diff.
+
+### Issues found
+
+1. **[Bug -> Dev] Stale file count in `context/progress-tracker.md`.** Line 357 ("In Progress" section) reads "558/558 tests passing across 60 files" -- the real count, confirmed by an independent `npx vitest run --no-file-parallelism` and by this same spec's own "Test coverage"/"Commands run" sections lower in this file, is 58 files. A one-line fix (60 files -> 58 files).
+
+No other bugs or spec gaps found. This is a clean, well-scoped, thoroughly-tested implementation that faithfully follows the brief's own resolutions to all seven Open Questions, stays entirely inside its stated scope limits, and does not regress spec 22's already-shipped design-agent token route.
+
+### Handoff
+
+QA failed -- see issue above, routing to Dev. This is a single-line documentation fix only (`context/progress-tracker.md`); no code, test, or behavioral change is required. Given the triviality and zero risk of this fix, the Product Owner may wish to accept this as a non-blocking note rather than requiring a full Dev round-trip -- that call belongs to the Product Owner, not QA.
+
+### Fix Applied
+
+`context/progress-tracker.md` line 357 corrected from "558/558 tests passing across 60 files" to "558/558 tests passing across 58 files" -- a one-line, docs-only change, no code/test/behavioral change. No re-run of the mechanical gate was needed since nothing outside this one doc line changed. Proceeding directly to Product Owner review per QA's own note that a full re-review round is optional at the Product Owner's discretion for a fix this trivial.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Scope and diff verification (independent, not trusted from Dev/QA reports)
+
+Reproduced `git diff main...HEAD --stat` directly rather than trusting either report's account: 15 files changed (5 new source files, 6 new/extended test files, `lib/trigger.ts`, `app/api/ai/design/token/route.ts` + its test, `context/architecture-context.md`, `context/progress-tracker.md`, this spec-status file). Confirmed by name-only diff and by grepping for the four scope-limited paths that no `components/*`, `prisma/schema.prisma`, `types/canvas.ts`, or `types/tasks.ts` file appears anywhere in the diff — the brief's own explicit Scope Limits and this spec's acceptance criteria 7/10 both hold.
+
+Read the actual bodies of `app/api/ai/spec/route.ts`, `app/api/ai/spec/token/route.ts`, `lib/generate-spec-ai.ts`, `trigger/generate-spec.ts`, and the `lib/trigger.ts` diff directly (not summarized):
+
+- `app/api/ai/spec/route.ts`'s `SpecRequestBodySchema` has no `projectId` field; `getProjectAccess(body.roomId)` and `triggerGenerateSpec({ projectId: body.roomId, roomId: body.roomId, ... })` both derive exclusively from the validated `roomId` — a client-supplied `projectId` is silently stripped by Zod's default object behavior before anything downstream sees it. Acceptance criterion 1 and the raw spec text's explicit "Do not trust a client-supplied `projectId`" instruction are both satisfied by construction, not by convention.
+- `trigger/generate-spec.ts`'s `GenerateSpecPayloadSchema.parse(payload)` runs before the `try` block — a malformed payload never reaches Gemini and never publishes a misleading `start`/`processing` status. `generateSpecMarkdown` is genuinely called via `generateText` (not `generateObject`), and the task returns raw Markdown as its only output — no Blob write, no filesystem write, no second Prisma write beyond the route's own `TaskRun.create` (acceptance criteria 6, 8).
+- `lib/generate-spec-ai.ts` reuses `design-agent-ai.ts`'s exact lazy-provider-instantiation shape with only a distinct `globalThis` cache key — genuinely not a new AI provider abstraction (acceptance criterion 9), and proactively applies spec 23's own live-verified `maxOutputTokens: 8192` lesson rather than waiting to rediscover it.
+- `lib/trigger.ts`'s `createDesignRunToken` → `createRunToken` change is a pure rename/generalization — same body, same `"1h"` expiration constant (renamed, not changed), same single-run scope. Confirmed `app/api/ai/design/token/route.ts`'s diff is an import/call-site rename only, no behavioral change to spec 22's already-shipped token route.
+- The new "Realtime Conventions" bullet in `context/architecture-context.md` accurately describes what the code does — `metadata.set`, no Liveblocks import anywhere in `trigger/generate-spec.ts`, confirmed by reading the file.
+
+The uncommitted working-tree diff to `context/progress-tracker.md` at the time of this review is exactly the one-line "60 files" → "58 files" fix QA flagged — nothing else changed, matching the "Fix Applied" note above. Given QA's own explicit framing (a single-line, docs-only correction with zero code/test/behavioral impact, and an explicit note that a full Dev round-trip is optional at Product Owner discretion), accepting this as a non-blocking correction rather than sending it back to Dev for a formality is the right call — it would burn a pipeline round-trip for a change that has already been made correctly and verified above.
+
+### Against `project-overview.md` Success Criteria
+
+- **Success Criterion 5** ("The graph can be converted into a persisted Markdown spec") — this spec delivers the *generation* half genuinely, not just a technicality: unlike spec 22 (which shipped as a log-and-echo shell ahead of spec 23's real Gemini call), this spec ships the real Gemini-backed `generateText` call from day one, combining what specs 22/23 did separately for design-agent generation into one spec for spec-generation. A real, authenticated, access-checked `POST /api/ai/spec` call today produces genuine Gemini-drafted Markdown as a Trigger.dev task output — a substantive, non-technicality step, not merely satisfying the letter of the brief. The "persisted" half of Criterion 5 is explicitly and correctly deferred to spec 28 (Spec Persistence & Download) — this spec's own Scope Limit ("Do not store the final spec in this unit") and Out-of-scope callouts name spec 29/28 as the follow-ups, consistent with `ai-workflow-rules.md`'s incremental philosophy of shipping one coherent, independently-valuable slice at a time rather than bundling generation with persistence and UI in one pass.
+- **Goal 4** ("Generation runs as a durable background task") and Architecture Invariant 1 ("Request handlers do not run long-lived AI work") — both routes stay thin; all Gemini/Markdown-generation logic lives only in `trigger/generate-spec.ts`/`lib/generate-spec-ai.ts`, confirmed directly in the route bodies above (acceptance criterion 11).
+- No touches to any `project-overview.md` Out of Scope item (billing, enterprise tiers, versioned spec history, production object-storage migration, mobile) — this spec's own diff footprint doesn't come near any of them.
+
+### Rough edges — acceptable at this stage, not a blocker
+
+- **No live Gemini smoke test of `generateSpecMarkdown`'s `generateText` path specifically**, and no live Trigger.dev run of `generate-spec` triggered in this pass (Dev Notes' own "Known limitations" section). This is the same category of gap spec 22/23 shipped with before their own post-PASS live-verification rounds, and the design-agent's live-verified `gemini-3.6-flash`/`maxOutputTokens: 8192` lessons were already proactively applied here rather than needing to be rediscovered. Recommended as a human smoke test (trigger a real `generate-spec` run end to end and read back the Markdown from the Trigger.dev dashboard) before spec 28/29 build persistence/UI on top of it — not a blocker for this recommendation, and nothing about it would block spec 28 from building correctly on top of this spec's contracts (`{ runId }`, `{ token }`, and the task's `{ roomId, projectId, markdown }` output shape are all fully defined and unit-tested regardless of live verification status).
+- **The run-metadata-vs-Liveblocks-broadcast choice (Open Questions #1)** is a genuine, non-trivial interpretive call the brief made and the Dev followed — resolved toward Trigger.dev's own `metadata.set`, consumable later via `@trigger.dev/react-hooks#useRealtimeRun` (already installed by spec 26). This is recorded as a shared architecture decision in `context/architecture-context.md` so spec 29 (or whichever spec wires the frontend) doesn't have to re-derive it, and is consistent with spec 26's own already-proven `useRealtimeRun` pattern for the design-agent run. No concern that this blocks correct downstream building.
+
+### `progress-tracker.md` accuracy
+
+The "In Progress" entry for spec 27 (post-fix, now reading "58 files") accurately reflects what was actually delivered: the two new routes' exact request/response shapes, the `generate-spec` task's real Gemini call and Zod validation, the `createRunToken` generalization, and the explicit confirmation that no `components/*`/`types/canvas.ts`/`types/tasks.ts`/`prisma/schema.prisma` file was touched. This matches QA's own independently-reproduced diff and mechanical-gate results, not an aspirational description. Moved to "Completed" below as part of this review, with "Current Phase"/"Next Up" advanced to spec 28 (Spec Persistence & Download), the next file in `context/feature-specs/`.
+
+Ready for the human's final call on whether to move forward — this verdict is a recommendation, not a deployment authorization.
