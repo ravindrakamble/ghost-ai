@@ -114,3 +114,105 @@ Brief ready for Senior Developer at `context/spec-status/28-spec-persistence-dow
 - **No live Blob smoke test of the new `specs/{projectId}/{specId}.md` pathname specifically.** `lib/canvas-blob.ts`'s `access: "private"` convention was already live-confirmed (the fix that landed ahead of this spec), and `lib/spec-blob.ts` reuses that exact configuration, but no one-off script has exercised a real `uploadSpecMarkdown`/`fetchSpecMarkdown` round trip against the live store in this pass. Recommended as a human smoke test (trigger a real `generate-spec` run end to end, confirm a `ProjectSpec` row and a fetchable blob both exist, then call the download route for real) before spec 29 builds a UI on top of these routes — not a blocker for this handoff, the same category of gap spec 22/23/27 shipped with before their own post-PASS live-verification rounds.
 - **No live Trigger.dev run of the now-persistence-aware `generate-spec` task triggered in this pass** — same recommended-not-blocking human smoke test as above covers this too; the task's Prisma/Blob calls are fully unit-tested with mocked boundaries, matching this repo's established testing convention, but not yet exercised against the live Trigger.dev project.
 - Everything else named in the brief's own Out-of-scope callouts (spec list/preview UI, wiring the "Generate Spec" button, storing spec content in Prisma, modifying existing canvas persistence, versioned spec history, rate limiting, billing/enterprise/mobile) is genuinely untouched — confirmed via `git status`/`git diff` that no `components/*`, `lib/canvas-blob.ts`, or `app/api/projects/[projectId]/canvas/route.ts` file appears anywhere in this diff.
+
+## QA Report
+
+**Verdict: PASS**
+
+### Mechanical gate (independently reproduced, not trusted from the Dev report)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Clean, no errors. |
+| `npx eslint .` | Clean on every file this diff touches (spot-checked individually: `lib/spec-blob.ts`, `lib/spec-blob.test.ts`, `trigger/generate-spec.ts`, `trigger/generate-spec.test.ts`, `app/api/projects/[projectId]/specs/route.ts` + its test, `app/api/projects/[projectId]/specs/[specId]/download/route.ts` + its test -- zero output). Repo-wide run surfaces 53 errors/1339 warnings, all confined to generated `.trigger/tmp/*.mjs` build artifacts (same pre-existing category already logged by specs 20/24/27) -- none in this diff's own files. |
+| `npx vitest run --no-file-parallelism` | 584/584 passing across 61 files -- matches the Dev's reported count exactly (up from 558/58 at the end of spec 27). No skip/only/todo modifiers found anywhere in the test suite (grepped directly) that would artificially inflate this. |
+| `npx next build` | Succeeds. `/api/projects/[projectId]/specs` and `/api/projects/[projectId]/specs/[specId]/download` both appear correctly in the route manifest as dynamic routes. |
+| `npx prisma migrate status` | "Database schema is up to date!" against the real provisioned Postgres database -- the `20260822130551_add_project_spec` migration is genuinely applied, not just written to disk. |
+
+### Acceptance criteria checklist (against `context/feature-specs/28-spec-persistence-download.md`'s own text + the brief's numbered list)
+
+1. **PASS** -- `ProjectSpec` model in `prisma/schema.prisma` has `id`, `projectId` (relation to `Project`, `onDelete: Cascade`), `filePath`, `createdAt`. No Markdown content stored as a Prisma column anywhere.
+2. **PASS** -- `persistGeneratedSpec` (`trigger/generate-spec.ts`) uploads to `specs/{projectId}/{specId}.md` via `uploadSpecMarkdown` with `access: "private"`, then creates (placeholder) + updates the `ProjectSpec` row with the resulting Blob URL in `filePath`, linked to the correct `projectId`. Verified directly in code and by `trigger/generate-spec.test.ts`'s "creates a placeholder ProjectSpec row, uploads to Blob using the generated id, then updates filePath" test.
+3. **PASS** -- both `specs/route.ts` and `specs/[specId]/download/route.ts` call `getProjectAccess(projectId)` first; 401/404/403 all return before any Prisma read or Blob fetch, confirmed in code and by dedicated tests asserting the Prisma/Blob mocks were never called on these paths.
+4. **PASS** -- download route returns 404 both for an unknown `specId` and for a `specId` that exists but belongs to a different `projectId` (`spec.projectId !== projectId` check) -- both paths directly tested.
+5. **PASS** -- `fetchSpecMarkdown(spec.filePath)` is called server-side and the resulting Markdown string is returned in the response body with `Content-Type: text/markdown; charset=utf-8` and `Content-Disposition: attachment; filename="spec-{specId}.md"`. Confirmed the response body/headers never contain the mocked blob URL's domain (`blob.example`) -- both the list and download route tests assert this directly.
+6. **PASS** -- `fetchSpecMarkdown` returns `null` only for "nothing there" (`get` resolves `null`, or a non-200 status) and lets a genuine upstream rejection propagate; the download route's own try/catch around `fetchSpecMarkdown` maps that propagated error to 500, while a `null` result maps to 404. Both branches directly tested (`lib/spec-blob.test.ts` and the route's own test file).
+7. **PASS** -- `ProjectSpec` holds only `id`/`projectId`/`filePath`/`createdAt`; confirmed no other model or column stores spec content.
+8. **PASS** -- grepped `filePath` usage across `app/`: the only place a raw Blob URL touches route code is the download route's own internal `fetchSpecMarkdown(spec.filePath)` call -- it is never serialized into a response. The list route explicitly returns a derived `filename` (`spec-{id}.md`), not `filePath`.
+9. **PASS** -- confirmed via `git diff main...HEAD --stat` that no path under `components/` appears anywhere in the 12-file diff.
+10. **PASS** -- same diff-stat check confirms neither `lib/canvas-blob.ts` nor `app/api/projects/[projectId]/canvas/route.ts` appears in the diff.
+11. **PASS** -- see Mechanical gate table above; independently reproduced, not taken on the Dev's word, including the real-database migration-status check.
+
+### Architecture invariants (`context/architecture-context.md`)
+
+- Invariant 1 ("Request handlers do not run long-lived AI work") -- respected. `app/api/projects/[projectId]/specs/route.ts` and the download route contain no AI/Blob-upload logic; the persistence write (`persistGeneratedSpec`) lives entirely inside `trigger/generate-spec.ts`, a Trigger.dev background task, not a request handler. The invariant's literal text restricts request handlers specifically -- it does not forbid a background task from doing Prisma/Blob I/O after its AI call completes. This reasoning was flagged for verification and holds up against the actual invariant text.
+- Invariant 2 (metadata vs. artifact storage separation) -- respected. `ProjectSpec` (Postgres) holds only the reference; the Markdown itself lives in Vercel Blob, matching the Storage Model's existing `specs/{projectId}/{specId}.md` convention (already documented in `architecture-context.md` prior to this diff).
+- Invariant 3 (auth/ownership at every mutation) -- both new routes gate on `getProjectAccess` before their one read (list) or fetch (download); the one Prisma-mutating path (`persistGeneratedSpec`, inside the trigger task) only ever runs after the task itself was triggered through the already access-checked `POST /api/ai/spec` route (spec 27), so no new unchecked mutation surface was introduced.
+- Confirmed `lib/spec-blob.ts`'s `access: "private"` is genuinely present (not reverted to `"public"`) by reading the file directly, not trusting the Dev's claim -- matches `lib/canvas-blob.ts`'s current, live-confirmed configuration exactly, including the same `allowOverwrite`/`addRandomSuffix`/lazy-token pattern.
+
+### Standards compliance (`context/code-standards.md`)
+
+- No `any` in any changed file (grepped the diff directly).
+- No raw Tailwind color classes (`zinc-`/`slate-`) or hex literals anywhere in the diff -- expected, backend-only unit.
+- No `components/ui/*` or any `components/*` file touched.
+- `interface` used for `GenerateSpecPayload`/`GenerateSpecResult`; Zod schemas remain the separate runtime-enforced source of truth.
+- Route handlers stay thin; Prisma/Blob boundaries mocked via `vi.mock`/`vi.hoisted` in every new test file, matching this repo's established convention.
+
+### Error handling
+
+- Bad input: N/A for these two `GET` routes (no request body); both correctly require no input beyond already-validated URL params.
+- Unauthorized/unauthenticated: 401 checked first via `getProjectAccess`, before any Prisma read, on both routes.
+- Missing/foreign records: 404 for a missing project, 403 for an authenticated non-member via `getProjectAccess`, 404 for an unknown `specId`, and 404 for a `specId` belonging to a different project.
+- Upstream failures: a genuine Blob failure (network/auth) surfaces as 500 via the download route's own try/catch, distinct from the 404 "nothing there" case -- directly tested.
+- Task-level persistence failure (`trigger/generate-spec.ts`): a Blob-upload or Prisma-update failure inside `persistGeneratedSpec` deletes the placeholder `ProjectSpec` row (best-effort, wrapped in its own `.catch` so a secondary cleanup failure can't mask the original error) before rethrowing -- verified genuinely working, not just claimed, via three dedicated tests ("deletes the placeholder row and rethrows when the Blob upload fails", "...when the filePath update fails", "logs (but does not rethrow) a secondary failure while cleaning up the placeholder row"). Traced the code path directly: `create` happens outside the try block (so a `create` failure has nothing to clean up, correctly), and both `uploadSpecMarkdown`/`update` happen inside the try, with `delete` in the catch. This is sound.
+
+**One minor, non-blocking observation (not tagged as an actionable Bug -- see reasoning below):** `persistGeneratedSpec`'s two-write pattern leaves a brief window, between `prisma.projectSpec.create` (placeholder, `filePath: ""`) and the subsequent `update`, during which the `GET /api/projects/[projectId]/specs` list route would show that spec with an (internal-only) empty `filePath`, and a `GET .../download` call for that `specId` during the same window would call `fetchSpecMarkdown("")`, which would likely throw and surface as a 500 rather than a clean 404. This is an inherent, narrow consequence of the two-write pattern the brief's own Open Questions #2 pre-approved as "a small mechanical choice, not a product-behavior one," the window only spans a single Blob upload plus Prisma update inside one task invocation, and nothing in the current diff (no spec-29 frontend exists yet) actually exercises this window in practice. Not routing this back -- flagging only for awareness in case spec 29's frontend ends up polling the list route aggressively during an in-flight generation run.
+
+### Housekeeping
+
+- `context/progress-tracker.md` accurately reflects what was built: "Current Phase"/"Current Goal" advanced to "QA review of feature spec 28," the new "In Progress" entry correctly describes every file added/modified (including the two-write persistence pattern, the list route's non-brief-mandated addition, and the migration), the stale "Vercel Blob access model" open question is correctly struck through as resolved, and a new Architecture Decisions bullet cross-references the persistence-lives-in-the-task decision. Independently confirmed against the actual diff (`git diff main...HEAD -- context/progress-tracker.md`) -- no discrepancy found.
+
+### Issues found
+
+None. This is a clean, well-tested implementation that follows `lib/canvas-blob.ts`'s established Blob-access convention exactly (the specific risk this spec was warned about), enforces the same `getProjectAccess` gate as the existing canvas routes on both new routes, never leaks a raw Blob URL to the client on any path (grepped and tested directly), implements a genuinely working orphaned-row cleanup on persistence failure (not just a claimed one), correctly allows multiple `ProjectSpec` rows per project with no unique constraint or overwrite logic, ships a real additive-only migration that is confirmed applied against the live database, and stays entirely within its stated scope (no `components/*`, `lib/canvas-blob.ts`, or canvas route touched).
+
+### Handoff
+
+QA passed -- ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Scope and diff verification (independent, not trusted from Dev/QA reports)
+
+Reproduced `git diff main...HEAD --stat` directly: 12 files changed (`lib/spec-blob.ts` + its test, both new route files + their tests, `trigger/generate-spec.ts` + its test, `prisma/schema.prisma`, the new migration's `migration.sql`, `context/progress-tracker.md`, this spec-status file). Confirmed by a dedicated `git diff main...HEAD --name-only | grep -i components` (no match, exit code 1) that no `components/*` file appears anywhere in the diff, and confirmed `lib/canvas-blob.ts`/`app/api/projects/[projectId]/canvas/route.ts` are likewise absent from the diff — the brief's own Concrete Deliverables scope limits and acceptance criteria 9/10 all hold.
+
+Read the actual bodies of `prisma/schema.prisma`'s diff, `lib/spec-blob.ts`, `trigger/generate-spec.ts`'s diff, and both new route files directly (not summarized):
+
+- `ProjectSpec` matches the brief's field list exactly (`id`, `projectId` relation with `onDelete: Cascade`, `filePath`, `createdAt`), no `userId`, no unique constraint on `projectId`. The generated `migration.sql` is a plain additive `CREATE TABLE`/`CREATE INDEX`/`ADD CONSTRAINT` — no destructive operation, confirmed by reading it directly.
+- `lib/spec-blob.ts` sets `SPEC_BLOB_ACCESS = "private" as const` and passes it through both `put`/`get` calls — the brief's explicit, non-negotiable requirement given the live-confirmed store configuration — and correctly distinguishes "nothing there" (returns `null`) from a genuine upstream failure (propagated, not swallowed), matching `fetchCanvasSnapshot`'s established pattern.
+- `trigger/generate-spec.ts`'s `persistGeneratedSpec` implements the two-write pattern exactly as the brief's Open Questions #2 described, with a working cleanup-on-failure path (create outside the try block, upload+update inside it, delete-on-catch wrapped in its own `.catch`) — traced the control flow directly, it is sound.
+- Both new routes gate on `getProjectAccess(projectId)` before any Prisma/Blob call, and the download route's `spec.projectId !== projectId` check precedes the Blob fetch — acceptance criteria 3/4 satisfied by construction. Neither route ever serializes `filePath`/a raw Blob URL into a response body — the list route explicitly selects only `{ id, createdAt }` and derives `filename` from `id`.
+
+### Against `project-overview.md` Success Criteria
+
+- **Success Criterion 5** ("The graph can be converted into a persisted Markdown spec") — this spec closes the "persisted" half spec 27 explicitly deferred. A real Gemini-generated Markdown spec (spec 27) now durably lands in Vercel Blob and is linked to its project via a genuine `ProjectSpec` row, and is retrievable through an access-checked download route — not a technicality, a substantive completion of this criterion's literal text.
+- **Success Criterion 6** ("Project metadata and generated artifacts are stored in the correct layers") — directly and cleanly hit: `ProjectSpec` (Postgres) holds only the reference; the Markdown itself lives in Blob, matching the same metadata/artifact split `canvasJsonPath`/`lib/canvas-blob.ts` already established for canvas snapshots. No spec content anywhere in a Prisma column, confirmed directly.
+- **Features section** ("Users can view and download generated specs") — "download" is genuinely delivered (an authenticated, access-checked, content-only download route). "View" is correctly left to spec 29's UI layer — this spec's own Scope Limit ("do not add frontend or UI logic") and `components/editor/specs-tab.tsx`'s own docblock both name spec 29 as that work, consistent with `ai-workflow-rules.md`'s incremental-slice philosophy rather than bundling persistence with UI in one pass.
+- No touches to any `project-overview.md` Out of Scope item (billing, enterprise tiers, versioned spec history, production object-storage migration, mobile) — this spec's diff footprint doesn't come near any of them. The brief's own Open Questions #5 resolution (multiple independently-downloadable `ProjectSpec` rows per generation run, no overwrite) is correctly distinguished from "versioned spec history" — there is no version numbering, diffing, or review/approval workflow anywhere in this diff, just independently generated, independently downloadable artifacts.
+
+### The non-brief-mandated list route and `specId` addition — judged as legitimate, not scope creep
+
+Both the Dev and QA reports flag two additions beyond the raw spec text's literal three-item checklist: the `GET /api/projects/[projectId]/specs` list route, and `GenerateSpecResult.specId`. Agreeing with the brief's own Open Questions #3 reasoning and the Dev's transparent flagging of both: a download route that requires a client to already know a real `specId` is unusable without some way to discover one, and spec 29's own raw text explicitly assumes "the existing ProjectSpec API" for a list — omitting it would silently block spec 29 on day one rather than surface the gap now. Neither addition invents a new feature surface, crosses into the Out of Scope wall, or does anything beyond exposing metadata the persistence step already computes. This is exactly the kind of interpretive gap-filling this pipeline's Analyst Brief format is designed to surface and have reviewed, not silently absorbed — and it was surfaced, at every stage (brief, Dev Notes, QA).
+
+### Rough edges — acceptable at this stage, not a blocker
+
+- **QA's flagged race window** (a brief gap between the placeholder `ProjectSpec.create` and the follow-up `update` during which the list route could show an empty-`filePath` spec, and a same-window download call would 500 rather than cleanly 404): this is a pre-approved tradeoff from the brief's own Open Questions #2 text, the window spans a single Blob upload plus one Prisma update inside one task invocation, and nothing in this diff exercises it — no spec-29 frontend exists yet to poll the list route during an in-flight run. Agreeing with QA's judgment not to route this back. Recommending spec 29's own Analyst pass consider it explicitly (e.g., the list route could filter out empty-`filePath` rows, or the download route could map an empty `filePath` to a clean 404 rather than relying on `fetchSpecMarkdown("")` throwing into a 500) — a candidate follow-up, not a blocker for this spec.
+- **No live Blob/Trigger.dev smoke test of the new persistence path** (Dev Notes' own "Known limitations" section) — same category of gap specs 22/23/27 shipped with before their own post-PASS live-verification rounds; the contracts (`ProjectSpec` row shape, Blob pathname, both routes' response shapes) are all fully defined and unit-tested regardless of live-verification status, so nothing here would block spec 29 from building correctly on top of this spec.
+
+### `progress-tracker.md` accuracy
+
+The "In Progress" entry for spec 28 (as of this review) accurately reflects what was actually delivered: every file added/modified, the two-write persistence pattern with its cleanup-on-failure behavior, the non-brief-mandated list route explicitly flagged as such, the real migration applied against the provisioned database, and the explicit confirmation that no `components/*`/`lib/canvas-blob.ts`/canvas route file was touched. This matches QA's own independently-reproduced diff and mechanical-gate results, not an aspirational description. Moving this entry to "Completed" below as part of this review, with "Current Phase"/"Next Up" advanced to spec 29 (Spec UI Integration), the next file in `context/feature-specs/`.
+
+Ready for the human's final call on whether to move forward — this verdict is a recommendation, not a deployment authorization.
