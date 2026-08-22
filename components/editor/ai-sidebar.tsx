@@ -102,8 +102,18 @@ const TAB_TRIGGER_CLASS_NAME =
  *
  * Spec 26 adds `projectId`/`sendAgentMessage` the same "forward straight
  * through" way — the actual `/api/ai/*` calls and `useRealtimeRun`
- * subscription live in `AiArchitectTab` itself, not in this shell. Spec 27/29's
- * spec-generation flow remains out of scope here.
+ * subscription live in `AiArchitectTab` itself, not in this shell.
+ *
+ * Spec 29 threads the same, already-received `projectId` prop straight
+ * through to `SpecsTab` too (it needs it for `useProjectSpecs`' own fetch
+ * and every preview/download URL it builds) — no new state owned here, and
+ * the Specs tab's own `TabsContent` className was widened from a plain
+ * `flex-1 overflow-y-auto` to the same `flex flex-1 flex-col
+ * overflow-hidden` the AI Architect tab's `TabsContent` already uses, so
+ * `SpecsTab`'s own internal `ScrollArea` gets a real bounded height rather
+ * than relying on this ancestor's overflow. Triggering a *new*
+ * spec-generation run from the "Generate Spec" button remains out of scope
+ * (see `SpecsTab`'s own docblock).
  */
 export function AiSidebar({
   isOpen,
@@ -158,8 +168,8 @@ export function AiSidebar({
             sendAgentMessage={sendAgentMessage}
           />
         </TabsContent>
-        <TabsContent value="specs" className="flex-1 overflow-y-auto">
-          <SpecsTab />
+        <TabsContent value="specs" className="flex flex-1 flex-col overflow-hidden">
+          <SpecsTab projectId={projectId} />
         </TabsContent>
       </Tabs>
     </aside>

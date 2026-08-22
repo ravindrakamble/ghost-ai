@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 28: Spec Persistence & Download — Completed (QA PASS, Product Owner PASS, PR #25 opened against `main`, not yet merged). Phase 29: Spec UI Integration — not yet started.
+- Phase 28: Spec Persistence & Download — Completed (QA PASS, Product Owner PASS, PR #25 opened against `main`, not yet merged). Phase 29: Spec UI Integration — Analyst brief complete, Senior Developer implementation complete, awaiting QA.
 
 ## Current Goal
-- Analyst pass on feature spec 29 (Spec UI Integration), per `context/feature-specs/29-spec-ui-integration.md`.
+- QA pass on feature spec 29 (Spec UI Integration), per `context/spec-status/29-spec-ui-integration.md`.
 
 ## Completed
 
@@ -385,11 +385,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 28 completed below, spec 29 analyst pass not yet started)
+- Feature spec 29: Spec UI Integration — branch `spec/29-spec-ui-integration`. Senior Developer implementation complete (rewrote `components/editor/specs-tab.tsx` to fetch and render the real spec list via a new `hooks/use-project-specs.ts`, added `components/editor/spec-preview-modal.tsx` for Markdown preview + download, threaded `projectId` from `ai-sidebar.tsx` into `SpecsTab`, added `react-markdown` as a new production dependency). Full mechanical gate (`tsc`, `eslint`, `vitest`, `next build`) passing. Awaiting QA. Full trail in `context/spec-status/29-spec-ui-integration.md`.
 
 ## Next Up
 
-- Analyst pass on feature spec 29 (Spec UI Integration), per `context/feature-specs/29-spec-ui-integration.md`.
+- QA pass on feature spec 29 (Spec UI Integration).
 - Human review/merge of spec 25/26/27/28's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
