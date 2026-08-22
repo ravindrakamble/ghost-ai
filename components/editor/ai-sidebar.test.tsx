@@ -39,6 +39,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -71,6 +73,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -90,6 +94,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -107,6 +113,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -128,6 +136,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -169,6 +179,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
     const html = container.innerHTML;
@@ -187,6 +199,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -205,6 +219,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -227,6 +243,8 @@ describe("AiSidebar", () => {
         ]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -245,6 +263,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={sendChatMessage}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -272,6 +292,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={vi.fn()}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -301,6 +323,8 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={sendAgentMessage}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
@@ -329,11 +353,69 @@ describe("AiSidebar", () => {
         chatMessages={[]}
         sendChatMessage={vi.fn()}
         sendAgentMessage={sendAgentMessage}
+        canvasNodes={[]}
+        canvasEdges={[]}
       />,
     );
 
     await waitFor(() => {
       expect(sendAgentMessage).toHaveBeenCalledWith(expect.stringContaining("updated the canvas"));
+    });
+  });
+
+  it("forwards canvasNodes/canvasEdges/chatMessages straight through to SpecsTab's Generate Spec request (spec 30)", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === "/api/ai/spec") {
+        return Promise.resolve({ ok: false, json: async () => ({}) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ specs: [] }) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[
+          { id: "1", sender: "Ada", role: "user", content: "Hello Ghost AI", timestamp: 1700000000000 },
+        ]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+        canvasNodes={[
+          {
+            id: "n1",
+            type: "canvasNode",
+            position: { x: 5, y: 10 },
+            data: { label: "API", color: "#1F1F1F", textColor: "#EDEDED", shape: "rectangle" },
+          },
+        ]}
+        canvasEdges={[
+          { id: "e1", type: "canvasEdge", source: "n1", target: "n2", data: { label: "calls" } },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Specs" }));
+    fireEvent.click(screen.getByRole("button", { name: /generate spec/i }));
+
+    await waitFor(() => {
+      const specCall = fetchMock.mock.calls.find(([callUrl]) => callUrl === "/api/ai/spec");
+      expect(specCall).toBeDefined();
+    });
+
+    const specCall = fetchMock.mock.calls.find(([callUrl]) => callUrl === "/api/ai/spec") as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(specCall[1].body as string)).toEqual({
+      roomId: "p1",
+      chatHistory: [
+        { id: "1", sender: "Ada", role: "user", content: "Hello Ghost AI", timestamp: 1700000000000 },
+      ],
+      nodes: [{ id: "n1", label: "API", shape: "rectangle", x: 5, y: 10 }],
+      edges: [{ id: "e1", sourceNodeId: "n1", targetNodeId: "n2", label: "calls" }],
     });
   });
 });

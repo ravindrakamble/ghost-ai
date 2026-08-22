@@ -253,6 +253,7 @@ function renderCanvas(overrides: Partial<Parameters<typeof Canvas>[0]> = {}) {
     onChatMessagesChange: vi.fn(),
     onSendChatMessageChange: vi.fn(),
     onSendAgentMessageChange: vi.fn(),
+    onCanvasGraphChange: vi.fn(),
     ...overrides,
   };
   render(<Canvas {...props} />);
@@ -834,6 +835,43 @@ describe("Canvas", () => {
       renderCanvas({ onSendAgentMessageChange });
 
       expect(onSendAgentMessageChange).toHaveBeenCalledWith(sendAgentMessage);
+    });
+  });
+
+  describe("canvas graph push-up (spec 30)", () => {
+    it("pushes useLiveblocksFlow's returned nodes/edges up via onCanvasGraphChange by default (both empty)", () => {
+      const onCanvasGraphChange = vi.fn();
+
+      renderCanvas({ onCanvasGraphChange });
+
+      expect(onCanvasGraphChange).toHaveBeenCalledWith([], []);
+    });
+
+    it("pushes the room's real nodes/edges up via onCanvasGraphChange", () => {
+      const nodes = [
+        {
+          id: "n1",
+          type: CANVAS_NODE_TYPE,
+          position: { x: 10, y: 20 },
+          data: { label: "API", color: DEFAULT_NODE_COLOR, textColor: "#EDEDED", shape: "rectangle" as const },
+        },
+      ];
+      const edges = [
+        { id: "e1", type: CANVAS_EDGE_TYPE, source: "n1", target: "n2", data: { label: "calls" } },
+      ];
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes,
+        edges,
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+      const onCanvasGraphChange = vi.fn();
+
+      renderCanvas({ onCanvasGraphChange });
+
+      expect(onCanvasGraphChange).toHaveBeenCalledWith(nodes, edges);
     });
   });
 });
