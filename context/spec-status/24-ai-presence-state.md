@@ -112,3 +112,118 @@ Brief ready for Senior Developer at `context/spec-status/24-ai-presence-state.md
 - No changes to `trigger/design-agent.ts`, `lib/design-agent-ai.ts`, `app/api/ai/design*`, or the `TaskRun` model, per this spec's own Scope Limits — confirmed via `git status`/`git diff` that none of those files appear in this branch's diff.
 
 Implementation ready for QA at `context/spec-status/24-ai-presence-state.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — PASS (clean, no output).
+- `npx eslint .` — PASS in the sense that matters: 0 errors/warnings in any of the 15 source/test files this diff touches. The full repo-wide run reports 53 errors / 1339 warnings, but every one of them is in `.trigger/tmp/build-*` (generated Trigger.dev build artifacts) or `.agents/skills/clerk-tanstack-patterns/templates/...` (a third-party skill template) — confirmed by listing every file eslint flagged and diffing it against `git diff --name-only main...HEAD`; zero overlap. Matches the Dev Notes' claim.
+- `npx vitest run --no-file-parallelism` — PASS: 459/459 tests across 53 files, matching the Dev's reported count exactly.
+- `npx next build` — PASS. Compiled successfully, same route list as before (`/api/ai/design`, `/api/ai/design/token` still dynamic), no new build-time dependency introduced.
+
+### Acceptance criteria
+
+1. PASS. `types/tasks.ts` exports `AiStatusStage` (`"start" | "processing" | "complete" | "error"`, exactly 4 values, matching `lib/design-agent-room.ts`'s original values) and `AiStatusMessage` (`{ stage: AiStatusStage; text?: string }`, `text` genuinely optional — confirmed via `types/tasks.test.ts`'s real TS assignment test with `text` omitted).
+2. PASS. `isAiStatusMessage` rejects: missing `stage`, non-string `stage`, an unrecognized `stage` string, and a non-string `text` when present — all covered in `types/tasks.test.ts` and exercised end-to-end through `hooks/use-ai-status-feed.ts`, which only calls `setLatestStatus` after the guard passes (confirmed by reading the hook directly: the `if (isAiStatusMessage(event))` gate wraps the only state-update call).
+3. PASS. `useAiStatusFeed` wraps the real, installed `useEventListener` (`@liveblocks/react/suspense`) — signature verified directly against `node_modules/@liveblocks/react/dist/room-DUr5FIYB.d.ts` (`useEventListener(callback: (data: RoomEventMessage<...>) => void): void`), matching the hook's own `useEventListener(({ event }) => {...})` call shape. State is a single `useState<AiStatusMessage | null>`, overwritten (not appended) on each valid event — no array/list anywhere in the hook or the consuming UI.
+4. PASS by construction. The subscription lives in `broadcastDesignAgentStatus`'s consumer path (`getLiveblocksClient().broadcastEvent`, a real room-wide broadcast, not per-connection local state) and `CanvasFlow` (which every connected client renders, inside `RoomProvider`) is the one calling `useAiStatusFeed()` — not gated behind "am I the one who submitted."
+5. PASS. `ai-architect-tab.tsx`: `isGenerating = aiStatus !== null && ACTIVE_GENERATION_STAGES.has(aiStatus.stage)` (set of `"start"`/`"processing"`) drives `disabled={isGenerating}` on the `Textarea` and `disabled={!input.trim() || isGenerating}` on the Send button. Covered by `it.each(["start","processing"])` (disabled) and `it.each(["complete","error"])` (re-enabled, still subject to the empty-input rule) in `ai-architect-tab.test.tsx`.
+6. PASS. Same `isGenerating` condition swaps the Send button's `Send` icon for `<Loader2 className="animate-spin" />` — asserted via `sendButton.querySelector("svg.animate-spin")` in both the positive and negative test cases.
+7. PASS. Starter chips, message list, and (via `ai-sidebar.test.tsx`'s new test) tab switching and the sidebar's close button all stay interactive while `aiStatus.stage` is `"start"`/`"processing"` — no `disabled`/dimming logic touches anything outside the input row in `ai-architect-tab.tsx`, confirmed by reading the full component (only two `disabled=` attributes exist in the file, both on the `Textarea`/Send button already covered by criteria 5/6).
+8. PASS. `LiveCursors`' `CursorPresence` selector reads `candidate.presence.thinking` (a required `boolean` per `liveblocks.config.ts`'s pinned `Presence` shape, so no optional-chaining gap); the name badge renders `<Loader2 className="h-3 w-3 animate-spin" />` only when `other.thinking` is `true`. Covered for `true`, `false`, and the field entirely absent from the mock (`live-cursors.test.tsx`'s "thinking spinner (spec 24)" block, 3 tests). The existing `other.cursor === null` early return is untouched, matching the brief's Open Questions #3 — verified via `git diff` showing no change to that line.
+9. PASS. No new Liveblocks feed/mechanism: only `useEventListener` (already-existing SDK primitive) subscribed to the already-existing `ai-status-feed` name, and an existing presence field (`thinking`) read, not written, by this spec's own code. No `trigger/*`, `lib/design-agent-ai.ts`, or `/api/ai/design*` file appears in the diff (`git diff --name-only main...HEAD` confirms the 17-file list is exactly the Dev Notes' claimed set). `lib/design-agent-room.ts`'s change is additive/import-only (see below) — no behavior change.
+10. PASS — see Mechanical gate above (`npx next build`, `tsc`, `eslint`, `vitest` all verified independently, not just trusted from Dev Notes).
+
+### Verified independently, not just trusted from Dev Notes
+
+- **`lib/design-agent-room.ts`'s "import-only, no behavior change" claim**: confirmed via `git diff main...HEAD -- lib/design-agent-room.ts` — the only changes are a new type import and `DesignAgentStatusStage`/`DesignAgentStatusMessage` being redefined in terms of `AiStatusStage`/`AiStatusMessage` (`extends AiStatusMessage, Record<string, Json | undefined>`, still requiring `text: string`/`stage: DesignAgentStatusStage`). No function body, no broadcast/mutation/presence call site changed. `lib/design-agent-room.test.ts` (spec 23's own file) is untouched in the diff and still passes — confirmed by running the full suite, not just checking it exists.
+- **`useEventListener`'s real signature**: read directly from the installed package (see criterion 3 above) rather than trusting the Dev Notes' claim about it.
+- **Standards spot-check**: `grep -nE "zinc-|slate-|#[0-9a-fA-F]{3,6}"` across all 8 changed non-test source files found exactly one hex literal (`GHOST_AI_USER_COLOR = "#6457f9"` in `lib/design-agent-room.ts`) and one `translate-x-full`/`translate-x-0` false-positive (a Tailwind transform utility, not a color). The hex literal predates this diff (confirmed via the `git diff` above — that line isn't touched) and was already QA-approved as matching `--accent-ai` in spec 23's own QA report. `grep` for `any` type usage across the same files found zero real matches (one false-positive hit on the English word "anything" in a comment). `components/ui/*` does not appear anywhere in `git diff --stat main...HEAD`.
+
+### Architecture invariants (`architecture-context.md`)
+
+1. No long-running AI work in a request handler — N/A, no request handler touched.
+2. Metadata vs. blob storage separation — N/A, no Prisma/Blob code touched.
+3. Auth/ownership enforced at every mutation boundary — N/A, this spec adds no new mutation entry point (pure UI/presence consumer).
+4. Client components only where needed — all 6 modified components are pre-existing `"use client"` components (canvas/sidebar/cursor surfaces); no new client boundary was introduced unnecessarily.
+5. Canvas schema consistency — N/A, no canvas node/edge schema touched.
+6. Realtime Conventions (`ai-status-feed` latest-message-only via `broadcastEvent`; presence field named `thinking`) — both followed exactly, verified above.
+
+No invariant violations found.
+
+### Standards compliance (`code-standards.md`)
+
+- No `any` in any changed file.
+- Tokens used throughout (`text-ai-text`, `bg-ai`, `text-copy-muted`, `border-surface-border`, etc.) — no raw Tailwind color classes introduced.
+- `components/ui/*` untouched.
+- Tests mock via `vi.hoisted`/`vi.mock`, consistent with the Testing section's convention; component tests carry the `// @vitest-environment jsdom` docblock where needed (`ai-architect-tab.test.tsx`, `live-cursors.test.tsx`, `use-ai-status-feed.test.ts`).
+- `hooks/` placement for the new hook matches the Hooks Convention.
+
+### Error handling
+
+- Malformed/foreign `ai-status-feed` broadcast: dropped by `isAiStatusMessage` before it can reach `useState`, verified both in `types/tasks.test.ts` (guard function directly) and `hooks/use-ai-status-feed.test.ts` (end-to-end through the hook, including a wholly non-object payload, retaining the last valid message rather than nulling it out).
+- Missing optional `text`: the schema explicitly allows this (criterion 1), and `ai-architect-tab.tsx` has a defensive fallback (`aiStatus?.text ?? "Ghost AI is working…"`) so the status line never renders `undefined`/blank — covered by a dedicated test.
+- No `RoomProvider` boundary misuse: `useAiStatusFeed()` is only called from `CanvasFlow`, which is nested inside `RoomProvider`/`ClientSideSuspense` — confirmed by reading `canvas.tsx`'s component tree directly, matching the brief's Open Questions #1 recommendation exactly (no provider-tree restructuring was attempted).
+
+### Scope Limits check (this spec's own, and `feature-specs/24-ai-presence-state.md`'s)
+
+- No real AI generation logic or background-task triggering added — confirmed via `git diff --name-only main...HEAD`: no `trigger/`, `lib/design-agent-ai.ts`, or `app/api/ai/design*` file present.
+- Sidebar is not fully blocked/dimmed during generation — confirmed via criterion 7 above and `ai-sidebar.test.tsx`'s explicit "does not dim or block tab switching or the close button while a run is active" test.
+- No full feed history shown anywhere — `useAiStatusFeed` keeps a single `AiStatusMessage | null`, never an array; no list-rendering of past messages exists in `ai-architect-tab.tsx`.
+- No new Liveblocks feed/mechanism introduced beyond consuming the existing `ai-status-feed`/`thinking` presence field — confirmed, see criterion 9.
+
+### Housekeeping
+
+`context/progress-tracker.md`'s diff accurately reflects what was actually built (file list, test counts, gate results) — matches the real diff and the real `npx vitest run` output, not aspirational. Left as-is (Dev correctly set it to "Senior Developer pass complete, QA next" rather than pre-emptively marking it Completed).
+
+### What remains unverifiable in this pipeline (recommended human smoke test, not a blocker)
+
+Consistent with every prior canvas/presence spec (18-23): no live browser/multiplayer verification was possible here. The status line, disabled/spinner states, and cursor spinner are verified via mocked unit tests only. The Dev Notes' own recommendation (open two tabs once spec 26 lands, submit a prompt from one, confirm the other tab's sidebar/cursor react purely off the room broadcast) is sound and I have nothing to add to it. The cursor-spinner's "often invisible during start/early-processing because Ghost AI's cursor presence stays null until a node is actually touched" limitation (Open Questions #3) is expected behavior per spec 23's own already-QA'd presence semantics, not a bug in this spec's implementation — confirmed by re-reading `lib/design-agent-room.ts`'s `setDesignAgentPresence` call sites in `trigger/design-agent.ts` (unchanged by this diff).
+
+### Summary
+
+Every acceptance criterion is met, verified against the actual code (not just the Dev Notes' account) — including independently confirming the `lib/design-agent-room.ts` change is genuinely import-only and re-reading `useEventListener`'s real installed signature. No architecture invariant violations, no standards violations, no Scope Limits violations. No items are being sent back to the Analyst or the Dev.
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+This is a recommendation to the human reviewer, not a production release or deployment authorization. I have no visibility into business, legal, security, or infrastructure considerations outside this repo.
+
+### Independent verification performed
+
+- `git branch --show-current` confirms `spec/24-ai-presence-state`, one commit (`8e6fda8`) ahead of `main`.
+- `git diff main...HEAD --stat` — 17 files changed, exactly the set Dev Notes/QA claim: `types/tasks.ts` (new), `hooks/use-ai-status-feed.ts` (new), `lib/design-agent-room.ts` (modified), `components/editor/{canvas,workspace-shell,ai-sidebar,ai-architect-tab,live-cursors}.tsx` (modified) plus their test files, `context/progress-tracker.md`, `context/spec-status/24-ai-presence-state.md`. No `trigger/*`, `app/api/*`, `prisma/*`, or `components/ui/*` file anywhere in the diff — confirmed directly via a targeted grep over `git diff --name-only`, not trusted from either report.
+- Read the full diffs of `types/tasks.ts`, `hooks/use-ai-status-feed.ts`, `lib/design-agent-room.ts`, `components/editor/ai-architect-tab.tsx`, `components/editor/live-cursors.tsx`, `components/editor/canvas.tsx`, `components/editor/workspace-shell.tsx`, and `components/editor/ai-sidebar.tsx` directly — not just the Dev Notes' summary. Every claim checks out line for line: `AiStatusStage`/`AiStatusMessage`/`isAiStatusMessage` match the stated shape exactly; `lib/design-agent-room.ts`'s change is genuinely additive/import-only (`DesignAgentStatusStage = AiStatusStage`, `DesignAgentStatusMessage extends AiStatusMessage, Record<...>`, no broadcast/mutation/presence call site touched); `useAiStatusFeed` overwrites (never appends to) a single `useState<AiStatusMessage | null>`; the `onAiStatusChange` callback-push-up in `canvas.tsx`/`workspace-shell.tsx` mirrors `onSaveStatusChange`'s existing shape exactly, as both reports claim; `ai-architect-tab.tsx`'s `isGenerating` gate correctly drives the status line, `Textarea`/Send-button `disabled`, and the icon-to-spinner swap, and touches nothing outside the input row; `live-cursors.tsx`'s spinner is gated on `other.thinking` with the pre-existing `other.cursor === null` early return left untouched.
+- Read the original spec (`context/feature-specs/24-ai-presence-state.md`) directly. Its four numbered implementation items (sidebar status/disable/spinner, shared feed subscription, schema/validation in `types/tasks.ts`, cursor thinking spinner) and five Scope Limits are all accounted for in the diff with nothing extra bolted on.
+
+### Judgment calls — my own view
+
+- **Open Questions #1 (callback-push-up instead of restructuring the provider tree)**: agreed. `AiSidebar` genuinely has no ancestor `RoomProvider` (confirmed by reading `workspace-shell.tsx`/`canvas.tsx` directly), and reusing spec 21's already-proven `onSaveStatusChange` pattern is the lower-risk, more consistent choice over moving `RoomProvider` up to also wrap a sidebar that has nothing to do with canvas rendering.
+- **Open Questions #2 (type-import alignment in `lib/design-agent-room.ts`)**: agreed this was worth doing now rather than leaving two independently-typed duplicates to drift — verified myself it's genuinely import-only (spec 23's own `lib/design-agent-room.test.ts` needed zero edits and still passes, and no runtime call site in the diff changed).
+- **Open Questions #3 (cursor spinner often invisible during start/early-processing)**: this is real and disclosed clearly by both Dev and QA, not glossed over. It is an honest limitation of decorating an existing badge rather than inventing a new floating indicator the spec text doesn't ask for, and the sidebar status line remains the reliable, always-visible signal. Acceptable for this stage — not a blocker, and not something this spec could fix without touching spec 23's producer-side cursor semantics, which is out of scope here.
+- **`aiStatus` prop optionality asymmetry (Key Decision #6)**: `AiSidebarProps.aiStatus` required, `AiArchitectTabProps.aiStatus` optional with a default. Confirmed via direct reading this doesn't create two different runtime behaviors — both resolve to the same `isGenerating` gate. A minor test-churn-avoidance choice, not a product-facing inconsistency.
+
+### Against project-overview.md
+
+- **Success Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously"): this spec is a direct, substantive strengthening of that criterion's legibility — before this spec, a design-agent run in progress (spec 23) was invisible to anyone except whoever was watching the raw Liveblocks room; now every connected participant sees the same shared status, has the same input disabled, and can see the same AI cursor spinner. Confirmed via acceptance criterion 4/QA's "PASS by construction" reasoning that the signal is genuinely room-broadcast, not local-only — verified myself that `useAiStatusFeed` is called unconditionally from `CanvasFlow`, which every connected client renders, not gated behind "am I the submitter."
+- **Success Criterion 4** ("AI can generate an architecture into the shared room from a prompt"): this spec does not itself advance generation (that was spec 23's substantive step, already PASSed); it is UI/presence plumbing that makes an already-real mechanism observable. This is the correct incremental slice per `ai-workflow-rules.md`'s "build incrementally... do not infer or invent behavior from scratch" — spec 26 (not yet built) is what will let a user actually trigger a run through this UI. No premature or partial implementation of spec 26's territory leaked in here: confirmed no `POST /api/ai/design` call, no `useRealtimeRun`, no `ai-chat` feed anywhere in the diff.
+- **Out of Scope wall**: none of billing/subscriptions, enterprise permission tiers, versioned spec history, object storage migration, or mobile apps are touched — trivially true given the file list.
+- **This spec's own Scope Limits and out-of-scope callouts** (no AI generation logic, no background-task trigger, no full-sidebar dim/block, no feed history, no ai-chat/spec-25 territory, no spec-26 submit flow, no trigger/*/app/api/ai/design* changes): none appear in the diff — independently confirmed above, not trusted from either report.
+
+### progress-tracker.md accuracy
+
+The version on this branch (pre-my-update) reads "Senior Developer pass complete, QA next" under Current Phase/Goal — accurate as of the point Dev handed off, since Dev correctly doesn't pre-empt QA's or my own verdict per this pipeline's convention. It has not yet been moved to "Completed"; that is my job now, done below as part of this PASS, with a summary pulled from Dev Notes (file list, test counts, gate results) rather than a re-write from scratch.
+
+### What remains unverifiable in this pipeline (recommended human smoke test, not a blocker)
+
+Consistent with every prior canvas/presence spec, no live browser/multiplayer verification was possible here — the status line, disabled/spinner states, and cursor spinner are verified via mocked unit tests only. I have nothing to add to the Dev's/QA's own recommendation: once spec 26 lands and a prompt can actually be submitted, open two tabs, submit from one, and confirm the other tab's sidebar status/input-disabling and the Ghost AI cursor badge react purely off the room broadcast.
+
+### Summary
+
+Delivered functionality is real, scoped, forward-compatible presence/status plumbing that makes spec 23's already-shipped `ai-status-feed`/`thinking` presence visible and actionable to every participant in the room — a genuine, non-technicality step toward Success Criterion 2's collaborative-legibility goal, correctly deferring the actual generation-trigger flow to spec 26. Nothing in the diff crosses into `project-overview.md`'s Out of Scope wall or this spec's own Scope Limits (independently re-verified against the actual diff, not just the reports' claims). No items are being sent back to the Analyst. Recommending PASS to the human for final review.
