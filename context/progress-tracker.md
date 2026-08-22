@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 25: Sidebar Chat Feed — Completed (QA PASS, Product Owner PASS, PR opened). Phase 26: Design Agent Frontend — not yet started.
+- Phase 25: Sidebar Chat Feed — Completed (QA PASS, Product Owner PASS, PR opened). Phase 26: Design Agent Frontend — Senior Developer pass complete (brief + implementation at `context/spec-status/26-design-agent-frontend.md`), QA next.
 
 ## Current Goal
-- Kick off feature spec 26 (Design Agent Frontend) with the Analyst, per `context/feature-specs/26-design-agent-frontend.md`.
+- QA review of feature spec 26 (Design Agent Frontend) per `context/spec-status/26-design-agent-frontend.md`.
 
 ## Completed
 
@@ -338,11 +338,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently in progress. Feature spec 26 (Design Agent Frontend) has not yet started — see `context/feature-specs/26-design-agent-frontend.md`.
+- Feature spec 26 (Design Agent Frontend): Senior Developer pass complete on branch `spec/26-design-agent-frontend` — brief and implementation both at `context/spec-status/26-design-agent-frontend.md`. Wires the AI Architect tab's existing input/Send button to a real submit orchestration: pushes the prompt onto `ai-chat` (spec 25's `sendMessage`) → `POST /api/ai/design` → `POST /api/ai/design/token` → tracks the triggered run client-side via `useRealtimeRun` (`@trigger.dev/react-hooks`, newly installed and pinned to `4.5.12`) → pushes a final AI-authored or error-describing message onto `ai-chat` via a new `sendAgentMessage` function (additive to `hooks/use-ai-chat-feed.ts`, hardcoding `role: "assistant"`/`sender: "Ghost AI"`), threaded down the same `Canvas` → `WorkspaceShell` → `AiSidebar` → `AiArchitectTab` callback pattern specs 24/25 established. No backend/Trigger.dev/`app/api/ai/*` file touched (confirmed via `git diff --name-only`). 512/512 tests passing across 54 files; `tsc`/`eslint`/`next build` all clean. QA pass not yet started.
 
 ## Next Up
 
-- Analyst kickoff for feature spec 26 (Design Agent Frontend), per `context/feature-specs/26-design-agent-frontend.md` — not yet started.
+- QA review of feature spec 26 (Design Agent Frontend), per `context/spec-status/26-design-agent-frontend.md`.
 - Human review/merge of spec 25's PR and the still-open PRs for specs 12–24.
 
 ## Open Questions

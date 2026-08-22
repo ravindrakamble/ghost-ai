@@ -6,11 +6,24 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AiArchitectTab } from "@/components/editor/ai-architect-tab"
 import { SpecsTab } from "@/components/editor/specs-tab"
-import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
+import type {
+  AiChatMessage,
+  AiStatusMessage,
+  SendAgentChatMessage,
+  SendChatMessage,
+} from "@/types/tasks"
 
 interface AiSidebarProps {
   isOpen: boolean
   onClose: () => void
+  /**
+   * The current project's ID (spec 26) — `AiArchitectTab`'s submit flow
+   * needs it directly for `POST /api/ai/design`'s `{ prompt, roomId,
+   * projectId }` body (both fields must equal the current project's ID, per
+   * that route's own validation). Forwarded straight through, no new state
+   * owned here.
+   */
+  projectId: string
   /**
    * Latest validated `ai-status-feed` message (spec 24), pushed down from
    * `WorkspaceShell` (via `Canvas`'s `onAiStatusChange` callback) — forwarded
@@ -34,6 +47,14 @@ interface AiSidebarProps {
    * `AiArchitectTab`, the component that owns the input/Send button.
    */
   sendChatMessage: SendChatMessage
+  /**
+   * The real, room-connected function to push an AI-authored/error message
+   * onto `ai-chat` (spec 26), threaded down from `WorkspaceShell` (via
+   * `Canvas`'s `onSendAgentMessageChange` callback) — forwarded straight
+   * through to `AiArchitectTab`, the component that owns the
+   * `useRealtimeRun` subscription that calls it.
+   */
+  sendAgentMessage: SendAgentChatMessage
 }
 
 /** Active vs. inactive tab styling — see the brief's Open Questions #2:
@@ -77,11 +98,22 @@ const TAB_TRIGGER_CLASS_NAME =
  * `CanvasFlow`, inside the Liveblocks room boundary this component sits
  * outside of — see `components/editor/canvas.tsx`'s docblock). Spec 25 adds
  * `chatMessages`/`sendChatMessage` the same way — the real `ai-chat` Storage
- * subscription and mutation both live in `CanvasFlow` too. `/api/ai/*` calls
- * and Trigger.dev triggering remain specs 26/27/29's job, per the brief's
- * Out-of-scope callouts.
+ * subscription and mutation both live in `CanvasFlow` too.
+ *
+ * Spec 26 adds `projectId`/`sendAgentMessage` the same "forward straight
+ * through" way — the actual `/api/ai/*` calls and `useRealtimeRun`
+ * subscription live in `AiArchitectTab` itself, not in this shell. Spec 27/29's
+ * spec-generation flow remains out of scope here.
  */
-export function AiSidebar({ isOpen, onClose, aiStatus, chatMessages, sendChatMessage }: AiSidebarProps) {
+export function AiSidebar({
+  isOpen,
+  onClose,
+  projectId,
+  aiStatus,
+  chatMessages,
+  sendChatMessage,
+  sendAgentMessage,
+}: AiSidebarProps) {
   const [activeTab, setActiveTab] = useState<"architect" | "specs">("architect")
 
   return (
@@ -118,7 +150,13 @@ export function AiSidebar({ isOpen, onClose, aiStatus, chatMessages, sendChatMes
         </TabsList>
 
         <TabsContent value="architect" keepMounted className="flex flex-1 flex-col overflow-hidden">
-          <AiArchitectTab aiStatus={aiStatus} chatMessages={chatMessages} sendMessage={sendChatMessage} />
+          <AiArchitectTab
+            projectId={projectId}
+            aiStatus={aiStatus}
+            chatMessages={chatMessages}
+            sendMessage={sendChatMessage}
+            sendAgentMessage={sendAgentMessage}
+          />
         </TabsContent>
         <TabsContent value="specs" className="flex-1 overflow-y-auto">
           <SpecsTab />

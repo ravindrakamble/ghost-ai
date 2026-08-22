@@ -2,7 +2,12 @@
 
 import { useCallback, useMemo } from "react"
 import { useMutation, useSelf, useStorage } from "@liveblocks/react/suspense"
-import { AiChatMessageSchema, type AiChatMessage, type SendChatMessage } from "@/types/tasks"
+import {
+  AiChatMessageSchema,
+  type AiChatMessage,
+  type SendAgentChatMessage,
+  type SendChatMessage,
+} from "@/types/tasks"
 
 /**
  * Not cryptographically strong — only needs to be unique enough for a React
@@ -14,12 +19,35 @@ function generateChatMessageId(): string {
   return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+/**
+ * Fixed display name for AI-authored `ai-chat` messages (spec 26) — reuses
+ * `lib/design-agent-room.ts#GHOST_AI_USER_NAME`'s already-established
+ * display name for the same conceptual actor (the design agent's cursor/
+ * presence identity), rather than inventing a second name for the same
+ * "who sent this" concept. Not imported directly from that server-only
+ * module (`lib/design-agent-room.ts` pulls in `lib/liveblocks.ts`'s
+ * server-side Liveblocks client, unsuitable to import into this client
+ * hook) — kept as an independent constant with the same literal value. See
+ * spec 26's Analyst Brief, Concrete deliverables.
+ */
+const GHOST_AI_SENDER_NAME = "Ghost AI"
+
 export interface UseAiChatFeedResult {
   /** Ordered, schema-validated messages currently in the room's `ai-chat`
    * Storage `LiveList` — an invalid/malformed entry is dropped, not
    * rendered (acceptance criterion 5). */
   messages: AiChatMessage[]
   sendMessage: SendChatMessage
+  /**
+   * Pushes an AI-authored (`role: "assistant"`, `sender: "Ghost AI"`)
+   * message onto the same `ai-chat` Storage `LiveList` `sendMessage` writes
+   * to — spec 26's own additive capability, needed since nothing else in
+   * this codebase can produce a `role: "assistant"` entry (`sendMessage`
+   * itself hardcodes `role: "user"` by design, and
+   * `trigger/design-agent.ts` never writes to `ai-chat`). See spec 26's
+   * Analyst Brief, Open Questions #5.
+   */
+  sendAgentMessage: SendAgentChatMessage
 }
 
 /**
@@ -91,5 +119,26 @@ export function useAiChatFeed(): UseAiChatFeedResult {
     [self, pushMessage],
   )
 
-  return { messages, sendMessage }
+  const sendAgentMessage = useCallback<SendAgentChatMessage>(
+    (content: string) => {
+      const candidate = {
+        id: generateChatMessageId(),
+        sender: GHOST_AI_SENDER_NAME,
+        role: "assistant" as const,
+        content,
+        timestamp: Date.now(),
+      }
+
+      // Same validate-before-mutate contract as `sendMessage` above.
+      const parsed = AiChatMessageSchema.safeParse(candidate)
+      if (!parsed.success) {
+        throw new Error("Cannot send an invalid chat message")
+      }
+
+      pushMessage(parsed.data)
+    },
+    [pushMessage],
+  )
+
+  return { messages, sendMessage, sendAgentMessage }
 }

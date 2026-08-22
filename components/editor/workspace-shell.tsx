@@ -8,7 +8,12 @@ import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
 import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import type { Project } from "@/types/project"
-import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
+import type {
+  AiChatMessage,
+  AiStatusMessage,
+  SendAgentChatMessage,
+  SendChatMessage,
+} from "@/types/tasks"
 
 /**
  * Default `sendChatMessage` before `CanvasFlow`'s real `useAiChatFeed()`
@@ -19,6 +24,15 @@ import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/ta
  * discarding it — see spec 25's Analyst Brief, Open Questions #5.
  */
 function chatNotReadyYet(): never {
+  throw new Error("Chat is not ready yet — the canvas room hasn't connected.")
+}
+
+/**
+ * Default `sendAgentMessage` (spec 26) before `CanvasFlow`'s real
+ * `useAiChatFeed()` mutation reaches this component — same "not ready yet,
+ * throws" convention as `chatNotReadyYet` above.
+ */
+function agentChatNotReadyYet(): never {
   throw new Error("Chat is not ready yet — the canvas room hasn't connected.")
 }
 
@@ -76,6 +90,14 @@ interface WorkspaceShellProps {
  * (same callback-push-up direction as everything else here), and this
  * component threads that value back *down* to `AiSidebar`/`AiArchitectTab`
  * as a plain prop — see spec 25's Analyst Brief, Open Questions #3.
+ *
+ * `sendAgentMessage` (spec 26) mirrors `sendChatMessage`'s exact shape —
+ * pushed up from `CanvasFlow` via `onSendAgentMessageChange`, threaded back
+ * down to `AiArchitectTab`, defaulting to a throwing stub the same way. Also
+ * new: `project.id` is threaded straight down to `AiSidebar`/`AiArchitectTab`
+ * as `projectId` — the design-agent submit flow (`POST /api/ai/design`)
+ * needs it directly, and `AiArchitectTab` sits outside the room boundary
+ * where `roomId`/`projectId` would otherwise only be known.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
@@ -85,6 +107,9 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [aiStatus, setAiStatus] = useState<AiStatusMessage | null>(null)
   const [chatMessages, setChatMessages] = useState<AiChatMessage[]>([])
   const [sendChatMessage, setSendChatMessage] = useState<SendChatMessage>(() => chatNotReadyYet)
+  const [sendAgentMessage, setSendAgentMessage] = useState<SendAgentChatMessage>(
+    () => agentChatNotReadyYet,
+  )
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
 
@@ -112,13 +137,16 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
           onAiStatusChange={setAiStatus}
           onChatMessagesChange={setChatMessages}
           onSendChatMessageChange={(sendMessage) => setSendChatMessage(() => sendMessage)}
+          onSendAgentMessageChange={(agentMessage) => setSendAgentMessage(() => agentMessage)}
         />
         <AiSidebar
           isOpen={isAiSidebarOpen}
           onClose={() => setIsAiSidebarOpen(false)}
+          projectId={project.id}
           aiStatus={aiStatus}
           chatMessages={chatMessages}
           sendChatMessage={sendChatMessage}
+          sendAgentMessage={sendAgentMessage}
         />
       </div>
       <ShareDialog

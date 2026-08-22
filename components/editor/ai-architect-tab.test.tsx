@@ -1,8 +1,22 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AiArchitectTab, ChatBubble } from "./ai-architect-tab";
 import type { AiChatMessage } from "@/types/tasks";
+
+// `useRealtimeRun` (spec 26, `@trigger.dev/react-hooks`) is mocked so this
+// file can deterministically drive the run's `id`/`isCompleted`/`isSuccess`/
+// `error` shape across renders without a real Trigger.dev subscription
+// (which would attempt a genuine network call the moment `enabled` becomes
+// `true`). Matches this codebase's established "mock the SDK boundary,
+// verify wiring" convention (e.g. `canvas.test.tsx`'s Liveblocks mocks).
+const { useRealtimeRunMock } = vi.hoisted(() => ({
+  useRealtimeRunMock: vi.fn(),
+}));
+
+vi.mock("@trigger.dev/react-hooks", () => ({
+  useRealtimeRun: useRealtimeRunMock,
+}));
 
 function makeMessage(overrides: Partial<AiChatMessage> = {}): AiChatMessage {
   return {
@@ -14,6 +28,23 @@ function makeMessage(overrides: Partial<AiChatMessage> = {}): AiChatMessage {
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  useRealtimeRunMock.mockReset();
+  useRealtimeRunMock.mockReturnValue({ run: undefined, error: undefined, stop: vi.fn() });
+  // Default: every fetch fails closed (no `runId`/`token` field) so tests
+  // that don't care about the design-agent submit flow still exercise it
+  // (since a successful `sendMessage` always triggers it) without ever
+  // reaching a real `runId`/enabled `useRealtimeRun` subscription.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("AiArchitectTab", () => {
   it("shows the empty state with the three exact starter prompt chips when there are no messages", () => {
@@ -80,7 +111,7 @@ describe("AiArchitectTab — chatMessages/sendMessage (spec 25)", () => {
     expect(screen.queryByText(/describe the system you want to design/i)).not.toBeInTheDocument();
   });
 
-  it("submits via Enter (without Shift), calling sendMessage with the trimmed content and clearing the input on success", () => {
+  it("submits via Enter (without Shift), calling sendMessage with the trimmed content and clearing the input on success", async () => {
     const sendMessage = vi.fn();
     render(<AiArchitectTab sendMessage={sendMessage} />);
 
@@ -91,9 +122,13 @@ describe("AiArchitectTab — chatMessages/sendMessage (spec 25)", () => {
     expect(sendMessage).toHaveBeenCalledWith("Design an inventory system");
     expect(textarea.value).toBe("");
     expect(screen.queryByText(/failed to send/i)).not.toBeInTheDocument();
+
+    // Let the (stubbed, failing-closed) design-agent submit flow settle so
+    // no state update happens after this test's own teardown.
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
   });
 
-  it("submits via the Send button and disables it while the input is empty", () => {
+  it("submits via the Send button and disables it while the input is empty", async () => {
     const sendMessage = vi.fn();
     render(<AiArchitectTab sendMessage={sendMessage} />);
 
@@ -106,9 +141,11 @@ describe("AiArchitectTab — chatMessages/sendMessage (spec 25)", () => {
 
     fireEvent.click(sendButton);
     expect(sendMessage).toHaveBeenCalledWith("Design a chat app");
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
   });
 
-  it("preserves the input and shows an inline error indicator when sendMessage throws (failed send)", () => {
+  it("preserves the input and shows an inline error indicator when sendMessage throws (failed send), never starting a design request", () => {
     const sendMessage = vi.fn(() => {
       throw new Error("boom");
     });
@@ -122,6 +159,9 @@ describe("AiArchitectTab — chatMessages/sendMessage (spec 25)", () => {
     // Input is preserved, not cleared.
     expect(textarea.value).toBe("Design a CDN");
     expect(screen.getByText(/failed to send/i)).toBeInTheDocument();
+    // The design-agent submit flow never starts if the prompt couldn't even
+    // be recorded in ai-chat.
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it("clears a stale error indicator once the user edits the input again", () => {
@@ -207,6 +247,321 @@ describe("AiArchitectTab — aiStatus (spec 24)", () => {
 
     const chip = screen.getByRole("button", { name: "Design an e-commerce backend" });
     expect(chip).not.toBeDisabled();
+  });
+});
+
+describe("AiArchitectTab — design agent submission (spec 26)", () => {
+  it("calls POST /api/ai/design with { prompt, roomId, projectId } then POST /api/ai/design/token with { runId }, in sequence", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "token-1" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AiArchitectTab projectId="proj-1" sendMessage={vi.fn()} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design an inventory system" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const [designUrl, designInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(designUrl).toBe("/api/ai/design");
+    expect(designInit.method).toBe("POST");
+    expect(JSON.parse(designInit.body as string)).toEqual({
+      prompt: "Design an inventory system",
+      roomId: "proj-1",
+      projectId: "proj-1",
+    });
+
+    const [tokenUrl, tokenInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(tokenUrl).toBe("/api/ai/design/token");
+    expect(tokenInit.method).toBe("POST");
+    expect(JSON.parse(tokenInit.body as string)).toEqual({ runId: "run-1" });
+  });
+
+  it("disables the textarea/Send button and shows a spinner immediately on submit, before any ai-status-feed broadcast", () => {
+    // A never-resolving fetch simulates the window between submission and
+    // the two POSTs actually settling — `aiStatus` stays null throughout
+    // (no broadcast observed yet), the same real-world gap this spec closes.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+
+    render(<AiArchitectTab projectId="proj-1" sendMessage={vi.fn()} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(textarea).toBeDisabled();
+    const sendButton = screen.getByRole("button", { name: /send message/i });
+    expect(sendButton).toBeDisabled();
+    expect(sendButton.querySelector("svg.animate-spin")).toBeInTheDocument();
+  });
+
+  it("calls useRealtimeRun with the obtained runId/publicToken, enabled once both are known", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "token-1" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AiArchitectTab projectId="proj-1" sendMessage={vi.fn()} />);
+
+    // Before submitting, useRealtimeRun is called with no runId and disabled.
+    expect(useRealtimeRunMock).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ accessToken: undefined, enabled: false }),
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ accessToken: "token-1", enabled: true }),
+      );
+    });
+  });
+
+  it("pushes an AI-authored success message and re-enables the input once useRealtimeRun reports the run completed successfully", async () => {
+    const sendAgentMessage = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "token-1" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ accessToken: "token-1", enabled: true }),
+      );
+    });
+    expect(textarea).toBeDisabled();
+
+    useRealtimeRunMock.mockReturnValue({
+      run: { id: "run-1", isCompleted: true, isSuccess: true, isFailed: false, error: undefined },
+      error: undefined,
+      stop: vi.fn(),
+    });
+    rerender(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(sendAgentMessage).toHaveBeenCalledWith(
+        expect.stringContaining("updated the canvas"),
+      );
+    });
+
+    // The run is settled (`run.id === runId && run.isCompleted`) — the
+    // input/Send button are no longer busy, even though local `runId`/
+    // `publicToken` state itself is left as-is (not reset).
+    expect(textarea).not.toBeDisabled();
+  });
+
+  it("only pushes the success message once per run, even if the component re-renders again with the same settled run", async () => {
+    const sendAgentMessage = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "token-1" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ accessToken: "token-1", enabled: true }),
+      );
+    });
+
+    const settledRun = { id: "run-1", isCompleted: true, isSuccess: true, error: undefined };
+    useRealtimeRunMock.mockReturnValue({ run: settledRun, error: undefined, stop: vi.fn() });
+    rerender(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledTimes(1));
+
+    // A further re-render with the exact same settled run object must not
+    // push a second message.
+    rerender(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+    expect(sendAgentMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("pushes an error message (including the run's own error detail) when useRealtimeRun reports a failed/errored terminal state", async () => {
+    const sendAgentMessage = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "token-1" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ accessToken: "token-1", enabled: true }),
+      );
+    });
+
+    useRealtimeRunMock.mockReturnValue({
+      run: {
+        id: "run-1",
+        isCompleted: true,
+        isSuccess: false,
+        isFailed: true,
+        error: { message: "Gemini timed out" },
+      },
+      error: undefined,
+      stop: vi.fn(),
+    });
+    rerender(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(sendAgentMessage).toHaveBeenCalledWith(expect.stringContaining("Gemini timed out"));
+    });
+  });
+
+  it("pushes an error message (no detail) when the initial POST /api/ai/design call fails, without ever enabling useRealtimeRun", async () => {
+    const sendAgentMessage = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(sendAgentMessage).toHaveBeenCalledWith(
+        expect.stringContaining("something went wrong"),
+      );
+    });
+
+    // Only the first POST was ever attempted — no token exchange, no
+    // useRealtimeRun subscription ever enabled.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(useRealtimeRunMock).not.toHaveBeenCalledWith(
+      "run-1",
+      expect.anything(),
+    );
+  });
+
+  it("pushes an error message when POST /api/ai/design/token fails after a runId was already obtained", async () => {
+    const sendAgentMessage = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AiArchitectTab
+        projectId="proj-1"
+        sendMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(sendAgentMessage).toHaveBeenCalledWith(
+        expect.stringContaining("something went wrong"),
+      );
+    });
+
+    // Re-enabled to false afterward — no lingering enabled subscription.
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenLastCalledWith(
+        undefined,
+        expect.objectContaining({ enabled: false }),
+      );
+    });
+  });
+
+  it("does not throw when sendAgentMessage itself fails (default not-ready stub), swallowing the secondary failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(<AiArchitectTab projectId="proj-1" sendMessage={vi.fn()} />);
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+
+    consoleErrorSpy.mockRestore();
   });
 });
 

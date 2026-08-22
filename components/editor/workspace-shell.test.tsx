@@ -3,6 +3,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceShell } from "./workspace-shell";
 
+// `AiArchitectTab` (spec 26, rendered for real via `AiSidebar` in this file)
+// imports `useRealtimeRun` from `@trigger.dev/react-hooks` — mocked so this
+// file's tests (which only care about `WorkspaceShell`'s own prop-threading)
+// never reach a real Trigger.dev subscription.
+const { useRealtimeRunMock } = vi.hoisted(() => ({
+  useRealtimeRunMock: vi.fn(),
+}));
+
+vi.mock("@trigger.dev/react-hooks", () => ({
+  useRealtimeRun: useRealtimeRunMock,
+}));
+
 // `Canvas` owns a real Liveblocks room connection (`LiveblocksProvider`/
 // `RoomProvider`/`useLiveblocksFlow`) — unsuitable for this component-level
 // test, which only cares that `WorkspaceShell` renders it with the right
@@ -15,6 +27,7 @@ vi.mock("@/components/editor/canvas", () => ({
     onAiStatusChange,
     onChatMessagesChange,
     onSendChatMessageChange,
+    onSendAgentMessageChange,
   }: {
     roomId: string;
     isTemplatesModalOpen: boolean;
@@ -25,6 +38,7 @@ vi.mock("@/components/editor/canvas", () => ({
       messages: { id: string; sender: string; role: "user" | "assistant"; content: string; timestamp: number }[],
     ) => void;
     onSendChatMessageChange: (sendMessage: (content: string) => void) => void;
+    onSendAgentMessageChange: (sendAgentMessage: (content: string) => void) => void;
   }) => (
     <div
       data-testid="canvas"
@@ -73,6 +87,18 @@ vi.mock("@/components/editor/canvas", () => ({
       >
         simulate send ready
       </button>
+      {/*
+        Spec 26: same push-up shape for the AI-authored `sendAgentMessage`
+        function — stands in for `CanvasFlow`'s real `useAiChatFeed()` result
+        so `WorkspaceShell`'s wiring to `AiSidebar` can be verified here
+        without re-mounting the real Liveblocks room stack.
+      */}
+      <button
+        type="button"
+        onClick={() => onSendAgentMessageChange(() => {})}
+      >
+        simulate agent send ready
+      </button>
     </div>
   ),
 }));
@@ -83,6 +109,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ collaborators: [] }) });
   vi.stubGlobal("fetch", fetchMock);
+  useRealtimeRunMock.mockReturnValue({ run: undefined, error: undefined, stop: vi.fn() });
 });
 
 afterEach(() => {
@@ -190,7 +217,7 @@ describe("WorkspaceShell", () => {
     expect(screen.getByText("Ada")).toBeInTheDocument();
   });
 
-  it("passes onSendChatMessageChange down to Canvas and threads the resulting function through to the AI sidebar (spec 25)", () => {
+  it("passes onSendChatMessageChange down to Canvas and threads the resulting function through to the AI sidebar (spec 25)", async () => {
     render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
 
     fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
@@ -205,6 +232,50 @@ describe("WorkspaceShell", () => {
     // shows no error indicator.
     expect(textarea.value).toBe("");
     expect(screen.queryByText(/failed to send/i)).not.toBeInTheDocument();
+
+    // Let the spec-26 design-agent submit flow this send also triggers
+    // settle (the generic collaborators fetch stub above resolves `ok: true`
+    // with no `runId`, so it fails closed) before this test's own teardown.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  });
+
+  it("passes onSendAgentMessageChange down to Canvas and threads a real (non-throwing) sendAgentMessage function through to the AI sidebar (spec 26)", () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+    // Before this, AiArchitectTab's sendAgentMessage default is a throwing
+    // stub — swallowed internally (console.error), so nothing is directly
+    // observable here. Simulating the real one reaching this component is
+    // the behavior under test; the button existing/being clickable without
+    // throwing is the confirmation that the callback shape lines up.
+    expect(() =>
+      fireEvent.click(screen.getByRole("button", { name: /simulate agent send ready/i })),
+    ).not.toThrow();
+  });
+
+  it("passes project.id down to Canvas/AiSidebar/AiArchitectTab as projectId, used in the design-agent submit body (spec 26)", async () => {
+    render(<WorkspaceShell project={{ id: "proj-77", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle ai sidebar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /simulate send ready/i }));
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      const designCall = fetchMock.mock.calls.find(([url]) => url === "/api/ai/design");
+      expect(designCall).toBeDefined();
+    });
+
+    const designCall = fetchMock.mock.calls.find(([url]) => url === "/api/ai/design") as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(designCall[1].body as string)).toMatchObject({
+      roomId: "proj-77",
+      projectId: "proj-77",
+    });
   });
 
   it("defaults sendChatMessage to a function that fails (input preserved, error shown) before Canvas pushes a real one", () => {

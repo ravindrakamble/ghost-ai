@@ -50,7 +50,12 @@ import {
   type CanvasEdge as CanvasEdgeAlias,
   type CanvasNode as CanvasNodeAlias,
 } from "@/types/canvas"
-import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
+import type {
+  AiChatMessage,
+  AiStatusMessage,
+  SendAgentChatMessage,
+  SendChatMessage,
+} from "@/types/tasks"
 import "@xyflow/react/dist/style.css"
 import "@liveblocks/react-flow/styles.css"
 
@@ -160,6 +165,17 @@ interface CanvasProps {
    * room boundary. See spec 25's Analyst Brief, Open Questions #3.
    */
   onSendChatMessageChange: (sendMessage: SendChatMessage) => void
+  /**
+   * The AI-authored-message counterpart to `onSendChatMessageChange` above
+   * (spec 26): pushes `useAiChatFeed()`'s `sendAgentMessage` function up to
+   * `WorkspaceShell`, which threads it down through `AiSidebar` to
+   * `AiArchitectTab` so a client's own in-flight design-agent run can push a
+   * final AI/error message onto `ai-chat` once `useRealtimeRun` reports its
+   * outcome. Same callback-push-up-and-down shape as
+   * `onSendChatMessageChange` — the room's Storage mutation is only valid
+   * inside `CanvasFlow`. See spec 26's Analyst Brief, Concrete deliverables.
+   */
+  onSendAgentMessageChange: (sendAgentMessage: SendAgentChatMessage) => void
 }
 
 /**
@@ -177,6 +193,7 @@ export function Canvas({
   onAiStatusChange,
   onChatMessagesChange,
   onSendChatMessageChange,
+  onSendAgentMessageChange,
 }: CanvasProps) {
   return (
     <div className="relative flex-1 bg-base">
@@ -204,6 +221,7 @@ export function Canvas({
                   onAiStatusChange={onAiStatusChange}
                   onChatMessagesChange={onChatMessagesChange}
                   onSendChatMessageChange={onSendChatMessageChange}
+                  onSendAgentMessageChange={onSendAgentMessageChange}
                 />
               </ReactFlowProvider>
             </ClientSideSuspense>
@@ -402,6 +420,16 @@ function CanvasError() {
  * this component via `onSendChatMessageChange`, since `AiArchitectTab`
  * (outside the room boundary) is where the user actually triggers a send —
  * see spec 25's Analyst Brief, Open Questions #3.
+ *
+ * Spec 26 (Design Agent Frontend) extends the same `useAiChatFeed()` call
+ * with its own additive `sendAgentMessage` function (role: "assistant"),
+ * pushed down via a new `onSendAgentMessageChange` prop — the bidirectional
+ * counterpart's own counterpart. `AiArchitectTab` calls it once its local
+ * `useRealtimeRun` subscription (tracking the run this same client just
+ * triggered via `POST /api/ai/design`) reports a terminal state. This
+ * component itself does not call `/api/ai/design*` or `useRealtimeRun` —
+ * that orchestration lives entirely in `AiArchitectTab`, outside the room
+ * boundary, per spec 26's Analyst Brief, Open Questions #3.
  */
 function CanvasFlow({
   projectId,
@@ -411,6 +439,7 @@ function CanvasFlow({
   onAiStatusChange,
   onChatMessagesChange,
   onSendChatMessageChange,
+  onSendAgentMessageChange,
 }: {
   projectId: string
   isTemplatesModalOpen: boolean
@@ -419,6 +448,7 @@ function CanvasFlow({
   onAiStatusChange: (status: AiStatusMessage | null) => void
   onChatMessagesChange: (messages: AiChatMessage[]) => void
   onSendChatMessageChange: (sendMessage: SendChatMessage) => void
+  onSendAgentMessageChange: (sendAgentMessage: SendAgentChatMessage) => void
 }) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, onDelete } = useLiveblocksFlow<
     CanvasNodeAlias,
@@ -514,7 +544,11 @@ function CanvasFlow({
   // (messages) and down (sendMessage) via callback props, since this
   // component sits inside the room boundary and `AiArchitectTab` doesn't —
   // see this component's own docblock above.
-  const { messages: chatMessages, sendMessage: sendChatMessage } = useAiChatFeed()
+  const {
+    messages: chatMessages,
+    sendMessage: sendChatMessage,
+    sendAgentMessage,
+  } = useAiChatFeed()
 
   useEffect(() => {
     onChatMessagesChange(chatMessages)
@@ -523,6 +557,15 @@ function CanvasFlow({
   useEffect(() => {
     onSendChatMessageChange(sendChatMessage)
   }, [sendChatMessage, onSendChatMessageChange])
+
+  // Spec 26 (Design Agent Frontend): the bidirectional counterpart to
+  // `sendChatMessage` above — pushes `useAiChatFeed()`'s `sendAgentMessage`
+  // function down to `AiArchitectTab` (outside the room boundary) so it can
+  // push a final AI/error message onto `ai-chat` once its own
+  // `useRealtimeRun` subscription reports a triggered run's outcome.
+  useEffect(() => {
+    onSendAgentMessageChange(sendAgentMessage)
+  }, [sendAgentMessage, onSendAgentMessageChange])
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {
