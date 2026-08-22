@@ -3,16 +3,25 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 29: Spec UI Integration — Completed (QA PASS, Product Owner PASS, PR #26 merged into `main`). Phase 30: Generate Spec Button — Analyst brief complete (`context/spec-status/30-generate-spec-button.md`), Senior Developer implementation complete on branch `spec/30-generate-spec-button`, awaiting QA. This wires the Specs tab's existing "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern) and closes the generate -> persist -> view -> download loop end to end from the UI.
+- Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call. No feature spec 31 currently exists in `context/feature-specs/` — spec 30 was the last one defined. Next phase is either authoring a new feature spec or beginning the "Deferred — Production Hardening" pass below; human call.
 
 ## Current Goal
-- QA pass on feature spec 30 (Generate Spec Button), per `context/spec-status/30-generate-spec-button.md`'s Dev Notes.
-
-## In Progress
-
-- Feature spec 30: Generate Spec Button — implemented, awaiting QA. See `context/spec-status/30-generate-spec-button.md`'s Dev Notes for the full file list, decisions, and test coverage. Branch: `spec/30-generate-spec-button`.
+- Human decision on what comes next: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability).
 
 ## Completed
+
+- Feature spec 30: Generate Spec Button
+  - `components/editor/canvas.tsx` (modified) — `CanvasFlow` gains a new `onCanvasGraphChange(nodes: CanvasNode[], edges: CanvasEdge[]) => void` push-up, via a `useEffect` structurally identical to the existing `onChatMessagesChange` effect, pushing the room's live `nodes`/`edges` (already destructured from `useLiveblocksFlow`) up to `WorkspaceShell`. `Canvas` passes the prop straight through to `CanvasFlow`.
+  - `components/editor/workspace-shell.tsx` (modified) — new `canvasNodes`/`canvasEdges` state (`useState<CanvasNode[]>([])`/`useState<CanvasEdge[]>([])`, mirroring `chatMessages`'s own empty-array default), wired to `<Canvas onCanvasGraphChange={...}>` and threaded down to `<AiSidebar>` alongside the already-existing `chatMessages` prop (now additionally reaching `SpecsTab`, not just `AiArchitectTab`).
+  - `components/editor/ai-sidebar.tsx` (modified) — forwards the new `canvasNodes`/`canvasEdges` props and the already-received `chatMessages` prop straight through to `<SpecsTab nodes={...} edges={...} chatMessages={...}>`. No new state owned here.
+  - `components/editor/specs-tab.tsx` (rewritten — primary site of this spec's logic) — new optional `nodes`/`edges`/`chatMessages` props (defaulting to `[]`). Adds `toGenerateSpecNodes`/`toGenerateSpecEdges`, small pure synchronous conversion functions from `CanvasNode[]`/`CanvasEdge[]` to the narrower `GenerateSpecGraphNode[]`/`GenerateSpecGraphEdge[]` shape `POST /api/ai/spec`'s Zod schema expects (types imported `import type` from `lib/generate-spec-ai.ts`, keeping this `components/*` file's import graph off `trigger/*` even at the type-only level). New local `runId`/`publicToken`/`isSubmittingRun`/`generateError` state, a `handledRunIdRef`-guarded completion effect, and the `realtimeRun.id === runId` staleness guard — mirroring `ai-architect-tab.tsx`'s (spec 26) exact pattern. `handleGenerateSpec` runs the two-call trigger/token sequence (`POST /api/ai/spec` -> `POST /api/ai/spec/token`) then subscribes via `useRealtimeRun`. On success, calls `useProjectSpecs`'s `refetch()`. On any failure (pre-`runId` POST/token failure, or the run settling as failed/errored), shows an inline error (`text-state-error`/`AlertCircle`) near the button. Button shows a `Loader2` spinner and is `disabled` for `isSubmittingRun || (runId !== null && !isRunSettled)`. Nothing else in the tab (list, preview modal, download actions) is gated by this state.
+  - Tests: `components/editor/canvas.test.tsx`, `components/editor/workspace-shell.test.tsx`, `components/editor/ai-sidebar.test.tsx` (all extended to cover the new prop-threading chain), `components/editor/specs-tab.test.tsx` (rewritten/extended significantly — request-shape conversion, the two-call trigger/token sequence, busy/disabled state across both windows, success calling `refetch`, all three failure modes showing an inline error, state reset on settle, and the rest of the tab staying interactive during a run). 616/616 tests passing across 63 files (up from 602/63 at the end of spec 29).
+  - `npx tsc --noEmit`, `npx eslint .` (clean on every file this diff touches), `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - No `app/api/**`, `trigger/**`, `lib/spec-blob.ts`, `lib/generate-spec-ai.ts`, or `prisma/schema.prisma` file touched anywhere in this diff — this spec's own explicit Scope Limit. No design-agent file (`app/api/ai/design*`, `ai-architect-tab.tsx`, `lib/design-agent-*`) touched either — its own explicit Out-of-scope callout. No `components/ui/*` file touched.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 12 acceptance criteria independently re-verified against the code, full mechanical gate independently reproduced (including confirming the `.trigger/tmp/` full-repo eslint noise is pre-existing and identical on `main`, not a regression this diff introduced).
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Independently re-verified via `git diff main...spec/30-generate-spec-button` (not trusting Dev/QA claims) that no `app/api/**`, `trigger/**`, `lib/spec-blob.ts`, `lib/generate-spec-ai.ts`, `prisma/schema.prisma`, or design-agent file appears anywhere in the diff, and read `specs-tab.tsx`, `canvas.tsx`, `workspace-shell.tsx`, and `ai-sidebar.tsx` directly. Confirmed the `toGenerateSpecNodes`/`toGenerateSpecEdges` conversion is a faithful, non-lossy mapping of the canvas graph's structural content (position, label, shape, connectivity) into `GenerateSpecGraphNode`/`GenerateSpecGraphEdge` — the only dropped fields (`color`/`textColor`) are irrelevant to Markdown spec generation, confirmed against `lib/generate-spec-ai.ts`'s own docblock. Confirmed this spec is the one that closes the full generate -> persist -> view -> download loop end to end from the actual UI for the first time — the entire Core User Flow (steps 5-10) is now reachable in one continuous session — a genuine, substantive strengthening of Success Criterion 5 ("The graph can be converted into a persisted Markdown spec"), not a technicality. No Out-of-Scope crossing. No live Trigger.dev/Gemini smoke test of this specific button click was performed in this pass — recommended as a human smoke test (click Generate Spec on a real project with a real Gemini key/Trigger.dev worker running, confirm the spec appears in the list on completion) before treating this loop as fully proven end to end in production, not a blocker for this recommendation.
+  - PR opened against `main`: [PR #27](https://github.com/ravindrakamble/ghost-ai/pull/27) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/30-generate-spec-button.md`.
 
 - Feature spec 29: Spec UI Integration
   - `hooks/use-project-specs.ts` (new) — `useProjectSpecs(projectId)`: plain fetch-and-`useState` hook, fetches `GET /api/projects/[projectId]/specs` (spec 28) on mount, exposes `{ specs, isLoading, error, refetch }`. Component-local state only — no Context, no module-level store.
@@ -402,12 +411,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 29 completed above; no feature spec 30 currently exists in `context/feature-specs/`)
+(none — spec 30 completed above; no feature spec 31 currently exists in `context/feature-specs/`)
 
 ## Next Up
 
-- Human decision: author a new feature spec (recommended: wire the "Generate Spec" button to `POST /api/ai/spec` + `POST /api/ai/spec/token` + `useRealtimeRun`, mirroring `ai-architect-tab.tsx`'s spec-26 pattern, so the generate -> persist -> view -> download loop is reachable end to end from the UI) or begin the "Deferred — Production Hardening" pass below.
-- Human review/merge of spec 25/26/27/28/29's PRs and the still-open PRs for specs 12–24.
+- Human decision: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability). With spec 30's PR opened (pending human review/merge), the generate -> persist -> view -> download loop is reachable end to end from the UI for the first time — no further feature spec is currently required to close that loop; any next feature spec would be a genuinely new product surface, not a continuation of this one.
+- Human review/merge of spec 25/26/27/28/29/30's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
 
@@ -415,9 +424,9 @@ Update this file whenever the current phase, active feature, or implementation s
 - Spec 19's live two-tab/multiplayer behavior (self-exclusion with a real second tab, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) has not been verified in a real browser — recommended as a human smoke test before spec 20+ builds further on this presence mechanism, not a blocker.
 - Spec 23's full pipeline (real Gemini call → real Storage mutation → real client-side render, plus live AI status/presence) has not been exercised end-to-end against live services (no `GEMINI_API_KEY`/Gemini account or live Liveblocks room in this environment) — recommended as a human smoke test before spec 24+ builds further on the `ai-status-feed`/AI presence mechanism this spec produces, not a blocker.
 
-## Deferred — Production Hardening (after spec 29)
+## Deferred — Production Hardening (after spec 30)
 
-Cross-cutting gaps found during the pre-pipeline review that don't block any individual spec 06–29, so they're logged here rather than wedged into an unrelated spec. Revisit as a dedicated pass once the feature specs are done:
+Cross-cutting gaps found during the pre-pipeline review that don't block any individual spec 06–30, so they're logged here rather than wedged into an unrelated spec. Revisit as a dedicated pass once the feature specs are done:
 
 - **Rate limiting** on `/api/ai/design` and `/api/ai/spec` — either endpoint can trigger a paid Gemini + Trigger.dev run; nothing currently stops a project collaborator from spamming them.
 - ~~**Vercel Blob access model**~~ — resolved. The provisioned store is confirmed `private` (a `public` `put`/`get` call is rejected outright); `lib/canvas-blob.ts` was corrected to match (`fix/canvas-blob-private-access`, merged into `main` alongside spec 27's PR), and `lib/spec-blob.ts` (spec 28) follows the same `access: "private"` convention from the start.
