@@ -28,6 +28,7 @@ import {
   useUpdateMyPresence,
 } from "@liveblocks/react/suspense"
 import { useLiveblocksFlow } from "@liveblocks/react-flow"
+import { LiveList } from "@liveblocks/client"
 import { CanvasControlBar } from "@/components/editor/canvas-control-bar"
 import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
@@ -38,6 +39,7 @@ import { StarterTemplatesModal } from "@/components/editor/starter-templates-mod
 import type { CanvasTemplate } from "@/components/editor/starter-templates"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
+import { useAiChatFeed } from "@/hooks/use-ai-chat-feed"
 import { useAiStatusFeed } from "@/hooks/use-ai-status-feed"
 import { useCanvasAutosave, type CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
@@ -48,7 +50,7 @@ import {
   type CanvasEdge as CanvasEdgeAlias,
   type CanvasNode as CanvasNodeAlias,
 } from "@/types/canvas"
-import type { AiStatusMessage } from "@/types/tasks"
+import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
 import "@xyflow/react/dist/style.css"
 import "@liveblocks/react-flow/styles.css"
 
@@ -142,6 +144,22 @@ interface CanvasProps {
    * sits outside of — see spec 24's Analyst Brief, Open Questions #1.
    */
   onAiStatusChange: (status: AiStatusMessage | null) => void
+  /**
+   * Pushes the room's ordered, schema-validated `ai-chat` message list
+   * (spec 25, via `hooks/use-ai-chat-feed.ts`) up to `WorkspaceShell`. Same
+   * callback-push-up shape as `onAiStatusChange` above, for the same reason
+   * — the room's Storage subscription is only valid inside `CanvasFlow`.
+   */
+  onChatMessagesChange: (messages: AiChatMessage[]) => void
+  /**
+   * The bidirectional counterpart `onAiStatusChange` didn't need (spec 24
+   * only ever consumed a feed, never wrote to one): pushes the real
+   * `sendMessage` function `useAiChatFeed()` builds (via `useMutation`) up
+   * to `WorkspaceShell`, which threads it back down through `AiSidebar` to
+   * `AiArchitectTab` so a user can actually send a message from outside the
+   * room boundary. See spec 25's Analyst Brief, Open Questions #3.
+   */
+  onSendChatMessageChange: (sendMessage: SendChatMessage) => void
 }
 
 /**
@@ -157,11 +175,17 @@ export function Canvas({
   setIsTemplatesModalOpen,
   onSaveStatusChange,
   onAiStatusChange,
+  onChatMessagesChange,
+  onSendChatMessageChange,
 }: CanvasProps) {
   return (
     <div className="relative flex-1 bg-base">
       <LiveblocksProvider authEndpoint="/api/liveblocks-auth">
-        <RoomProvider id={roomId} initialPresence={{ cursor: null, thinking: false }}>
+        <RoomProvider
+          id={roomId}
+          initialPresence={{ cursor: null, thinking: false }}
+          initialStorage={{ messages: new LiveList([]) }}
+        >
           <CanvasRoomBoundary>
             <ClientSideSuspense fallback={<CanvasLoading />}>
               {/*
@@ -178,6 +202,8 @@ export function Canvas({
                   setIsTemplatesModalOpen={setIsTemplatesModalOpen}
                   onSaveStatusChange={onSaveStatusChange}
                   onAiStatusChange={onAiStatusChange}
+                  onChatMessagesChange={onChatMessagesChange}
+                  onSendChatMessageChange={onSendChatMessageChange}
                 />
               </ReactFlowProvider>
             </ClientSideSuspense>
@@ -366,6 +392,16 @@ function CanvasError() {
  * `onSaveStatusChange` already established. This component does not read or
  * render anything AI-status-related itself — `AiArchitectTab` (outside the
  * room boundary) is the actual consumer.
+ *
+ * Spec 25 (Sidebar Chat Feed) subscribes to the room's `ai-chat` Storage
+ * `LiveList` (`useAiChatFeed()`, valid here for the same reason
+ * `useAiStatusFeed()` already is) and pushes the ordered, validated message
+ * list up via `onChatMessagesChange` — the same one-directional shape as
+ * `onAiStatusChange`. Unlike spec 24, this is also bidirectional: the real
+ * `sendMessage` function `useAiChatFeed()` builds is pushed *down* out of
+ * this component via `onSendChatMessageChange`, since `AiArchitectTab`
+ * (outside the room boundary) is where the user actually triggers a send —
+ * see spec 25's Analyst Brief, Open Questions #3.
  */
 function CanvasFlow({
   projectId,
@@ -373,12 +409,16 @@ function CanvasFlow({
   setIsTemplatesModalOpen,
   onSaveStatusChange,
   onAiStatusChange,
+  onChatMessagesChange,
+  onSendChatMessageChange,
 }: {
   projectId: string
   isTemplatesModalOpen: boolean
   setIsTemplatesModalOpen: (open: boolean) => void
   onSaveStatusChange: (status: CanvasSaveStatus) => void
   onAiStatusChange: (status: AiStatusMessage | null) => void
+  onChatMessagesChange: (messages: AiChatMessage[]) => void
+  onSendChatMessageChange: (sendMessage: SendChatMessage) => void
 }) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, onDelete } = useLiveblocksFlow<
     CanvasNodeAlias,
@@ -468,6 +508,21 @@ function CanvasFlow({
   useEffect(() => {
     onAiStatusChange(aiStatus)
   }, [aiStatus, onAiStatusChange])
+
+  // Spec 25 (Sidebar Chat Feed): the room's ordered, validated `ai-chat`
+  // messages and the real `sendMessage` function to write to it — pushed up
+  // (messages) and down (sendMessage) via callback props, since this
+  // component sits inside the room boundary and `AiArchitectTab` doesn't —
+  // see this component's own docblock above.
+  const { messages: chatMessages, sendMessage: sendChatMessage } = useAiChatFeed()
+
+  useEffect(() => {
+    onChatMessagesChange(chatMessages)
+  }, [chatMessages, onChatMessagesChange])
+
+  useEffect(() => {
+    onSendChatMessageChange(sendChatMessage)
+  }, [sendChatMessage, onSendChatMessageChange])
 
   const handleDropShape = useCallback<OnDropShape>(
     (payload, clientPosition) => {

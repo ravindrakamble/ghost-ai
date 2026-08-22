@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 /**
  * Formal, code-level schema for the `ai-status-feed` Liveblocks broadcast
  * event — spec 24's own named deliverable ("define the feed payload schema
@@ -54,3 +56,76 @@ export function isAiStatusMessage(value: unknown): value is AiStatusMessage {
 
   return true
 }
+
+/**
+ * Formal, code-level schema for the `ai-chat` Liveblocks Storage `LiveList`
+ * entries — spec 25's own named deliverable ("define or reuse a Zod schema
+ * in `types/tasks.ts`"). A real `z.object` schema, not a hand-rolled type
+ * guard relabeled as one: unlike `isAiStatusMessage` above (a manual guard,
+ * matching spec 23's precedent of skipping Zod for that exact feed), spec
+ * 25's own spec text names "Zod schema" specifically, twice — an explicit
+ * ask this codebase's manual-guard precedent doesn't override. `zod` was
+ * genuinely missing from `package.json` before this spec (confirmed by
+ * reading it directly) and is now a real dependency, not a dev-only one, the
+ * same "the spec's premise didn't hold, install what's actually needed"
+ * precedent specs 10/21/22/23 already set. See spec 25's Analyst Brief,
+ * Open Questions #1.
+ *
+ * Per `architecture-context.md`'s Realtime Conventions, `ai-chat` is an
+ * ordered, persisted Liveblocks Storage `LiveList` (not `broadcastEvent`,
+ * which has no replay/history for a participant joining mid-conversation) —
+ * a fully separate mechanism from `ai-status-feed` above: no shared payload
+ * type, no shared subscription, no cross-reading of one feed's data as the
+ * other's (acceptance criterion 6).
+ */
+export const AiChatMessageSchema = z.object({
+  /**
+   * Stable identifier for React list rendering. Not one of the spec text's
+   * four named fields (sender/role/content/timestamp), but needed once
+   * messages can arrive from multiple senders into a live-appending list —
+   * falling back to array index as a key is a known React anti-pattern. See
+   * spec 25's Analyst Brief, Open Questions #4(c).
+   */
+  id: z.string().min(1),
+  /**
+   * Display name resolved from the room's own already-resolved Liveblocks
+   * identity (`useSelf().info.name`, the same name `app/api/liveblocks-auth/
+   * route.ts` already computes from the caller's Clerk profile at
+   * session-auth time) — not a raw Clerk user ID, for consistency with how
+   * names already surface elsewhere in this room (cursor badges, presence
+   * avatars). See spec 25's Analyst Brief, Open Questions #4(b).
+   */
+  sender: z.string().min(1),
+  /**
+   * Reuses `ChatBubble`'s existing two-role vocabulary (spec 20).
+   * `"assistant"` stays schema-supported but is unreachable through this
+   * spec's own send path (acceptance criterion 7) — no AI-generated reply
+   * exists yet.
+   */
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1),
+  /**
+   * Epoch-ms (`Date.now()`) — sortable, easily formatted, no existing
+   * precedent elsewhere in this codebase pins a different format. See spec
+   * 25's Analyst Brief, Open Questions #4(a).
+   */
+  timestamp: z.number().finite(),
+})
+
+/** Inferred from `AiChatMessageSchema` — spec 25's own named deliverable
+ * ("a TypeScript type inferred from that schema"). */
+export type AiChatMessage = z.infer<typeof AiChatMessageSchema>
+
+/**
+ * Function shape for sending an outgoing chat message (spec 25) — threaded
+ * down through `Canvas` → `WorkspaceShell` → `AiSidebar` → `AiArchitectTab`
+ * once `CanvasFlow`'s `useAiChatFeed()` (`hooks/use-ai-chat-feed.ts`)
+ * produces a real one. Synchronous (not Promise-returning) — a Liveblocks
+ * Storage `LiveList` write via `useMutation` is itself a synchronous,
+ * locally-applied operation, not an HTTP-style call that returns a rejecting
+ * promise. Throws synchronously if the outgoing message fails this schema's
+ * own validation, or if the underlying Storage mutation itself throws (e.g.
+ * genuinely disconnected from the room) — see spec 25's Analyst Brief, Open
+ * Questions #5.
+ */
+export type SendChatMessage = (content: string) => void

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AiArchitectTab } from "@/components/editor/ai-architect-tab"
 import { SpecsTab } from "@/components/editor/specs-tab"
-import type { AiStatusMessage } from "@/types/tasks"
+import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
 
 interface AiSidebarProps {
   isOpen: boolean
@@ -19,6 +19,21 @@ interface AiSidebarProps {
    * mechanism down as props" posture (specs 18/21 precedent).
    */
   aiStatus: AiStatusMessage | null
+  /**
+   * Ordered, schema-validated `ai-chat` messages (spec 25), pushed down from
+   * `WorkspaceShell` (via `Canvas`'s `onChatMessagesChange` callback) —
+   * forwarded straight through to `AiArchitectTab`. Same posture as
+   * `aiStatus` above.
+   */
+  chatMessages: AiChatMessage[]
+  /**
+   * The real, room-connected function to send a chat message (spec 25),
+   * threaded down from `WorkspaceShell` (via `Canvas`'s
+   * `onSendChatMessageChange` callback, the bidirectional counterpart
+   * `aiStatus` didn't need) — forwarded straight through to
+   * `AiArchitectTab`, the component that owns the input/Send button.
+   */
+  sendChatMessage: SendChatMessage
 }
 
 /** Active vs. inactive tab styling — see the brief's Open Questions #2:
@@ -60,11 +75,13 @@ const TAB_TRIGGER_CLASS_NAME =
  * prop above, a plain value forwarded straight through to `AiArchitectTab`
  * (the room-scoped `ai-status-feed` subscription itself lives in
  * `CanvasFlow`, inside the Liveblocks room boundary this component sits
- * outside of — see `components/editor/canvas.tsx`'s docblock). `ai-chat`,
- * `/api/ai/*` calls, and Trigger.dev triggering remain specs 25/26/27/29's
- * job, per the brief's Out-of-scope callouts.
+ * outside of — see `components/editor/canvas.tsx`'s docblock). Spec 25 adds
+ * `chatMessages`/`sendChatMessage` the same way — the real `ai-chat` Storage
+ * subscription and mutation both live in `CanvasFlow` too. `/api/ai/*` calls
+ * and Trigger.dev triggering remain specs 26/27/29's job, per the brief's
+ * Out-of-scope callouts.
  */
-export function AiSidebar({ isOpen, onClose, aiStatus }: AiSidebarProps) {
+export function AiSidebar({ isOpen, onClose, aiStatus, chatMessages, sendChatMessage }: AiSidebarProps) {
   const [activeTab, setActiveTab] = useState<"architect" | "specs">("architect")
 
   return (
@@ -101,7 +118,7 @@ export function AiSidebar({ isOpen, onClose, aiStatus }: AiSidebarProps) {
         </TabsList>
 
         <TabsContent value="architect" keepMounted className="flex flex-1 flex-col overflow-hidden">
-          <AiArchitectTab aiStatus={aiStatus} />
+          <AiArchitectTab aiStatus={aiStatus} chatMessages={chatMessages} sendMessage={sendChatMessage} />
         </TabsContent>
         <TabsContent value="specs" className="flex-1 overflow-y-auto">
           <SpecsTab />
