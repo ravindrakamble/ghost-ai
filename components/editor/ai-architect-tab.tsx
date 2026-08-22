@@ -230,17 +230,19 @@ function buildDesignAgentFailureMessage(detail?: string): string {
  * newly-installed `@trigger.dev/react-hooks`) tracks that specific run;
  * once it reaches a terminal state, a final AI-authored or error-describing
  * message is pushed onto `ai-chat` via `sendAgentMessage` (a `useEffect`
- * that only calls that prop function and mutates a plain ref — never a local
- * `setState` directly in the effect body, to avoid a
- * `react-hooks/set-state-in-effect` cascading-render lint violation; a
- * settled run's local `runId`/`publicToken` state is left as-is rather than
- * reset, since `isRunSettled` alone already makes the busy/spinner
- * computation fall back to "not busy" without needing that reset — see
- * `handledRunIdRef`'s own doc in the component body). This local state
- * deliberately lives here, not threaded through the Liveblocks room boundary
- * — `useRealtimeRun` takes its `accessToken` directly as a hook argument and
- * has no dependency on `RoomProvider`/any Liveblocks context. See spec 26's
- * Analyst Brief, Open Questions #3.
+ * guarded by a `handledRunIdRef` ref, not a second piece of derived state,
+ * so it fires exactly once per run — that ref-guard shape is what keeps
+ * `react-hooks/set-state-in-effect` from firing even though the effect does
+ * call `setState` once, directly, after pushing the message). On settling,
+ * the effect also resets the local `runId`/`publicToken` state back to
+ * `null` on both the success and failure branches, so `enabled:
+ * Boolean(runId && publicToken)` correctly falls back to "no run associated
+ * with this client" — see `handledRunIdRef`'s own doc in the component
+ * body. This local state deliberately lives here, not threaded through the
+ * Liveblocks room boundary — `useRealtimeRun` takes its `accessToken`
+ * directly as a hook argument and has no dependency on
+ * `RoomProvider`/any Liveblocks context. See spec 26's Analyst Brief, Open
+ * Questions #3.
  *
  * A local "this client's own run is still in flight" signal (from the
  * moment of submission until `useRealtimeRun` reports a terminal state) is
@@ -267,16 +269,17 @@ export function AiArchitectTab({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /**
    * Tracks the most recently `pushAgentMessage`-handled `runId`, so the
-   * completion effect below fires exactly once per run without needing to
-   * `setState` from inside that effect (avoiding a
-   * `react-hooks/set-state-in-effect` cascading-render lint violation — a
-   * ref mutation, unlike a state setter, isn't a "calling setState
-   * synchronously within an effect" concern). `runId`/`publicToken`
-   * themselves are intentionally never reset back to `null` once a run
-   * settles — `isRunSettled` below already makes `isOwnRunInFlight` (and
-   * therefore `isBusy`) correctly fall back to `false` without that, and the
-   * next submission's own success path (`submitDesignRequest`) overwrites
-   * both with the new run's real values regardless of what they held before.
+   * completion effect below fires exactly once per run — a ref mutation
+   * (not a second piece of state derived from the same effect's own
+   * inputs) is what keeps this guard from tripping
+   * `react-hooks/set-state-in-effect`; a single `setState` call made
+   * directly inside the effect body, gated by this ref, does not trigger
+   * that rule. Once a run settles, the effect resets `runId`/`publicToken`
+   * back to `null` on both the success and failure branches (confirmed via
+   * `npx eslint` that this does not reintroduce the lint violation), so
+   * `isOwnRunInFlight`/`isBusy` fall back to `false` and `enabled:
+   * Boolean(runId && publicToken)` stops referring to a run that has
+   * already completed.
    */
   const handledRunIdRef = useRef<string | null>(null)
 
