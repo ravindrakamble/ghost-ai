@@ -26,7 +26,7 @@ vi.mock("@/lib/trigger", () => ({
 import { POST } from "./route"
 
 function postRequest(body?: unknown) {
-  return new NextRequest("http://localhost/api/ai/design/token", {
+  return new NextRequest("http://localhost/api/ai/spec/token", {
     method: "POST",
     ...(body === undefined
       ? {}
@@ -38,7 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe("POST /api/ai/design/token", () => {
+describe("POST /api/ai/spec/token", () => {
   it("returns 401 when unauthenticated, before touching the body, Prisma, or Trigger.dev", async () => {
     getCallerIdentityMock.mockResolvedValue(null)
 
