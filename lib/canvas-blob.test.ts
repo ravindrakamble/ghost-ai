@@ -65,7 +65,7 @@ describe("uploadCanvasSnapshot / fetchCanvasSnapshot", () => {
         "canvas/p1.json",
         JSON.stringify(snapshot),
         expect.objectContaining({
-          access: "public",
+          access: "private",
           contentType: "application/json",
           addRandomSuffix: false,
           allowOverwrite: true,
@@ -127,7 +127,7 @@ describe("uploadCanvasSnapshot / fetchCanvasSnapshot", () => {
 
       expect(result).toEqual(snapshot)
       expect(getMock).toHaveBeenCalledWith("https://blob.example/canvas/p1.json", {
-        access: "public",
+        access: "private",
         token: "test-token",
       })
     })

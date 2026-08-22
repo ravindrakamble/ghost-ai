@@ -15,16 +15,17 @@ import { get, put } from "@vercel/blob"
  * `lib/liveblocks.ts#getLiveblocksClient` established for a missing
  * `LIVEBLOCKS_SECRET_KEY` (spec 10), applied here to a missing Blob token.
  *
- * Store visibility (`public` vs. `private`) is a cross-cutting open item
- * logged in `progress-tracker.md`'s "Deferred — Production Hardening"
- * section, not resolved by this spec. `public` is used here as the
- * practical default; the `GET` route (`app/api/projects/[projectId]/canvas/
- * route.ts`) never returns the raw blob URL to the client — only the fetched
- * JSON body itself — which keeps this spec from making that deferred gap any
- * worse (spec 21's Analyst Brief, Open Questions #6).
+ * Store visibility: the provisioned Vercel Blob store is configured for
+ * `private` access (confirmed live — a `public` `put`/`get` call is rejected
+ * outright with "Cannot use public access on a private store"), so this
+ * module authenticates every read/write with `BLOB_READ_WRITE_TOKEN` rather
+ * than relying on a publicly-fetchable URL. The `GET` route
+ * (`app/api/projects/[projectId]/canvas/route.ts`) never returns the raw
+ * blob URL to the client either way — only the fetched JSON body itself
+ * (spec 21's Analyst Brief, Open Questions #6).
  */
 
-const CANVAS_BLOB_ACCESS = "public" as const
+const CANVAS_BLOB_ACCESS = "private" as const
 
 function requireBlobToken(): string {
   const token = process.env.BLOB_READ_WRITE_TOKEN
