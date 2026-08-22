@@ -3,10 +3,10 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 27: Spec Generation Flow — Completed (QA PASS after one docs-only fix, Product Owner PASS, PR opened). Phase 28: Spec Persistence & Download — not yet started.
+- Phase 27: Spec Generation Flow — Completed (QA PASS after one docs-only fix, Product Owner PASS, PR #23 merged into `main`, along with a separate `fix/canvas-blob-private-access` correction). Phase 28: Spec Persistence & Download — Senior Developer implementation complete, ready for QA.
 
 ## Current Goal
-- Senior Developer implementation of feature spec 28 (Spec Persistence & Download), per `context/feature-specs/28-spec-persistence-download.md`.
+- QA review of feature spec 28 (Spec Persistence & Download), per `context/spec-status/28-spec-persistence-download.md`.
 
 ## Completed
 
@@ -371,11 +371,20 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 27 completed and moved below; spec 28 not yet started)
+- Feature spec 28: Spec Persistence & Download
+  - `prisma/schema.prisma` (modified) — new `ProjectSpec` model (`id`, `projectId` relation to `Project` with `onDelete: Cascade`, `filePath`, `createdAt`, index on `[projectId, createdAt]`), no `userId` field (access derives from the project relationship via `getProjectAccess`, not per-spec ownership), no unique constraint on `projectId` (multiple independently-downloadable specs per project, per Open Questions #5). `Project` gains a `specs ProjectSpec[]` back-relation. Real migration (`20260822130551_add_project_spec`) created and applied against the provisioned Postgres database via `prisma migrate dev`.
+  - `lib/spec-blob.ts` (new) — Blob upload/fetch helpers mirroring `lib/canvas-blob.ts`'s exact shape (`requireBlobToken`, lazy per-call token check, `SPEC_BLOB_ACCESS = "private"`). `uploadSpecMarkdown(projectId, specId, markdown)` writes to `specs/{projectId}/{specId}.md`; `fetchSpecMarkdown(blobUrl)` returns the raw Markdown string or `null` for "nothing there," letting a genuine upstream failure propagate and surface as a 500 rather than a miscategorized 404.
+  - `trigger/generate-spec.ts` (modified) — per Open Questions #1's recommended resolution, persistence now lives inside `runGenerateSpec` itself: after `generateSpecMarkdown` succeeds, a new `persistGeneratedSpec` helper creates a placeholder `ProjectSpec` row (to obtain a generated id), uploads the Markdown to Blob using that id, then updates the row's `filePath` with the resulting URL (the two-write pattern Open Questions #2 recommended). If the Blob upload or the follow-up update fails, the placeholder row is deleted (best-effort) before rethrowing, so a persistence failure never leaves an unfetchable "ghost" spec behind. `GenerateSpecResult` gains a `specId` field (the persisted `ProjectSpec.id`) alongside the existing `markdown` output. A new `"processing"` status ("Ghost AI is saving the generated spec…") is published via the existing `metadata.set` mechanism between generation and the final `"complete"` status.
+  - `app/api/projects/[projectId]/specs/route.ts` (new) — `GET`: `getProjectAccess(projectId)` (owner-or-collaborator) → lists `ProjectSpec` metadata for the project, newest first. Not named in the raw spec text's own numbered items; added per Open Questions #3's recommendation so spec 29 isn't blocked on day one (flagged explicitly here, not silently added). Returns `{ id, filename, createdAt }` per spec — a derived `spec-{id}.md` filename, never `ProjectSpec.filePath` (the raw Blob URL) — consistent with every other Blob-backed route in this codebase never putting a raw Blob URL in a response body.
+  - `app/api/projects/[projectId]/specs/[specId]/download/route.ts` (new) — `GET`: `getProjectAccess(projectId)` → `prisma.projectSpec.findUnique` → verifies `spec.projectId === projectId` (404 if it belongs to a different project) → `fetchSpecMarkdown(spec.filePath)` → returns the Markdown as a `Content-Type: text/markdown; charset=utf-8` / `Content-Disposition: attachment; filename="spec-{specId}.md"` attachment — never the raw Blob URL. A genuine upstream Blob failure surfaces as a 500, not a 404.
+  - Tests: `lib/spec-blob.test.ts`, `app/api/projects/[projectId]/specs/route.test.ts`, `app/api/projects/[projectId]/specs/[specId]/download/route.test.ts` (all new); `trigger/generate-spec.test.ts` (extended with a new "persistence" describe block plus updated assertions for the `specId` field and the extra `"processing"` status). 584/584 tests passing across 61 files (up from 558/58 at the end of spec 27).
+  - `npx tsc --noEmit`, `npx eslint .` (clean on every file this diff touches), `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - No `components/*` file changed anywhere in this diff, and no change to `lib/canvas-blob.ts`, `app/api/projects/[projectId]/canvas/route.ts`, or `hooks/use-canvas-autosave.ts` — this spec's own explicit Scope Limits.
+  - Full pipeline trail in `context/spec-status/28-spec-persistence-download.md`. Not yet QA-reviewed.
 
 ## Next Up
 
-- Senior Developer implementation of feature spec 28 (Spec Persistence & Download), per `context/feature-specs/28-spec-persistence-download.md`.
+- QA review of feature spec 28 (Spec Persistence & Download).
 - Human review/merge of spec 25/26/27's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
@@ -389,7 +398,7 @@ Update this file whenever the current phase, active feature, or implementation s
 Cross-cutting gaps found during the pre-pipeline review that don't block any individual spec 06–29, so they're logged here rather than wedged into an unrelated spec. Revisit as a dedicated pass once the feature specs are done:
 
 - **Rate limiting** on `/api/ai/design` and `/api/ai/spec` — either endpoint can trigger a paid Gemini + Trigger.dev run; nothing currently stops a project collaborator from spamming them.
-- **Vercel Blob access model** — confirm whether the blob store is public (default) or private. If public, the raw blob URL bypasses the app's own access checks once it leaks anywhere (client state, network tab, logs); the download-route wrapping specs 21/28 build is necessary but not sufficient if the underlying URL itself isn't also protected.
+- ~~**Vercel Blob access model**~~ — resolved. The provisioned store is confirmed `private` (a `public` `put`/`get` call is rejected outright); `lib/canvas-blob.ts` was corrected to match (`fix/canvas-blob-private-access`, merged into `main` alongside spec 27's PR), and `lib/spec-blob.ts` (spec 28) follows the same `access: "private"` convention from the start.
 - **Migrations on deploy** — no spec currently wires `prisma migrate deploy` into the build/deploy step.
 - **Error monitoring / observability** — nothing in the context docs specifies a monitoring tool (e.g. Sentry) for production.
 
@@ -404,6 +413,7 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
   - Token expiration: spec 22's design-run token route now sets 1-hour expiration, matching spec 27's spec-run token route (was previously only specified on 27).
   - New conventions documented in `architecture-context.md`: hooks go in a top-level `hooks/` folder going forward (spec 21's autosave hook updated from `/hook` accordingly; `components/editor/use-project-dialogs.ts` stays as a pre-convention exception), and the `ai-status-feed` / `ai-chat` Liveblocks mechanism is pinned down (`broadcastEvent` for status, Storage `LiveList` for chat) ahead of specs 22/24/25.
 - Spec 27's `generate-spec` task publishes its run progress via Trigger.dev's own native run-metadata mechanism (`metadata.set`), not a second producer on the Liveblocks `ai-status-feed` — recorded in `architecture-context.md` under "Realtime Conventions" so a future spec wiring up the frontend (spec 29) doesn't have to re-derive this from scratch. `lib/trigger.ts`'s `createDesignRunToken` was also generalized to `createRunToken` (task-agnostic) and is now shared by both `/api/ai/design/token` and `/api/ai/spec/token`.
+- Spec 28: persistence of a generated spec (Blob upload + `ProjectSpec` create/update) happens inside `trigger/generate-spec.ts` itself, right after Gemini succeeds — not a separate client-triggered route — per `architecture-context.md`'s own "Spec Generation" text describing the task's output as already "saved to the filesystem and linked to the project," and because Invariant 1 restricts request handlers from long-lived work, not background tasks. A minimal `GET /api/projects/[projectId]/specs` list route was added beyond the raw spec text's own three numbered items, so spec 29 (which assumes "the existing ProjectSpec API" for a spec list) isn't blocked on day one. Multiple `ProjectSpec` rows per project are expected and allowed — no overwrite-on-generate, no versioning/diffing UI.
 
 ## Session Notes
 

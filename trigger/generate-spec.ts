@@ -6,6 +6,8 @@ import {
   type GenerateSpecGraphEdge,
 } from "@/lib/generate-spec-ai"
 import { AiChatMessageSchema, type AiChatMessage, type AiStatusStage, type AiStatusMessage } from "@/types/tasks"
+import { prisma } from "@/lib/prisma"
+import { uploadSpecMarkdown } from "@/lib/spec-blob"
 
 /**
  * Payload accepted by the generate-spec task. `roomId`/`projectId` are the
@@ -32,7 +34,14 @@ export interface GenerateSpecPayload {
 export interface GenerateSpecResult {
   roomId: string
   projectId: string
-  /** The generated Markdown spec — returned as task output only, never persisted (this spec's own Scope Limit). */
+  /**
+   * The `ProjectSpec.id` the generated Markdown was persisted under (spec
+   * 28). Returned so a future frontend consuming this task's output (via
+   * `useRealtimeRun`) can locate the persisted spec — e.g. to call the
+   * download route — without a separate lookup.
+   */
+  specId: string
+  /** The generated Markdown spec, returned as task output for convenience — also durably persisted to Vercel Blob + Prisma (spec 28), not ephemeral-only as spec 27 originally shipped it. */
   markdown: string
 }
 
@@ -91,6 +100,49 @@ function setGenerateSpecStatus(stage: AiStatusStage, text: string): void {
 }
 
 /**
+ * Persists a generated spec's Markdown content: upload to Vercel Blob +
+ * create/link a `ProjectSpec` Prisma row, per spec 28's Analyst Brief
+ * (Open Questions #1's recommended resolution — persistence lives inside
+ * this task, not a separate client-triggered route).
+ *
+ * Two-write pattern (Open Questions #2's recommended resolution): the Blob
+ * pathname (`specs/{projectId}/{specId}.md`) needs a `specId` before it
+ * exists, and Prisma's `@default(cuid())` only generates one at insert time.
+ * A `ProjectSpec` row is created first (with a placeholder empty
+ * `filePath`) to obtain the generated id, then the Markdown is uploaded to
+ * Blob using that id, then the row is updated with the resulting URL.
+ *
+ * If the Blob upload or the follow-up update fails, the placeholder row is
+ * deleted (best-effort) before rethrowing — leaving it behind would surface
+ * a spec in the list/download routes that can never actually be fetched, a
+ * silent-failure mode `code-standards.md`'s "write real error handling" rule
+ * argues against.
+ */
+async function persistGeneratedSpec(projectId: string, markdown: string): Promise<string> {
+  const spec = await prisma.projectSpec.create({
+    data: { projectId, filePath: "" },
+  })
+
+  try {
+    const filePath = await uploadSpecMarkdown(projectId, spec.id, markdown)
+    await prisma.projectSpec.update({
+      where: { id: spec.id },
+      data: { filePath },
+    })
+    return spec.id
+  } catch (error) {
+    await prisma.projectSpec.delete({ where: { id: spec.id } }).catch((cleanupError: unknown) => {
+      logger.error("Failed to clean up an orphaned ProjectSpec row after a persistence failure", {
+        projectId,
+        specId: spec.id,
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      })
+    })
+    throw error
+  }
+}
+
+/**
  * The task's actual run logic, exported separately from the `task(...)`
  * registration below so it's directly unit-testable without going through
  * Trigger.dev's runtime machinery — same "unit-testable without Trigger.dev's
@@ -100,9 +152,13 @@ function setGenerateSpecStatus(stage: AiStatusStage, text: string): void {
  * Validates the payload with a real Zod schema first — rejecting malformed
  * input (e.g. non-array `nodes`/`edges`, a wrong-shaped `chatHistory` entry)
  * before any status is published or Gemini is ever called (acceptance
- * criterion 6). Read-only: unlike `runDesignAgent` (which mutates Liveblocks
- * Storage), this task only reads the `nodes`/`edges`/`chatHistory` already
- * passed in — no canvas/Liveblocks room mutation of any kind.
+ * criterion 6). Read-only with respect to Liveblocks: unlike `runDesignAgent`
+ * (which mutates Liveblocks Storage), this task only reads the
+ * `nodes`/`edges`/`chatHistory` already passed in — no canvas/Liveblocks
+ * room mutation of any kind. It does write to Postgres/Blob, though — spec
+ * 28's persistence step (`persistGeneratedSpec`), run after Gemini succeeds
+ * and before the task returns (`architecture-context.md` Invariant 1
+ * restricts request handlers from long-lived work, not background tasks).
  */
 export async function runGenerateSpec(payload: GenerateSpecPayload): Promise<GenerateSpecResult> {
   const validated = GenerateSpecPayloadSchema.parse(payload)
@@ -114,11 +170,20 @@ export async function runGenerateSpec(payload: GenerateSpecPayload): Promise<Gen
 
     const markdown = await generateSpecMarkdown({ chatHistory, nodes, edges })
 
+    setGenerateSpecStatus("processing", "Ghost AI is saving the generated spec…")
+
+    const specId = await persistGeneratedSpec(projectId, markdown)
+
     setGenerateSpecStatus("complete", "Ghost AI finished drafting the spec.")
 
-    logger.log("generate-spec task completed", { roomId, projectId, markdownLength: markdown.length })
+    logger.log("generate-spec task completed", {
+      roomId,
+      projectId,
+      specId,
+      markdownLength: markdown.length,
+    })
 
-    return { roomId, projectId, markdown }
+    return { roomId, projectId, specId, markdown }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     logger.error("generate-spec task failed", { roomId, projectId, error: message })
