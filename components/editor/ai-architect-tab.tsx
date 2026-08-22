@@ -1,10 +1,16 @@
 "use client"
 
-import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
+import { useRealtimeRun } from "@trigger.dev/react-hooks"
 import { AlertCircle, Bot, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import type { AiChatMessage, AiStatusMessage, SendChatMessage } from "@/types/tasks"
+import type {
+  AiChatMessage,
+  AiStatusMessage,
+  SendAgentChatMessage,
+  SendChatMessage,
+} from "@/types/tasks"
 
 const STARTER_PROMPTS = [
   "Design an e-commerce backend",
@@ -61,6 +67,15 @@ export function ChatBubble({ message }: { message: AiChatMessage }) {
 
 interface AiArchitectTabProps {
   /**
+   * The current project's ID (spec 26) — required by `POST /api/ai/design`'s
+   * `{ prompt, roomId, projectId }` body (both room/project fields must equal
+   * the current project's ID, per that route's own validation). Defaults to
+   * an empty string so this component still renders standalone (e.g. in a
+   * test) with nothing wired up; submitting with an empty `projectId` will
+   * fail server-side validation, surfacing as this spec's own error path.
+   */
+  projectId?: string
+  /**
    * Latest validated `ai-status-feed` message (spec 24) — the *shared,
    * room-wide* signal every connected participant sees while a design-agent
    * run is active, not local-only state (acceptance criterion 4). Threaded
@@ -86,6 +101,13 @@ interface AiArchitectTabProps {
    * failure (input preserved, error shown), not a silent no-op.
    */
   sendMessage?: SendChatMessage
+  /**
+   * The real, room-connected function to push an AI-authored/error message
+   * onto `ai-chat` (spec 26), threaded down from `WorkspaceShell` →
+   * `AiSidebar`. Defaults to a throwing stub, same "not ready yet" contract
+   * as `sendMessage` above.
+   */
+  sendAgentMessage?: SendAgentChatMessage
 }
 
 /** Stages during which a design-agent run is actively working — matches
@@ -103,6 +125,74 @@ const DEFAULT_GENERATING_TEXT = "Ghost AI is working…"
  * component as a prop — see `AiArchitectTabProps.sendMessage`'s own doc. */
 function chatNotReadyYet(): never {
   throw new Error("Chat is not ready yet.")
+}
+
+/** Default `sendAgentMessage` (spec 26) before a real, room-connected one
+ * reaches this component as a prop — same "not ready yet" contract. */
+function agentChatNotReadyYet(): never {
+  throw new Error("Chat is not ready yet.")
+}
+
+/**
+ * Shallow runtime shape-checks for `POST /api/ai/design`'s and
+ * `POST /api/ai/design/token`'s response bodies (spec 22, `{ runId }` and
+ * `{ token }` respectively) — same shallow-validation convention as
+ * `canvas.tsx`'s own `isCanvasSnapshotBody` (spec 21): just enough to
+ * confirm the field this spec's own submit flow depends on is genuinely a
+ * non-empty string before trusting it, not a deep schema check against a
+ * third party's arbitrary input.
+ */
+function isRunIdBody(value: unknown): value is { runId: string } {
+  if (typeof value !== "object" || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.runId === "string" && candidate.runId.length > 0
+}
+
+function isTokenBody(value: unknown): value is { token: string } {
+  if (typeof value !== "object" || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.token === "string" && candidate.token.length > 0
+}
+
+/**
+ * Tolerantly parses a fetch `Response` body as JSON, matching
+ * `hooks/use-collaborators.ts#parseJson`'s own convention — a non-JSON or
+ * empty body is treated as `null` (which then fails the shape checks above)
+ * rather than throwing out of this spec's own try/catch at an unexpected
+ * point.
+ */
+async function parseJsonBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * AI-authored message pushed onto `ai-chat` once this client's own
+ * triggered run completes successfully (acceptance criterion 6). Generic
+ * rather than echoing model-specific output — this spec's own Scope Limits
+ * forbid fetching/reading the final graph, so no richer summary is available
+ * client-side (the canvas itself already reflects the real result via the
+ * existing, unmodified `useLiveblocksFlow` subscription).
+ */
+const DESIGN_AGENT_SUCCESS_MESSAGE =
+  "I've updated the canvas based on your prompt — take a look!"
+
+/**
+ * Error-describing message pushed onto `ai-chat` for any failure mode
+ * (acceptance criterion 7): the initial `POST` calls failing before a
+ * `runId`/subscription ever exists, or the triggered run itself reaching a
+ * failed/errored terminal state. `detail`, when available (e.g. a triggered
+ * run's own `error.message`), is appended for a more legible message —
+ * omitted entirely for the pre-`runId` failure path, which has no
+ * comparable structured detail to surface.
+ */
+function buildDesignAgentFailureMessage(detail?: string): string {
+  return detail
+    ? `Sorry, something went wrong while generating your design: ${detail}`
+    : "Sorry, something went wrong while generating your design. Please try again."
 }
 
 /**
@@ -126,36 +216,203 @@ function chatNotReadyYet(): never {
  * non-blocking status line (icon + `aiStatus.text`) while `aiStatus.stage`
  * is `"start"`/`"processing"`, disabling the input/Send button for that same
  * window, and swapping the Send icon for a spinner — all driven purely by
- * the room-broadcast `ai-status-feed`, not local submit-flow state (that
- * stays spec 26's job to layer on top, per spec 24's Analyst Brief, Open
- * Questions #5). Nothing else in this component — starter chips, the
- * message list, tab switching (owned by `AiSidebar`) — is disabled or
- * dimmed (both specs' own explicit Scope Limit).
+ * the room-broadcast `ai-status-feed`, not local submit-flow state. Nothing
+ * else in this component — starter chips, the message list, tab switching
+ * (owned by `AiSidebar`) — is disabled or dimmed (both specs' own explicit
+ * Scope Limit).
+ *
+ * Spec 26 turns submit into a real orchestration: after the existing
+ * `sendMessage` push onto `ai-chat` (above), it calls `POST /api/ai/design`
+ * (`{ prompt, roomId: projectId, projectId }`) for a `runId`, then
+ * `POST /api/ai/design/token` (`{ runId }`) for a run-scoped public token
+ * (spec 22's own two-call design — see spec 26's Analyst Brief, Open
+ * Questions #2), storing both in local state. `useRealtimeRun` (from the
+ * newly-installed `@trigger.dev/react-hooks`) tracks that specific run;
+ * once it reaches a terminal state, a final AI-authored or error-describing
+ * message is pushed onto `ai-chat` via `sendAgentMessage` (a `useEffect`
+ * guarded by a `handledRunIdRef` ref, not a second piece of derived state,
+ * so it fires exactly once per run — that ref-guard shape is what keeps
+ * `react-hooks/set-state-in-effect` from firing even though the effect does
+ * call `setState` once, directly, after pushing the message). On settling,
+ * the effect also resets the local `runId`/`publicToken` state back to
+ * `null` on both the success and failure branches, so `enabled:
+ * Boolean(runId && publicToken)` correctly falls back to "no run associated
+ * with this client" — see `handledRunIdRef`'s own doc in the component
+ * body. This local state deliberately lives here, not threaded through the
+ * Liveblocks room boundary — `useRealtimeRun` takes its `accessToken`
+ * directly as a hook argument and has no dependency on
+ * `RoomProvider`/any Liveblocks context. See spec 26's Analyst Brief, Open
+ * Questions #3.
+ *
+ * A local "this client's own run is still in flight" signal (from the
+ * moment of submission until `useRealtimeRun` reports a terminal state) is
+ * OR-ed into the existing `aiStatus`-driven `isGenerating` condition for the
+ * `Textarea`/Send button's `disabled` state and spinner — closing the real
+ * timing gap between submission and `ai-status-feed`'s first broadcast that
+ * `isGenerating` alone doesn't cover (spec 26's Analyst Brief, Open
+ * Questions #6). The status *line* itself stays gated on `isGenerating`
+ * alone — spec 24's already-shipped element, not duplicated by a second one
+ * (spec 26's Analyst Brief, Open Questions #4).
  */
 export function AiArchitectTab({
+  projectId = "",
   aiStatus = null,
   chatMessages = [],
   sendMessage = chatNotReadyYet,
+  sendAgentMessage = agentChatNotReadyYet,
 }: AiArchitectTabProps) {
   const [input, setInput] = useState("")
   const [sendError, setSendError] = useState(false)
+  const [isSubmittingRun, setIsSubmittingRun] = useState(false)
+  const [runId, setRunId] = useState<string | null>(null)
+  const [publicToken, setPublicToken] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * Tracks the most recently `pushAgentMessage`-handled `runId`, so the
+   * completion effect below fires exactly once per run — a ref mutation
+   * (not a second piece of state derived from the same effect's own
+   * inputs) is what keeps this guard from tripping
+   * `react-hooks/set-state-in-effect`; a single `setState` call made
+   * directly inside the effect body, gated by this ref, does not trigger
+   * that rule. Once a run settles, the effect resets `runId`/`publicToken`
+   * back to `null` on both the success and failure branches (confirmed via
+   * `npx eslint` that this does not reintroduce the lint violation), so
+   * `isOwnRunInFlight`/`isBusy` fall back to `false` and `enabled:
+   * Boolean(runId && publicToken)` stops referring to a run that has
+   * already completed.
+   */
+  const handledRunIdRef = useRef<string | null>(null)
+
+  const { run: realtimeRun } = useRealtimeRun(runId ?? undefined, {
+    accessToken: publicToken ?? undefined,
+    enabled: Boolean(runId && publicToken),
+  })
+
+  /**
+   * Whether the run identified by the current `runId` state has both (a)
+   * actually reached the `useRealtimeRun` subscription (`realtimeRun.id ===
+   * runId` — not just `realtimeRun` being truthy) and (b) reached a terminal
+   * state. The `realtimeRun.id === runId` check specifically guards against
+   * `useRealtimeRun`'s internal subscription state being keyed by a stable
+   * per-hook-call id (React's `useId()`), not by `runId` itself — a
+   * *previous* run's already-settled data can still be sitting there for a
+   * render or two right after a new `runId` is set, before the new
+   * subscription's first event actually arrives. Without this guard,
+   * submitting a second prompt could immediately (and incorrectly) read as
+   * "already settled" off the prior run's stale, already-completed data.
+   */
+  const isRunSettled = Boolean(
+    runId && realtimeRun && realtimeRun.id === runId && realtimeRun.isCompleted,
+  )
 
   const isGenerating = aiStatus !== null && ACTIVE_GENERATION_STAGES.has(aiStatus.stage)
+  // Covers the window this client's own submit flow knows about that
+  // `aiStatus` alone can't: from the moment Send is clicked (before a
+  // `runId` even exists) through to the triggered run reaching a terminal
+  // state (see this component's own docblock above).
+  const isOwnRunInFlight = isSubmittingRun || (runId !== null && !isRunSettled)
+  const isBusy = isGenerating || isOwnRunInFlight
+
+  /**
+   * Wraps `sendAgentMessage` so a secondary failure (e.g. the room
+   * genuinely disconnected) can't mask the original success/failure this
+   * call is trying to report — same "wrap in its own catch" convention
+   * `trigger/design-agent.ts` already established for its own
+   * status/presence broadcasts.
+   */
+  const pushAgentMessage = useCallback(
+    (content: string) => {
+      try {
+        sendAgentMessage(content)
+      } catch (error) {
+        console.error("Failed to push an AI-authored message onto ai-chat", error)
+      }
+    },
+    [sendAgentMessage],
+  )
+
+  /**
+   * Reacts to this client's own triggered run reaching a terminal state
+   * (acceptance criteria 6/7) — pushes the final AI-authored/error message
+   * exactly once per `runId` (`handledRunIdRef` guard), then clears the
+   * local `runId`/`publicToken` state the same way the pre-`runId`
+   * POST-failure path in `submitDesignRequest`'s own `catch` block already
+   * does, so `enabled: Boolean(runId && publicToken)` correctly falls back
+   * to "no run associated with this client" once the run has settled.
+   */
+  useEffect(() => {
+    if (!isRunSettled || !runId || !realtimeRun) return
+    if (handledRunIdRef.current === runId) return
+    handledRunIdRef.current = runId
+
+    if (realtimeRun.isSuccess) {
+      pushAgentMessage(DESIGN_AGENT_SUCCESS_MESSAGE)
+    } else {
+      pushAgentMessage(buildDesignAgentFailureMessage(realtimeRun.error?.message))
+    }
+
+    setRunId(null)
+    setPublicToken(null)
+  }, [isRunSettled, runId, realtimeRun, pushAgentMessage])
+
+  const submitDesignRequest = useCallback(
+    async (prompt: string) => {
+      setIsSubmittingRun(true)
+
+      try {
+        const designResponse = await fetch("/api/ai/design", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt, roomId: projectId, projectId }),
+        })
+        const designBody = await parseJsonBody(designResponse)
+        if (!designResponse.ok || !isRunIdBody(designBody)) {
+          throw new Error("Failed to start design generation")
+        }
+
+        const tokenResponse = await fetch("/api/ai/design/token", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ runId: designBody.runId }),
+        })
+        const tokenBody = await parseJsonBody(tokenResponse)
+        if (!tokenResponse.ok || !isTokenBody(tokenBody)) {
+          throw new Error("Failed to obtain a design run token")
+        }
+
+        setRunId(designBody.runId)
+        setPublicToken(tokenBody.token)
+      } catch {
+        // Failure before a `runId`/subscription ever existed (acceptance
+        // criterion 7) — no `useRealtimeRun` state to clear.
+        pushAgentMessage(buildDesignAgentFailureMessage())
+        setRunId(null)
+        setPublicToken(null)
+      } finally {
+        setIsSubmittingRun(false)
+      }
+    },
+    [projectId, pushAgentMessage],
+  )
 
   function handleSubmit() {
     const trimmed = input.trim()
-    if (!trimmed) return
+    if (!trimmed || isBusy) return
 
     try {
       sendMessage(trimmed)
-      setInput("")
-      setSendError(false)
     } catch {
       // Preserve the input's contents on failure (spec 25's acceptance
-      // criterion 4) — no `setInput("")` here.
+      // criterion 4) — no `setInput("")` here, and the design-agent request
+      // never starts if the prompt itself couldn't even be recorded in
+      // `ai-chat`.
       setSendError(true)
+      return
     }
+
+    setInput("")
+    setSendError(false)
+    void submitDesignRequest(trimmed)
   }
 
   function handleInputChange(event: ChangeEvent<HTMLTextAreaElement>) {
@@ -244,17 +501,17 @@ export function AiArchitectTab({
             onKeyDown={handleKeyDown}
             placeholder="Describe your system..."
             aria-label="Message Ghost AI"
-            disabled={isGenerating}
+            disabled={isBusy}
             className="min-h-[72px] max-h-[160px] resize-none overflow-y-auto text-copy-primary"
           />
           <Button
             type="button"
             size="icon"
             onClick={handleSubmit}
-            disabled={!input.trim() || isGenerating}
+            disabled={!input.trim() || isBusy}
             className="shrink-0 bg-ai text-copy-primary hover:bg-ai/80"
           >
-            {isGenerating ? <Loader2 className="animate-spin" /> : <Send />}
+            {isBusy ? <Loader2 className="animate-spin" /> : <Send />}
             <span className="sr-only">Send message</span>
           </Button>
         </div>

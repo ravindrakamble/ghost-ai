@@ -129,3 +129,19 @@ export type AiChatMessage = z.infer<typeof AiChatMessageSchema>
  * Questions #5.
  */
 export type SendChatMessage = (content: string) => void
+
+/**
+ * Function shape for pushing an AI-authored (`role: "assistant"`) message
+ * onto `ai-chat` (spec 26) — the counterpart to `SendChatMessage` above, kept
+ * as a distinct type rather than reusing it so the two send paths can never
+ * be accidentally interchanged at a call site: `SendChatMessage` always
+ * hardcodes `role: "user"` (spec 25's own acceptance criterion 7, which this
+ * spec must not weaken), while this type's own implementation
+ * (`useAiChatFeed()`'s `sendAgentMessage`) always hardcodes `role:
+ * "assistant"` and a fixed `sender`. Threaded down the same
+ * `Canvas` → `WorkspaceShell` → `AiSidebar` → `AiArchitectTab` callback-push
+ * path `SendChatMessage` already established. Same synchronous/throwing
+ * contract as `SendChatMessage` — see spec 26's Analyst Brief, Concrete
+ * deliverables.
+ */
+export type SendAgentChatMessage = (content: string) => void

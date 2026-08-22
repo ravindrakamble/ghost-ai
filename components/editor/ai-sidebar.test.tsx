@@ -1,11 +1,46 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AiSidebar } from "./ai-sidebar";
+
+// `AiArchitectTab` (spec 26) imports `useRealtimeRun` from
+// `@trigger.dev/react-hooks` — mocked here for the same reason
+// `ai-architect-tab.test.tsx` mocks it: this file's tests care about prop
+// *forwarding*, not the real Trigger.dev subscription's own behavior.
+const { useRealtimeRunMock } = vi.hoisted(() => ({
+  useRealtimeRunMock: vi.fn(),
+}));
+
+vi.mock("@trigger.dev/react-hooks", () => ({
+  useRealtimeRun: useRealtimeRunMock,
+}));
+
+beforeEach(() => {
+  useRealtimeRunMock.mockReset();
+  useRealtimeRunMock.mockReturnValue({ run: undefined, error: undefined, stop: vi.fn() });
+  // Fails closed by default (no `runId` field) — a submit triggered by these
+  // tests exercises `AiArchitectTab`'s real design-agent submit flow (spec
+  // 26) without ever reaching a real, enabled `useRealtimeRun` subscription.
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("AiSidebar", () => {
   it("renders the header (bot icon, title, subtitle) and preserves the floating/slide/border treatment", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
 
     expect(screen.getByText("AI Workspace")).toBeInTheDocument();
     expect(screen.getByText("Collaborate with Ghost AI")).toBeInTheDocument();
@@ -27,7 +62,17 @@ describe("AiSidebar", () => {
   });
 
   it("reflects isOpen via translate transform and aria-hidden when closed", () => {
-    render(<AiSidebar isOpen={false} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
+    render(
+      <AiSidebar
+        isOpen={false}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
 
     const aside = screen.getByText("AI Workspace").closest("aside") as HTMLElement;
     expect(aside.className).toContain("translate-x-full");
@@ -36,14 +81,34 @@ describe("AiSidebar", () => {
 
   it("calls onClose when the header close button is clicked", () => {
     const onClose = vi.fn();
-    render(<AiSidebar isOpen={true} onClose={onClose} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={onClose}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /close ai sidebar/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("renders exactly two tabs, AI Architect and Specs, with AI Architect active by default", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
 
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(2);
@@ -54,7 +119,17 @@ describe("AiSidebar", () => {
   });
 
   it("switches to the Specs tab content on click, distinguishing the active tab via tokens", () => {
-    render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
 
     const architectTab = screen.getByRole("tab", { name: "AI Architect" });
     const specsTab = screen.getByRole("tab", { name: "Specs" });
@@ -84,12 +159,21 @@ describe("AiSidebar", () => {
     expect(screen.getByRole("button", { name: /generate spec/i })).toBeInTheDocument();
   });
 
-  it("has no Liveblocks, /api/ai, or Trigger.dev references anywhere in its rendered output", () => {
-    const { container } = render(<AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={vi.fn()} />);
+  it("has no Liveblocks or Trigger.dev references anywhere in its rendered output", () => {
+    const { container } = render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
     const html = container.innerHTML;
 
     expect(html).not.toMatch(/liveblocks/i);
-    expect(html).not.toMatch(/\/api\/ai/i);
     expect(html).not.toMatch(/trigger\.dev/i);
   });
 
@@ -98,9 +182,11 @@ describe("AiSidebar", () => {
       <AiSidebar
         isOpen={true}
         onClose={vi.fn()}
+        projectId="p1"
         aiStatus={{ stage: "processing", text: "Designing…" }}
         chatMessages={[]}
         sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
       />,
     );
 
@@ -114,9 +200,11 @@ describe("AiSidebar", () => {
       <AiSidebar
         isOpen={true}
         onClose={vi.fn()}
+        projectId="p1"
         aiStatus={{ stage: "start", text: "Working…" }}
         chatMessages={[]}
         sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
       />,
     );
 
@@ -132,11 +220,13 @@ describe("AiSidebar", () => {
       <AiSidebar
         isOpen={true}
         onClose={vi.fn()}
+        projectId="p1"
         aiStatus={null}
         chatMessages={[
           { id: "1", sender: "Ada", role: "user", content: "Hello Ghost AI", timestamp: 1700000000000 },
         ]}
         sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
       />,
     );
 
@@ -144,10 +234,18 @@ describe("AiSidebar", () => {
     expect(screen.getByText("Ada")).toBeInTheDocument();
   });
 
-  it("forwards sendChatMessage straight through to AiArchitectTab, called with the trimmed input on submit (spec 25)", () => {
+  it("forwards sendChatMessage straight through to AiArchitectTab, called with the trimmed input on submit (spec 25)", async () => {
     const sendChatMessage = vi.fn();
     render(
-      <AiSidebar isOpen={true} onClose={vi.fn()} aiStatus={null} chatMessages={[]} sendChatMessage={sendChatMessage} />,
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={sendChatMessage}
+        sendAgentMessage={vi.fn()}
+      />,
     );
 
     const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
@@ -155,5 +253,87 @@ describe("AiSidebar", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(sendChatMessage).toHaveBeenCalledWith("Design a queue");
+
+    // Let the (stubbed, failing-closed) spec-26 design-agent submit flow
+    // settle so no state update happens after this test's own teardown.
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+  });
+
+  it("forwards projectId into AiArchitectTab's POST /api/ai/design body (spec 26)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="proj-99"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ roomId: "proj-99", projectId: "proj-99" });
+  });
+
+  it("forwards sendAgentMessage straight through to AiArchitectTab, called once its own triggered run completes (spec 26)", async () => {
+    const sendAgentMessage = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runId: "run-1" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: "token-1" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    const textarea = screen.getByLabelText(/message ghost ai/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Design a queue" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useRealtimeRunMock).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ accessToken: "token-1", enabled: true }),
+      );
+    });
+
+    useRealtimeRunMock.mockReturnValue({
+      run: { id: "run-1", isCompleted: true, isSuccess: true, error: undefined },
+      error: undefined,
+      stop: vi.fn(),
+    });
+    rerender(
+      <AiSidebar
+        isOpen={true}
+        onClose={vi.fn()}
+        projectId="p1"
+        aiStatus={null}
+        chatMessages={[]}
+        sendChatMessage={vi.fn()}
+        sendAgentMessage={sendAgentMessage}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(sendAgentMessage).toHaveBeenCalledWith(expect.stringContaining("updated the canvas"));
+    });
   });
 });

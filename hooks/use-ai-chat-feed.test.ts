@@ -106,4 +106,69 @@ describe("useAiChatFeed", () => {
       expect(firstId.id).not.toBe(secondId.id);
     });
   });
+
+  describe("sendAgentMessage (spec 26)", () => {
+    it("validates and pushes a well-formed outgoing message with role 'assistant' and a fixed sender, independent of useSelf()", () => {
+      useStorageMock.mockReturnValue([]);
+      // Different from `useSelfMock`'s configured name — proves the sender
+      // is a fixed constant, not resolved from the caller's own identity
+      // the way `sendMessage`'s is.
+      useSelfMock.mockReturnValue({ info: { name: "Ada" } });
+
+      const { result } = renderHook(() => useAiChatFeed());
+      result.current.sendAgentMessage("I've updated the canvas.");
+
+      expect(pushSpy).toHaveBeenCalledTimes(1);
+      const pushed = pushSpy.mock.calls[0]?.[0] as {
+        id: string;
+        sender: string;
+        role: string;
+        content: string;
+        timestamp: number;
+      };
+      expect(pushed).toMatchObject({
+        sender: "Ghost AI",
+        role: "assistant",
+        content: "I've updated the canvas.",
+      });
+      expect(typeof pushed.id).toBe("string");
+      expect(pushed.id.length).toBeGreaterThan(0);
+      expect(typeof pushed.timestamp).toBe("number");
+    });
+
+    it("throws before mutating when the outgoing content fails schema validation (empty content)", () => {
+      useStorageMock.mockReturnValue([]);
+
+      const { result } = renderHook(() => useAiChatFeed());
+
+      expect(() => result.current.sendAgentMessage("")).toThrow();
+      expect(pushSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not affect sendMessage's own role/sender ('user', useSelf()-resolved) — the two send paths stay independent", () => {
+      useStorageMock.mockReturnValue([]);
+      useSelfMock.mockReturnValue({ info: { name: "Ada" } });
+
+      const { result } = renderHook(() => useAiChatFeed());
+      result.current.sendAgentMessage("AI message");
+      result.current.sendMessage("User message");
+
+      const [agentPushed] = pushSpy.mock.calls[0] as [{ role: string; sender: string }];
+      const [userPushed] = pushSpy.mock.calls[1] as [{ role: string; sender: string }];
+      expect(agentPushed).toMatchObject({ role: "assistant", sender: "Ghost AI" });
+      expect(userPushed).toMatchObject({ role: "user", sender: "Ada" });
+    });
+
+    it("generates a different id for each call", () => {
+      useStorageMock.mockReturnValue([]);
+
+      const { result } = renderHook(() => useAiChatFeed());
+      result.current.sendAgentMessage("first");
+      result.current.sendAgentMessage("second");
+
+      const [firstId] = pushSpy.mock.calls[0] as [{ id: string }];
+      const [secondId] = pushSpy.mock.calls[1] as [{ id: string }];
+      expect(firstId.id).not.toBe(secondId.id);
+    });
+  });
 });

@@ -252,6 +252,7 @@ function renderCanvas(overrides: Partial<Parameters<typeof Canvas>[0]> = {}) {
     onAiStatusChange: vi.fn(),
     onChatMessagesChange: vi.fn(),
     onSendChatMessageChange: vi.fn(),
+    onSendAgentMessageChange: vi.fn(),
     ...overrides,
   };
   render(<Canvas {...props} />);
@@ -294,9 +295,10 @@ beforeEach(() => {
   // individual tests override this to exercise the push-up wiring.
   useAiStatusFeedMock.mockReturnValue(null);
 
-  // Spec 25 default: no chat messages yet, a fresh sendMessage spy —
-  // individual tests override this to exercise the bidirectional wiring.
-  useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage: vi.fn() });
+  // Spec 25/26 default: no chat messages yet, fresh sendMessage/
+  // sendAgentMessage spies — individual tests override this to exercise the
+  // bidirectional wiring.
+  useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage: vi.fn(), sendAgentMessage: vi.fn() });
   roomProviderPropsRef.current = null;
 });
 
@@ -806,7 +808,7 @@ describe("Canvas", () => {
       const messages = [
         { id: "1", sender: "Ada", role: "user" as const, content: "Hello", timestamp: 1 },
       ];
-      useAiChatFeedMock.mockReturnValue({ messages, sendMessage: vi.fn() });
+      useAiChatFeedMock.mockReturnValue({ messages, sendMessage: vi.fn(), sendAgentMessage: vi.fn() });
       const onChatMessagesChange = vi.fn();
 
       renderCanvas({ onChatMessagesChange });
@@ -816,12 +818,22 @@ describe("Canvas", () => {
 
     it("pushes useAiChatFeed's returned sendMessage function down via onSendChatMessageChange", () => {
       const sendMessage = vi.fn();
-      useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage });
+      useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage, sendAgentMessage: vi.fn() });
       const onSendChatMessageChange = vi.fn();
 
       renderCanvas({ onSendChatMessageChange });
 
       expect(onSendChatMessageChange).toHaveBeenCalledWith(sendMessage);
+    });
+
+    it("pushes useAiChatFeed's returned sendAgentMessage function down via onSendAgentMessageChange (spec 26)", () => {
+      const sendAgentMessage = vi.fn();
+      useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage: vi.fn(), sendAgentMessage });
+      const onSendAgentMessageChange = vi.fn();
+
+      renderCanvas({ onSendAgentMessageChange });
+
+      expect(onSendAgentMessageChange).toHaveBeenCalledWith(sendAgentMessage);
     });
   });
 });
