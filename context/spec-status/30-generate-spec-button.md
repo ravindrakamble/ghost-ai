@@ -123,3 +123,95 @@ None from `.claude/skills/` applied directly — no Clerk, Prisma schema/query, 
 - No `app/api/**`, `trigger/**`, `lib/spec-blob.ts`, or `prisma/schema.prisma` file is touched anywhere in this diff — confirmed by reviewing the full changed-file list above, matching this spec's own explicit Scope Limit.
 - No live Trigger.dev/Gemini/Liveblocks smoke test of this specific button click was performed in this pass (consistent with every prior spec's own disclosed limitation) — the underlying `POST /api/ai/spec`/`POST /api/ai/spec/token` routes and the `generate-spec` task were already live-verified indirectly by specs 22/23/27's own Post-PASS sections; this spec's own new surface (the button's client-side orchestration) is covered by mocked-`useRealtimeRun`/mocked-`fetch` unit tests only, the same testing posture spec 26 used for the equivalent design-agent button. Recommended as a human smoke test (click Generate Spec on a real project with a real Gemini key/Trigger.dev worker running, confirm the spec appears in the list on completion) before treating this as fully proven end to end.
 - `useProjectSpecs`'s `refetch()` is trusted as the sole "did the new spec actually land" signal, per the brief's own Dependencies section (spec 28 already guarantees persistence completes before the task reports `"complete"`) — this spec does not independently re-verify that ordering, only relies on it.
+
+## QA Report
+
+**Verdict: PASS**
+
+### Mechanical gate (independently reproduced, not trusted from the Dev report)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Clean, no errors. |
+| `npx eslint components/editor/{canvas,workspace-shell,ai-sidebar,specs-tab}.tsx` + their `.test.tsx` files | Clean, no errors/warnings. Full-repo `npx eslint .` reports errors/warnings, but they are entirely inside the gitignored `.trigger/tmp/` local dev-cache build output (confirmed identical on `main` -- same 53 errors/1339 warnings, same files) -- pre-existing environment noise unrelated to this diff, not a regression it introduced. |
+| `npx vitest run --no-file-parallelism` | 616/616 passing across 63 files -- matches the Dev's reported count exactly (up from 602/63 at the end of spec 29). |
+| `npx next build` | Succeeds (Turbopack, Compiled successfully, TypeScript pass clean, all 11 static pages generated). Route manifest still lists /api/ai/spec and /api/ai/spec/token unchanged from before this diff -- consistent with no app/api/** file being touched. |
+
+### Acceptance criteria checklist (against the raw spec's "Check When Done" + the Analyst Brief's numbered list)
+
+1. **PASS** -- `handleGenerateSpec` (`components/editor/specs-tab.tsx:232-273`) POSTs `/api/ai/spec` with `{ roomId: projectId, chatHistory: chatMessages, nodes: toGenerateSpecNodes(nodes), edges: toGenerateSpecEdges(edges) }`. `nodes`/`edges`/`chatMessages` are live values pushed up from the room via the new `onCanvasGraphChange` effect in `canvas.tsx` and the pre-existing `chatMessages` state in `workspace-shell.tsx`, not hardcoded -- confirmed by tracing the full prop chain `CanvasFlow` -> `Canvas` -> `WorkspaceShell` -> `AiSidebar` -> `SpecsTab`, and by `workspace-shell.test.tsx`'s/`ai-sidebar.test.tsx`'s new tests asserting the converted request body reflects simulated live canvas state.
+2. **PASS** -- on a successful `POST /api/ai/spec`, `POST /api/ai/spec/token` is called with `{ runId }`, and `runId`/`publicToken` feed `useRealtimeRun(runId, { accessToken: publicToken, enabled: ... })` -- same two-call-plus-subscribe sequence as `ai-architect-tab.tsx`, verified line-for-line against that file.
+3. **PASS** -- `isBusy = isSubmittingRun || (runId !== null && !isRunSettled)` covers both the pre-runId POST/token window (`isSubmittingRun`) and the `useRealtimeRun`-tracked window (`runId !== null && !isRunSettled`); button is `disabled={isBusy}` and swaps in a `Loader2` spinner. Verified by `specs-tab.test.tsx`'s "disables the button and shows a spinner immediately on click, before the two POSTs settle" and "keeps the button disabled/busy while the triggered run is in flight" tests.
+4. **PASS** -- no other element in the render tree reads `isBusy`/`isSubmittingRun`; the spec list, preview modal open handler, and download `<a href download>` links are all rendered unconditionally regardless of busy state. Verified directly in code and by `specs-tab.test.tsx`'s "does not disable or dim the existing spec list, preview, or download actions while a run is in flight" test, which clicks a list item and opens the preview modal while a `/api/ai/spec` call is deliberately left unresolved.
+5. **PASS** -- the completion effect calls `void refetch()` inside `if (realtimeRun.isSuccess)`, `refetch` sourced from `useProjectSpecs`. Verified by the "calls useProjectSpecs's refetch and clears runId/publicToken once the run completes successfully" test, which asserts a second `GET /api/projects/p1/specs` call fires after the mocked run settles as successful.
+6. **PASS** -- all three failure modes produce a visible inline error near the button (`text-state-error`/`AlertCircle`, `generateError` state): initial POST failure, token-exchange failure (both caught in `handleGenerateSpec`'s single try/catch), and the run itself settling `isSuccess: false` (handled in the completion effect via `buildGenerateSpecFailureMessage(realtimeRun.error?.message)`). All three covered by dedicated `specs-tab.test.tsx` tests.
+7. **PASS** -- `setRunId(null)`/`setPublicToken(null)` run unconditionally at the end of both the completion effect (success and failure) and the catch block of `handleGenerateSpec` (pre-runId failure) -- genuinely mirrors the spec-26 stale-run bugfix. Verified by tests asserting `useRealtimeRunMock` is last called with `(undefined, { accessToken: undefined, enabled: false })` after settling on both branches, and by the "clears a stale error once a fresh Generate Spec click is made" test confirming a second click is a genuinely new run, not stuck on stale state.
+8. **PASS** -- `git diff main...spec/30-generate-spec-button --stat -- app/api trigger prisma/schema.prisma` returns empty; confirmed no file under any of those paths appears anywhere in this diff.
+9. **PASS** -- grepped the diff; no Blob/filePath reference exists anywhere in the changed files. The one existing download anchor (spec 29, unmodified in shape) already only ever points at the access-checked download route, never a raw Blob URL.
+10. **PASS** -- `git diff main...spec/30-generate-spec-button -- components/editor/ai-architect-tab.tsx app/api/ai/design*` returns empty; the design-agent flow is untouched.
+11. **PASS** -- `ai-sidebar.tsx`'s header/tab-trigger structure is unchanged except for straight prop pass-through; `specs-tab.tsx`'s list/preview-modal/download JSX is unchanged in shape from spec 29 aside from the new button-adjacent error block above it.
+12. **PASS** -- see Mechanical gate table above; independently reproduced, not taken on the report alone.
+
+### Architecture invariants (context/architecture-context.md)
+
+- Invariant 1 (no long-lived AI work in request handlers) -- N/A; no route handler touched or added, and the client only triggers/subscribes to an already-existing background task.
+- Invariant 2 (metadata vs. artifact storage separation) -- respected; this diff never reads ProjectSpec.filePath or constructs a Blob URL client-side.
+- Invariant 3 (auth/ownership at every mutation boundary) -- N/A to this diff's own new surface (no new mutation endpoint added); the two reused routes (POST /api/ai/spec, POST /api/ai/spec/token) already enforce ownership as of spec 27/28, unmodified here.
+- Invariant 4 (client components only where interactivity/real-time state requires) -- all touched files are already "use client"; no new server/client boundary crossed.
+- Invariant 5 (canvas schema consistency) -- N/A; this diff only reads CanvasNode/CanvasEdge, never writes to the canvas.
+
+### Standards compliance (context/code-standards.md)
+
+- No `any` anywhere in the diff (grepped specs-tab.tsx, canvas.tsx, workspace-shell.tsx, ai-sidebar.tsx directly).
+- No raw Tailwind color classes (zinc-/slate-/gray-) or hex literals in any changed component file -- grepped directly; the one substring hit (translate-x-full in ai-sidebar.tsx, pre-existing, untouched by this diff) is a false positive of the search pattern, not a color class.
+- components/ui/* untouched (git diff main...spec/30-generate-spec-button --stat -- components/ui empty) -- the brief did not call for changes there.
+- `interface` used for all new prop/payload shapes (SpecsTabProps, the extended AiSidebarProps/WorkspaceShellProps), matching the "use interface for object contracts" convention.
+- `toGenerateSpecNodes`/`toGenerateSpecEdges` output shape checked directly against `trigger/generate-spec.ts`'s real GenerateSpecGraphNodeSchema/GenerateSpecGraphEdgeSchema (not just trusted from the report): `{ id, label, shape, x, y }` and `{ id, sourceNodeId, targetNodeId, label? }` match field-for-field, including `label` being required (non-optional) on the node schema -- CanvasNodeData.label is always a string, never undefined, so this holds.
+- GenerateSpecGraphNode/GenerateSpecGraphEdge imported as `import type` from lib/generate-spec-ai.ts (confirmed at specs-tab.tsx line 13), not trigger/generate-spec.ts -- keeps this components/* file's import graph off trigger/* even at the type-only level, per Open Questions #5.
+
+### Error handling
+
+- Bad/failing initial POST, failing token exchange, and a run settling as failed/errored are all handled distinctly but converge on the same visible inline-error UX -- none silently swallowed (see acceptance criterion 6 above).
+- Empty canvas (no nodes/edges): no client-side minimum-node guard exists, per Open Questions #8's resolution; toGenerateSpecNodes([])/toGenerateSpecEdges([]) both return [], which passes z.array(...)'s no-minimum-length schema cleanly -- the request is still sent, consistent with the brief's explicit "no new validation rule" recommendation. Nothing about this diff's own surface needs an additional guard for that case.
+- Malformed/non-JSON response bodies from either POST are tolerated via parseJsonBody's try/catch-to-null, then rejected by the isRunIdBody/isTokenBody shape checks before ever being trusted -- same convention as ai-architect-tab.tsx.
+
+### Housekeeping
+
+context/progress-tracker.md was updated to an accurate "Phase 30 implemented, awaiting QA" state, matching what was actually built -- appropriate for this stage of the pipeline (not yet marked Completed, since QA was still pending at commit time).
+
+### Notes
+
+- The one deliberate deviation from ai-architect-tab.tsx's exact statement shape (computing generateError's value via a ternary before a single unconditional setGenerateError call, rather than a setState call inside each if/else branch, to satisfy react-hooks/set-state-in-effect) was verified to preserve identical behavior: error is set to a message on failure, null on success, in both cases exactly once per run via the handledRunIdRef guard.
+- No live Trigger.dev/Gemini smoke test was performed by this QA pass either, consistent with the disclosed limitation in Dev Notes and every prior spec's testing posture at this stage -- recommended as a human smoke test before this is treated as fully proven end to end in production.
+
+QA passed -- ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent re-verification (not trusting Dev/QA claims)
+
+- `git diff main...spec/30-generate-spec-button --stat` reproduced directly: only `components/editor/{ai-sidebar,canvas,specs-tab,workspace-shell}.tsx` and their four matching `.test.tsx` files, plus `context/feature-specs/30-generate-spec-button.md` (new raw spec text), `context/progress-tracker.md`, and this status file, changed. `git diff main...spec/30-generate-spec-button -- app/api trigger prisma/schema.prisma lib/spec-blob.ts lib/generate-spec-ai.ts app/api/ai/design components/editor/ai-architect-tab.tsx lib/design-agent-ai.ts lib/design-agent-room.ts` returns zero lines — independently confirms both this spec's own Scope Limits and its Out-of-Scope callouts against the design-agent flow. No `components/ui/*` file touched either.
+- Read `components/editor/specs-tab.tsx` in full: `handleGenerateSpec` posts `{ roomId: projectId, chatHistory: chatMessages, nodes: toGenerateSpecNodes(nodes), edges: toGenerateSpecEdges(edges) }` to `/api/ai/spec`, matching `SpecRequestBodySchema` in `app/api/ai/spec/route.ts` (`roomId`, `chatHistory`, `nodes`, `edges`) field-for-field — confirmed by reading the route directly, not assumed. The two-call trigger/token/`useRealtimeRun` sequence, `isRunSettled`/`isBusy` guards, completion effect with `handledRunIdRef`, and inline-error UX all genuinely mirror `ai-architect-tab.tsx`'s established pattern, not just in description.
+- Read the `canvas.tsx`, `workspace-shell.tsx`, and `ai-sidebar.tsx` diffs directly: the `onCanvasGraphChange(nodes, edges)` push-up is a plain `useEffect` inside `CanvasFlow` structurally identical to the existing `onChatMessagesChange` effect; `WorkspaceShell` owns new `canvasNodes`/`canvasEdges` `useState<CanvasNode[]>([])`/`useState<CanvasEdge[]>([])` (no Context/store); `AiSidebar` forwards `canvasNodes`/`canvasEdges`/`chatMessages` straight through to `SpecsTab` with no new state of its own. This is a faithful, minimal instance of the established callback-push-up convention, not a new mechanism.
+- **Conversion fidelity, checked directly**: `toGenerateSpecNodes`/`toGenerateSpecEdges` in `specs-tab.tsx` map `CanvasNode`/`CanvasEdge` (`types/canvas.ts`) to `GenerateSpecGraphNode`/`GenerateSpecGraphEdge` (`lib/generate-spec-ai.ts`, read directly — `{ id, label, shape, x, y }` / `{ id, sourceNodeId, targetNodeId, label? }`). Field-for-field match confirmed by reading both type definitions side by side. The only fields dropped are `CanvasNodeData.color`/`textColor` — confirmed via `lib/generate-spec-ai.ts`'s own docblock that this narrower shape is deliberately "not a 1:1 replica" of the full canvas node, since visual styling is irrelevant to summarizing a graph for Markdown generation. This is a faithful, non-lossy mapping of everything that actually matters for spec generation (structure, labels, connectivity, position) — not an incomplete or hasty conversion.
+
+### Judgment against `project-overview.md`
+
+- This spec is the one spec 29's own Product Owner Review flagged as the real remaining product gap: "no spec currently defined wires the button, so the full generate -> view loop isn't reachable end-to-end from the UI yet." Spec 30 closes exactly that gap. A signed-in user can now, from the actual rendered UI with no manual API call: describe a system, watch the AI populate the canvas (spec 26), refine it with collaborators (specs 11-19), click "Generate Spec," watch the button reflect a real in-flight run, see the new spec appear in the list without a reload, preview it, and download it (spec 29). This is a genuine, substantive strengthening of Success Criterion 5 ("The graph can be converted into a persisted Markdown spec") — the operative word "converted" now happens via a real user action in the product, not a technicality or a re-badging of already-existing backend capability.
+- This is also the first spec in the pipeline where the full Core User Flow (steps 5 through 10 in `project-overview.md`) is reachable end to end from the UI in one continuous session — worth calling out explicitly as a milestone, not just another incremental spec, consistent with how spec 26 was called out for closing the design-generation half of the same loop.
+- No Out-of-Scope crossing: no billing/subscription, permission-tier, spec-versioning, storage-migration, or mobile work anywhere in this diff, and the `project-overview.md` Out of Scope wall is untouched.
+- The diff also respects its own spec's Scope Limits and Out-of-scope callouts throughout (no backend/Trigger.dev/Prisma/design-agent file touched, no direct Blob access, no sidebar/tab redesign, no new global state) — independently verified above, not just taken from Dev/QA's word.
+
+### `progress-tracker.md` accuracy
+
+At the time of this review, `progress-tracker.md`'s Current Phase/Current Goal/In Progress sections describe spec 30 as "implemented, awaiting QA" — accurate as of when QA started, but now stale (QA has since passed). This review updates those sections below to move spec 30 into Completed, matching what QA actually verified (all 12 acceptance criteria, full mechanical gate) and what this review independently re-confirmed — not an aspirational rewrite.
+
+### Outstanding, non-blocking
+
+- Per both Dev Notes and QA's own disclosure, no live Trigger.dev/Gemini smoke test of this specific button click was performed — the new client-side orchestration is covered by mocked-`useRealtimeRun`/mocked-`fetch` unit tests only, the same testing posture spec 26 used for the equivalent design-agent button (and which a subsequent live smoke test later validated for that spec). Recommended as a human smoke test — click "Generate Spec" on a real project with a real Gemini key/Trigger.dev worker running, confirm the spec appears in the list on completion — before treating the full generate -> persist -> view -> download loop as fully proven end to end in production. Not a blocker for this recommendation.
+
+### PR
+
+- Branch `spec/30-generate-spec-button` confirmed ahead of `main` (1 commit, `7818dc8`, containing the raw spec text, Dev Notes, implementation, and tests).
