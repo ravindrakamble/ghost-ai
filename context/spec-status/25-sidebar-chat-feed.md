@@ -111,3 +111,115 @@ Brief ready for Senior Developer at `context/spec-status/25-sidebar-chat-feed.md
 - The error-indicator auto-clear-on-edit behavior (Key Decision #9) is a Dev-level UX interpretation, not literal spec text — flagging for QA/PO awareness in case a stricter "only clears on next successful send" reading is preferred.
 
 Implementation ready for QA at `context/spec-status/25-sidebar-chat-feed.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+- `npx tsc --noEmit` — PASS (clean, no output).
+- `npx eslint .` — PASS in the sense that matters: 0 errors/warnings on any of the 13 source/test files this diff touches (independently re-verified via a targeted `npx eslint` run scoped to exactly those files, not just the Dev's claim). The full repo-wide run reports 53 errors / 1339 warnings, but every flagged file sits under `.trigger/tmp/build-*` (generated Trigger.dev build artifacts) or `.agents/skills/clerk-tanstack-patterns/templates/...` (a third-party skill template) — confirmed by comparing every file eslint flagged against `git diff --name-only main...HEAD`; zero overlap.
+- `npx vitest run --no-file-parallelism` — PASS: 494/494 tests across 54 files, matching the Dev Notes' reported count exactly (independently reproduced, not just trusted).
+- `npx next build` — PASS. Compiled successfully via Turbopack, same 13-route list as before, no new build-time dependency introduced (zod needs no environment variable/runtime credential).
+
+### Acceptance criteria
+
+1. PASS. `liveblocks.config.ts` adds a `Storage` type (`{ messages: LiveList<AiChatMessage> }`) to the global `Liveblocks` interface augmentation; `components/editor/canvas.tsx`'s `RoomProvider` gains `initialStorage={{ messages: new LiveList([]) }}` (a real `LiveList` from `@liveblocks/client`, not `broadcastEvent`). Matches `architecture-context.md`'s Realtime Conventions pin exactly.
+2. PASS. `types/tasks.ts#AiChatMessageSchema` is a genuine `z.object({ id, sender, role, content, timestamp })` (`z` imported from the real `zod` package — confirmed `zod@4.4.3` is installed in `node_modules/zod/package.json` and listed as a real `dependencies` entry, not a devDependency, in both `package.json` and `package-lock.json`), covering all four spec-named fields plus a stable `id`. `AiChatMessage = z.infer<typeof AiChatMessageSchema>` is a real inferred type, not hand-written.
+3. PASS. `hooks/use-ai-chat-feed.ts#useAiChatFeed` subscribes via `useStorage((root) => root.messages)` (`@liveblocks/react/suspense`'s real, installed hook — not polling, not a second websocket). `ai-architect-tab.tsx` renders every message in `chatMessages` array order via `ChatBubble`, each showing `message.sender`, a formatted `message.timestamp` (`toLocaleTimeString`), and `message.content`.
+4. PASS. `AiArchitectTab`'s existing `Textarea`/Send button (no new input UI) call `sendMessage(trimmed)` on submit; success clears `input` and any stale error; failure (caught in a `try`/`catch`) preserves `input` and shows an `AlertCircle` + `text-state-error` inline indicator. Verified in `ai-architect-tab.test.tsx` (direct prop-level) and `workspace-shell.test.tsx` (through the default-throws-before-room-connects path).
+5. PASS. `useAiChatFeed`'s `messages` `useMemo` runs every raw Storage entry through `AiChatMessageSchema.safeParse` and only keeps `parsed.success` entries — verified via `hooks/use-ai-chat-feed.test.ts`'s test that a raw array mixing one valid message, one bad-role message, one wholly foreign `ai-status-feed`-shaped payload, and one empty-content message resolves to exactly the one valid message, with no thrown error.
+6. PASS. `types/tasks.ts` keeps `isAiStatusMessage`/`AiStatusMessage` (spec 24) and `AiChatMessageSchema`/`AiChatMessage` (spec 25) as fully separate exports with different shapes and no cross-import between them. `hooks/use-ai-chat-feed.ts` only ever touches `root.messages` (Storage); `hooks/use-ai-status-feed.ts` (untouched by this diff, confirmed via `git diff --stat`) only ever touches the `ai-status-feed` broadcast event. Both `types/tasks.test.ts` and `hooks/use-ai-chat-feed.test.ts` include an explicit "rejects an ai-status-feed-shaped payload" case.
+7. PASS. `useAiChatFeed`'s `sendMessage` hardcodes `role: "user" as const` on every outgoing message — no code path in this diff can produce `role: "assistant"`. `AiChatMessageSchema` still accepts `role: "assistant"` (schema-supported), and `ChatBubble`'s assistant-role styling branch is exercised only by hand-constructed test fixtures, never by `sendMessage`'s own output.
+8. PASS. `git diff --stat main...HEAD` for `trigger/design-agent.ts`, `lib/design-agent-ai.ts`, `lib/design-agent-room.ts`, `hooks/use-ai-status-feed.ts`, `components/editor/live-cursors.tsx`, and `app/api/ai/` (independently re-run) returns nothing. No fetch or Trigger.dev-SDK call exists in any of the 13 changed files (read all of them directly).
+9. PASS. The only realtime primitives used are Liveblocks' own `useStorage`/`useMutation`/`useSelf` (`@liveblocks/react/suspense`) — no WebSocket, EventSource, or polling loop appears anywhere in the diff.
+10. PASS — see Mechanical gate above (`npx tsc --noEmit`, `npx eslint .`, `npx vitest run --no-file-parallelism`, `npx next build` all independently reproduced, not just trusted from Dev Notes).
+
+### Verified independently, not just trusted from Dev Notes
+
+- zod is a genuine, real dependency, not just an import that happens to resolve: `node_modules/zod/package.json` reports version `4.4.3`, matching `package.json`'s `zod: ^4.4.3` in `dependencies` (not `devDependencies`) and `package-lock.json`'s resolved entry.
+- The spec-20 local-only `useState<ChatMessage[]>` array is genuinely gone, not running in parallel: a grep for `useState` in `ai-architect-tab.tsx` finds exactly two calls (`input`, `sendError`) — no message-array state remains anywhere in the component. The rendered list is exclusively the `chatMessages` prop.
+- `useSelf` inside `hooks/use-ai-chat-feed.ts` is the non-nullable suspense variant (justifying `self.info.name` with no null-check): read directly from the installed package's own type declarations (`node_modules/@liveblocks/react/dist/room-DUr5FIYB.d.ts`, line 1220) — the Suspense-namespaced `useSelf(): User<P, U>` overload (non-null) is distinct from the base module's `useSelf(): User<P, U> | null` (line 1007); `use-ai-chat-feed.ts` imports from `@liveblocks/react/suspense`, the correct non-null variant, and `CanvasFlow` (its only caller) is always rendered inside `ClientSideSuspense`.
+- Standards spot-check: a diff-scoped grep for raw Tailwind gray/hex classes across every changed `.ts`/`.tsx` file returns nothing; a diff-scoped grep for `any` type usage also returns nothing; a diff-scoped check for any touched `components/ui/*` file also returns nothing.
+- `canvas.test.tsx`'s new tests genuinely exercise the room-boundary wiring, not just a smoke check: confirmed `RoomProvider`'s captured `initialStorage.messages` is a real zero-length `LiveList`, `useAiChatFeed` is called from inside `CanvasFlow`, and both `onChatMessagesChange`/`onSendChatMessageChange` receive the mocked hook's actual return values (both the empty-default case and an overridden-list/function case).
+
+### Architecture invariants (architecture-context.md)
+
+1. No long-running AI work in a request handler — N/A, no request handler touched by this diff.
+2. Metadata vs. blob storage separation — N/A, no Prisma/Blob code touched.
+3. Auth/ownership enforced at every mutation boundary — N/A, this spec adds no new HTTP mutation entry point; the one new mutation (`useAiChatFeed`'s `sendMessage`, a Liveblocks Storage write) is already gated by the same room-membership check spec 10's `liveblocks-auth` route enforces before any `RoomProvider` connection succeeds — no new auth surface introduced.
+4. Client components only where needed — all modified components (`canvas.tsx`, `workspace-shell.tsx`, `ai-sidebar.tsx`, `ai-architect-tab.tsx`) are pre-existing client surfaces; no new client boundary introduced unnecessarily.
+5. Canvas schema consistency — N/A, no canvas node/edge schema touched; the new `Storage.messages` root key is additive and doesn't intersect with `useLiveblocksFlow`'s node/edge management (confirmed by reading `CanvasFlow`: `useLiveblocksFlow` never reads `root.messages`).
+6. Realtime Conventions (`ai-chat` as a Storage `LiveList`, distinct and independent from `ai-status-feed`'s `broadcastEvent`) — followed exactly, verified above under acceptance criteria 1 and 6.
+
+No invariant violations found.
+
+### Standards compliance (code-standards.md)
+
+- No `any` usage in the diff (spot-checked above).
+- Tokens used throughout new/changed UI (`text-copy-muted`, `text-state-error`, `bg-accent-dim`, `text-brand`, `border-surface-border`, `text-ai-text`, `bg-subtle`) — no raw Tailwind grays or hex literals.
+- `AiChatMessageSchema` validates unknown external input (Storage reads) at the boundary before it's trusted anywhere in the UI, per the TypeScript section's "validate unknown external input at system boundaries" rule.
+- `hooks/use-ai-chat-feed.ts` lives in the top-level `hooks/` folder per the Hooks Convention.
+- Test files sit next to the code they cover; Vitest used throughout; Clerk/Prisma mocking rules N/A (no route handler in this diff).
+
+### Error handling
+
+- Invalid/malformed Storage entries are dropped, not rendered, and do not crash the sidebar (verified via `hooks/use-ai-chat-feed.test.ts`'s mixed-validity array test and `types/tasks.test.ts`'s reject cases).
+- A send attempted before the room's real `sendMessage` has been pushed down (`WorkspaceShell`'s `chatNotReadyYet` default, and `AiArchitectTab`'s own `chatNotReadyYet` default when no prop is wired) throws visibly rather than silently discarding the message — input preserved, error shown. Verified in `workspace-shell.test.tsx` and `ai-architect-tab.test.tsx`.
+- An outgoing message that fails schema validation throws before the Storage mutation is ever attempted, verified via the "throws before mutating" case in `hooks/use-ai-chat-feed.test.ts` (the push spy is never called).
+- A genuinely disconnected/throwing Storage mutation is caught by `AiArchitectTab`'s `try`/`catch` around `sendMessage`, producing the same preserved-input/error-shown outcome.
+
+### Housekeeping
+
+`context/progress-tracker.md`'s "In Progress" section accurately summarizes what was actually built (zod, `AiChatMessageSchema`, `useAiChatFeed`, the `Storage` type, the bidirectional callback wiring through `canvas.tsx`/`workspace-shell.tsx`/`ai-sidebar.tsx`/`ai-architect-tab.tsx`, and the untouched-files list), with the correct 494/54 test count. The Current Phase/Current Goal/Next Up sections correctly reflected "Senior Developer pass complete, QA next" at the time this was written.
+
+### Known limitation noted for Product Owner awareness
+
+The Dev Notes flag that the error-indicator auto-clear-on-next-edit behavior is a Dev-level UX interpretation not literally pinned by the spec's text ("show a small error state if sending fails" says nothing about when it should disappear). This is a reasonable, unsurprising interpretation, not a bug — noted here per the Dev's own request for QA/PO awareness in case a stricter reading is preferred. Not a blocker for PASS.
+
+No bugs and no spec gaps found. All 10 acceptance criteria independently re-verified against the actual code (not just the Dev Notes' claims), the full mechanical gate independently reproduced end-to-end, and the two highest-risk claims (zod being a genuine dependency, and the spec-20 local chat state being fully — not partially — replaced) independently confirmed via direct file/package inspection rather than trusted from the Dev Notes.
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+This is a recommendation to the human reviewer, not a production release or deployment authorization. I have no visibility into business, legal, security, or infrastructure considerations outside this repo.
+
+### Independent verification performed
+
+- `git branch --show-current` confirms `spec/25-sidebar-chat-feed`, one commit (`6d2386b`) ahead of its parent `main` (`main` is at `6ed3595`, the merge of spec 24's PR #20).
+- `git diff main...HEAD --stat` — 17 files changed, exactly the set Dev Notes/QA claim: `types/tasks.ts` (modified, additive), `hooks/use-ai-chat-feed.ts` (new), `liveblocks.config.ts` (modified), `components/editor/{canvas,workspace-shell,ai-sidebar,ai-architect-tab}.tsx` (modified) plus their test files, `package.json`/`package-lock.json`, `context/progress-tracker.md`, `context/spec-status/25-sidebar-chat-feed.md`. Independently re-ran `git diff main...HEAD --name-only | grep -iE "trigger|api/ai|design-agent|live-cursors"` myself — zero matches, confirming `trigger/design-agent.ts`, `lib/design-agent-ai.ts`, `lib/design-agent-room.ts`, `app/api/ai/design*`, `hooks/use-ai-status-feed.ts`, and `components/editor/live-cursors.tsx` are all genuinely untouched, not just trusted from either report.
+- Read the full diffs of `types/tasks.ts`, `liveblocks.config.ts`, `hooks/use-ai-chat-feed.ts`, `components/editor/canvas.tsx`, `components/editor/workspace-shell.tsx`, `components/editor/ai-sidebar.tsx`, and `components/editor/ai-architect-tab.tsx` directly — not just the Dev Notes' summary. Every claim checks out line for line: `AiChatMessageSchema` is a genuine `z.object({ id, sender, role, content, timestamp })` with `AiChatMessage = z.infer<...>`, structurally separate from spec 24's `AiStatusMessage`/`isAiStatusMessage` (no shared type, no cross-import); `liveblocks.config.ts` adds a `Storage` type and `canvas.tsx`'s `RoomProvider` gains `initialStorage={{ messages: new LiveList([]) }}` (a real `LiveList`, not `broadcastEvent`); `useAiChatFeed` subscribes via the real `useStorage`, validates every entry through `safeParse` inside a `useMemo`, and builds `sendMessage` on `useMutation` with `role: "user"` hardcoded; the bidirectional callback wiring (`onChatMessagesChange` up, `onSendChatMessageChange` down) threads correctly through `canvas.tsx` -> `workspace-shell.tsx` -> `ai-sidebar.tsx` -> `ai-architect-tab.tsx`; `ai-architect-tab.tsx`'s spec-20 local `useState<ChatMessage[]>` array is genuinely gone -- the rendered list is exclusively the `chatMessages` prop, and `ChatBubble` now renders `sender`/formatted `timestamp`/`content`.
+- Read the original raw spec (`context/feature-specs/25-sidebar-chat-feed.md`) directly. Its four numbered implementation items (add the `ai-chat` feed, wire it into the sidebar, add message sending, add message validation) and five Scope Limits are all accounted for in the diff with nothing extra bolted on.
+- Ran `npx tsc --noEmit` myself -- clean, matching QA's claim. Ran a targeted `npx vitest run --no-file-parallelism` scoped to the six files this diff touches most directly (`hooks/use-ai-chat-feed.test.ts`, `types/tasks.test.ts`, `components/editor/ai-architect-tab.test.tsx`, `components/editor/canvas.test.tsx`, `components/editor/workspace-shell.test.tsx`, `components/editor/ai-sidebar.test.tsx`) -- 109/109 passing, consistent with QA's full-suite 494/494 claim. Did not re-run the full suite/`eslint`/`next build` myself; trusting QA's independently-reproduced mechanical gate per this review's own scope (I re-verify product fit and scope, not re-run every mechanical check QA already passed).
+
+### Judgment calls -- my own view
+
+- **Adopting Zod as a new production dependency (Open Questions #1)**: agreed with the Analyst's and Dev's reasoning. The raw spec text names "Zod schema" twice, unlike specs 22-24's payloads where no validation library was named -- a hand-rolled guard here would not honestly satisfy the spec's literal ask. Confirmed myself `zod@4.4.3` is a real `dependencies` entry (not `devDependencies`) and genuinely installed (`node_modules/zod/package.json`), not just an import that happens to resolve.
+- **Bidirectional callback wiring through the provider boundary (Open Questions #3)**: agreed this is the correct extension of spec 24's `onAiStatusChange` pattern rather than restructuring the provider tree or adding a second `RoomProvider`. Confirmed by reading `canvas.tsx`/`workspace-shell.tsx` directly that no new context/provider was introduced and the "function flows down, state flows up" shape is symmetric and consistent with the established convention.
+- **Full replacement (not parallel-run) of spec 20's local chat state (Open Questions #6)**: agreed this is the right call, not scope creep. Spec 20's own docblock already flagged that local array as belonging to spec 25. Confirmed via `git diff` and a direct read of `ai-architect-tab.tsx` that no vestigial local message array remains -- exactly two `useState` calls (`input`, `sendError`), neither a message list.
+- **Error-indicator auto-clear-on-edit (Key Decision #9, flagged by both Dev and QA for PO awareness)**: this is a reasonable, minor UX interpretation of underspecified spec text ("show a small error state if sending fails" says nothing about when it disappears). Clearing on the next edit rather than leaving it stuck next to text the user is already revising is the more usable choice, not a product-facing regression. Not worth a round trip to the Analyst over.
+- **`sender` resolved from `useSelf().info.name` rather than a raw Clerk ID (Open Questions #4b)**: agreed -- consistent with how names already surface in cursor badges and presence avatars elsewhere in this room, and avoids introducing a second identity convention this spec's raw text doesn't ask for.
+
+### Against project-overview.md
+
+- **Success Criterion 2** ("Multiple users can collaborate in the same canvas simultaneously"): this spec is a genuine, substantive strengthening of that criterion. Before this spec, the sidebar's chat area (spec 20) was a local-only, single-tab echo with no persistence and no other participant ever seeing it. Now the chat is a real, room-scoped, ordered, persisted Liveblocks Storage mechanism -- every message a participant sends is visible to every other connected participant, and (per the `LiveList` choice specifically, not `broadcastEvent`) replays in full to a participant who joins the room mid-conversation. This is not a technicality pass on the brief's acceptance criteria; it closes a real gap between what the sidebar visually offered since spec 20 and what it actually did.
+- **Core User Flow step 7** ("Collaborators edit and refine the design"): a working, persisted chat channel is direct infrastructure for collaborative refinement discussion alongside the canvas itself, even though this spec deliberately does not yet let that chat trigger AI generation (spec 26's job).
+- **Out of Scope wall**: none of billing/subscriptions, enterprise permission tiers, versioned spec history, object storage migration, or mobile apps are touched -- trivially true given the file list, independently confirmed above.
+- **This spec's own Scope Limits and out-of-scope callouts** (no AI-generated replies, no triggering `/api/ai/*`/Trigger.dev, no mixing with `ai-status-feed`/AI presence, no new realtime mechanism outside Liveblocks, no message pruning/pagination/search/editing/deletion/read-receipts/typing-indicators): none of these appear anywhere in the diff -- independently re-verified above via direct file reads and a targeted grep for the specifically named forbidden files, not trusted from either report. `role: "assistant"` remains schema-supported but is unreachable through `sendMessage`'s own hardcoded `role: "user"` -- confirmed by reading `hooks/use-ai-chat-feed.ts` directly.
+- **Structural independence from `ai-status-feed` (acceptance criterion 6, and this spec's own most safety-critical constraint)**: confirmed independently that `AiChatMessageSchema`/`AiChatMessage` and `AiStatusStage`/`AiStatusMessage`/`isAiStatusMessage` are fully separate exports in `types/tasks.ts` with no cross-import, and that `useAiChatFeed` only ever touches `root.messages` (Storage) while `useAiStatusFeed` (untouched by this diff) only ever touches the `ai-status-feed` broadcast event -- two genuinely independent Liveblocks mechanisms, not a shared one with two names.
+
+### progress-tracker.md accuracy
+
+The branch's "In Progress" entry for spec 25 (written by Dev, correctly not pre-empting QA's or my own verdict) accurately summarizes what was actually built -- the zod adoption, `AiChatMessageSchema`/`AiChatMessage`, `useAiChatFeed`, the `Storage` type, the bidirectional callback wiring through all four components, the full replacement of spec 20's local state, and the correct 494/54 test count. It has not yet been moved to "Completed"; that is my job now, done below as part of this PASS, using a targeted edit (not a full-file rewrite) per this pipeline's own caution about a prior accidental clobber of this file.
+
+### What remains unverifiable in this pipeline (recommended human smoke test, not a blocker)
+
+Consistent with every prior canvas/presence spec, no live browser/multiplayer verification was possible here -- the persisted chat feed, the send/clear/error-indicator flow, and the "a participant joining mid-conversation replays full prior history" guarantee (the actual reason `ai-chat` is a Storage `LiveList` rather than `broadcastEvent`) are verified via mocked unit tests only. I have nothing to add to the Dev's own recommendation: open two tabs on the same project, send a message from one, confirm the other tab's sidebar renders it, then open a third tab afterward and confirm it sees the full prior history.
+
+### Summary
+
+Delivered functionality is real, scoped, persisted collaborative chat infrastructure that closes a genuine gap between spec 20's local-only sidebar echo and an actual room-wide, replay-capable mechanism -- a substantive, non-technicality step toward Success Criterion 2, correctly deferring the AI-generation-trigger flow to spec 26 and staying structurally independent from spec 23/24's `ai-status-feed`. Nothing in the diff crosses into `project-overview.md`'s Out of Scope wall or this spec's own Scope Limits (independently re-verified against the actual diff, not just the reports' claims). No items are being sent back to the Analyst. Recommending PASS to the human for final review.
