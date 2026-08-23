@@ -6,6 +6,7 @@ import { NodeColorToolbar } from "@/components/editor/node-color-toolbar"
 import { ShapeVisual } from "@/components/editor/shape-visual"
 import { useUpdateCanvasNode } from "@/hooks/use-update-canvas-node"
 import { NODE_MIN_SIZE } from "@/lib/canvas-shapes"
+import { cn } from "@/lib/utils"
 import { type CanvasNode as CanvasNodeType, type NodeColorPair } from "@/types/canvas"
 
 /**
@@ -108,10 +109,20 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
             `nodrag`/`nopan` — React Flow's own convention for interactive
             content inside a node (also used internally by `NodeResizer`'s
             own controls) — keeps clicking, selecting text, and typing here
-            from starting a node drag or canvas pan.
+            from starting a node drag or canvas pan. `h-full w-full` is only
+            applied while `isEditing`: for a CSS-rendered shape (rectangle/
+            pill/circle, see `shape-visual.tsx`) that box IS the entire node,
+            so keeping it full-size at rest made the whole shape undraggable
+            — only the `<textarea>` genuinely needs the full node as its
+            nodrag/nopan hit area; the rest-state label should shrink to its
+            own text so the surrounding shape stays grabbable, matching how
+            the SVG-shape branch (diamond/hexagon/cylinder) already behaves.
           */}
           <div
-            className="nodrag nopan flex h-full w-full min-w-0 items-center justify-center"
+            className={cn(
+              "nodrag nopan flex min-w-0 items-center justify-center",
+              isEditing && "h-full w-full",
+            )}
             onDoubleClick={handleDoubleClick}
           >
             {isEditing ? (
