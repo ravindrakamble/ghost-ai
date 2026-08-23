@@ -24,7 +24,7 @@ vi.mock("@liveblocks/react/suspense", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useSelfMock.mockReturnValue({ info: { name: "Ada" } });
+  useSelfMock.mockReturnValue("Ada");
 });
 
 describe("useAiChatFeed", () => {
@@ -66,7 +66,7 @@ describe("useAiChatFeed", () => {
   describe("sendMessage", () => {
     it("validates and pushes a well-formed outgoing message, resolving sender from useSelf().info.name with role 'user'", () => {
       useStorageMock.mockReturnValue([]);
-      useSelfMock.mockReturnValue({ info: { name: "Ada" } });
+      useSelfMock.mockReturnValue("Ada");
 
       const { result } = renderHook(() => useAiChatFeed());
       result.current.sendMessage("Design a queue");
@@ -113,7 +113,7 @@ describe("useAiChatFeed", () => {
       // Different from `useSelfMock`'s configured name — proves the sender
       // is a fixed constant, not resolved from the caller's own identity
       // the way `sendMessage`'s is.
-      useSelfMock.mockReturnValue({ info: { name: "Ada" } });
+      useSelfMock.mockReturnValue("Ada");
 
       const { result } = renderHook(() => useAiChatFeed());
       result.current.sendAgentMessage("I've updated the canvas.");
@@ -147,7 +147,7 @@ describe("useAiChatFeed", () => {
 
     it("does not affect sendMessage's own role/sender ('user', useSelf()-resolved) — the two send paths stay independent", () => {
       useStorageMock.mockReturnValue([]);
-      useSelfMock.mockReturnValue({ info: { name: "Ada" } });
+      useSelfMock.mockReturnValue("Ada");
 
       const { result } = renderHook(() => useAiChatFeed());
       result.current.sendAgentMessage("AI message");

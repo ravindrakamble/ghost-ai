@@ -67,7 +67,19 @@ export interface UseAiChatFeedResult {
  * `useAiStatusFeed` convention.
  */
 export function useAiChatFeed(): UseAiChatFeedResult {
-  const self = useSelf()
+  /**
+   * Narrowed to just the sender name `sendMessage` needs below — an
+   * unselected `useSelf()` re-renders (and gives `sendMessage` a new
+   * identity) on *every* presence change, including the `presence.cursor`
+   * field `CanvasFlow`'s `handlePaneMouseMove` updates on every mouse move.
+   * That churn fed `CanvasFlow`'s `onSendChatMessageChange`/
+   * `onSendAgentMessageChange` effects a new function on every mousemove,
+   * which push into `WorkspaceShell` state setters and re-trigger those same
+   * effects — a runaway loop only while the pointer moves ("Maximum update
+   * depth exceeded" at `handlePaneMouseMove`). Same narrow-selector
+   * convention `presence-avatars.tsx`'s `useOthers` call already uses.
+   */
+  const selfName = useSelf((me) => me.info.name)
   const rawMessages = useStorage((root) => root.messages)
 
   /**
@@ -97,7 +109,7 @@ export function useAiChatFeed(): UseAiChatFeedResult {
     (content: string) => {
       const candidate = {
         id: generateChatMessageId(),
-        sender: self.info.name,
+        sender: selfName,
         role: "user" as const,
         content,
         timestamp: Date.now(),
@@ -116,7 +128,7 @@ export function useAiChatFeed(): UseAiChatFeedResult {
 
       pushMessage(parsed.data)
     },
-    [self, pushMessage],
+    [selfName, pushMessage],
   )
 
   const sendAgentMessage = useCallback<SendAgentChatMessage>(
