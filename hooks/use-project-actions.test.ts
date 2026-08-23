@@ -67,6 +67,7 @@ describe("useProjectActions", () => {
         })
       );
       expect(pushMock).toHaveBeenCalledWith("/editor/new-id");
+      expect(refreshMock).toHaveBeenCalledTimes(1);
       expect(result.current.dialogType).toBeNull();
     });
 
@@ -82,6 +83,7 @@ describe("useProjectActions", () => {
       });
 
       expect(pushMock).not.toHaveBeenCalled();
+      expect(refreshMock).not.toHaveBeenCalled();
       expect(result.current.error).toBe("Nope");
       expect(result.current.dialogType).toBe("create");
     });
@@ -148,7 +150,7 @@ describe("useProjectActions", () => {
       expect(result.current.dialogType).toBeNull();
     });
 
-    it("redirects to /editor when deleting the active workspace", async () => {
+    it("redirects to /editor and still refreshes when deleting the active workspace", async () => {
       paramsMock.mockReturnValue({ roomId: "p1" });
       fetchMock.mockResolvedValue(jsonResponse(true, { success: true }));
 
@@ -160,7 +162,7 @@ describe("useProjectActions", () => {
       });
 
       expect(pushMock).toHaveBeenCalledWith("/editor");
-      expect(refreshMock).not.toHaveBeenCalled();
+      expect(refreshMock).toHaveBeenCalledTimes(1);
     });
 
     it("sets an error and keeps the dialog open when the request fails", async () => {

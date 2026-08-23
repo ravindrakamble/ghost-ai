@@ -94,7 +94,20 @@ export function useProjectActions() {
 
       const createdProjectId = body.project.id
       closeDialog()
+      // `ownedProjects`/`sharedProjects` (`ProjectSidebar`'s list) are fetched
+      // server-side in `app/editor/layout.tsx`, a layout shared by every
+      // `/editor/*` route -- Next.js reuses that already-rendered layout
+      // across a sibling navigation like this one, so without an explicit
+      // `router.refresh()` the sidebar keeps showing its stale pre-create
+      // list. `refresh()` must come *after* `push()`: called first, it
+      // invalidates the route we're about to leave, not the one we're
+      // navigating to, and that invalidation loses the race against the
+      // navigation itself -- confirmed live (the list stayed stale with the
+      // reverse order). Called after `push()`, it invalidates whatever the
+      // router now considers the current route tree, which by then is the
+      // new project's -- including the shared layout above it.
       router.push(`/editor/${createdProjectId}`)
+      router.refresh()
     } catch {
       setError("Failed to create project. Please check your connection and try again.")
     } finally {
@@ -149,15 +162,19 @@ export function useProjectActions() {
 
       closeDialog()
 
-      // "Active workspace" lines up with the future /editor/[roomId] segment
-      // from spec 08 — until that route exists, params.roomId is always
-      // undefined, so this branch is a no-op and delete always refreshes.
+      // "Active workspace" is the project currently open at `/editor/
+      // [roomId]` — deleting it can't leave the caller on a now-nonexistent
+      // room, so this navigates home first. `router.refresh()` still runs
+      // either way (same reasoning as `submitCreate` above: called after
+      // `push()` so it invalidates the route just navigated *to*, refetching
+      // the shared layout's stale project list along with it) — deleting the
+      // active project without it would leave the sidebar still showing the
+      // just-deleted project once reopened.
       const isActiveWorkspace = params?.roomId === deletedProjectId
       if (isActiveWorkspace) {
         router.push("/editor")
-      } else {
-        router.refresh()
       }
+      router.refresh()
     } catch {
       setError("Failed to delete project. Please check your connection and try again.")
     } finally {
