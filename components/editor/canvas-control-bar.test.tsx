@@ -12,6 +12,9 @@ function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = 
     onRedo: vi.fn(),
     canUndo: true,
     canRedo: true,
+    onExportImage: vi.fn(),
+    isExportingImage: false,
+    canExportImage: true,
     ...overrides,
   }
   render(<CanvasControlBar {...props} />)
@@ -19,21 +22,58 @@ function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = 
 }
 
 describe("CanvasControlBar", () => {
-  it("renders all five buttons, grouped with a divider between zoom and history controls", () => {
+  it("renders all six buttons, grouped with a divider between each of the three groups", () => {
     renderBar()
 
     const buttons = screen.getAllByRole("button")
-    expect(buttons).toHaveLength(5)
+    expect(buttons).toHaveLength(6)
     expect(screen.getByRole("button", { name: /zoom out/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /fit view/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /zoom in/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /undo/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /redo/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /export as image/i })).toBeInTheDocument()
 
-    // Exactly one divider element between the two groups.
+    // Two divider elements: zoom | history | export.
     const dividers = document.querySelectorAll(".bg-surface-border")
-    expect(dividers).toHaveLength(1)
+    expect(dividers).toHaveLength(2)
     expect(dividers[0]).toHaveAttribute("aria-hidden", "true")
+    expect(dividers[1]).toHaveAttribute("aria-hidden", "true")
+  })
+
+  it("calls onExportImage when the export button is clicked", () => {
+    const { onExportImage } = renderBar()
+
+    fireEvent.click(screen.getByRole("button", { name: /export as image/i }))
+
+    expect(onExportImage).toHaveBeenCalledTimes(1)
+  })
+
+  it("disables the export button when canExportImage is false", () => {
+    renderBar({ canExportImage: false })
+
+    expect(screen.getByRole("button", { name: /export as image/i })).toBeDisabled()
+  })
+
+  it("disables the export button and shows a spinner while isExportingImage is true", () => {
+    const { container } = render(
+      <CanvasControlBar
+        onZoomIn={vi.fn()}
+        onZoomOut={vi.fn()}
+        onFitView={vi.fn()}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        canUndo
+        canRedo
+        onExportImage={vi.fn()}
+        isExportingImage
+        canExportImage
+      />,
+    )
+
+    const exportButton = screen.getByRole("button", { name: /export as image/i })
+    expect(exportButton).toBeDisabled()
+    expect(container.querySelector(".animate-spin")).toBeInTheDocument()
   })
 
   it("calls onZoomOut/onFitView/onZoomIn when their buttons are clicked", () => {

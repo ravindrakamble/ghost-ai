@@ -50,6 +50,9 @@ const {
   useAiStatusFeedMock,
   useAiChatFeedMock,
   roomProviderPropsRef,
+  getNodesBoundsMock,
+  getViewportForBoundsMock,
+  toPngMock,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
   useLiveblocksFlowMock: vi.fn(),
@@ -110,6 +113,12 @@ const {
   // real `LiveList` instance) — captured via a ref the same way
   // `reactFlowPropsRef` captures `ReactFlow`'s props below.
   roomProviderPropsRef: { current: null as { initialStorage?: { messages: unknown } } | null },
+  // "Export as image": `handleExportImage`'s own three real dependencies —
+  // mocked for the same "verify wiring, not the library" reason as every
+  // other external SDK call in this file.
+  getNodesBoundsMock: vi.fn(),
+  getViewportForBoundsMock: vi.fn(),
+  toPngMock: vi.fn(),
 }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
@@ -216,7 +225,14 @@ vi.mock("@xyflow/react", () => ({
         data-connection-mode={props.connectionMode}
         data-fit-view={String(props.fitView)}
       >
-        {props.children}
+        {/*
+          A real `.react-flow__viewport` node so `handleExportImage`'s
+          `container.querySelector(".react-flow__viewport")` lookup has
+          something to find — the same class name `@xyflow/react`'s own
+          real renderer uses for the transformed layer nodes/edges paint
+          inside, per that handler's own docblock in `canvas.tsx`.
+        */}
+        <div className="react-flow__viewport">{props.children}</div>
       </div>
     );
   },
@@ -231,6 +247,12 @@ vi.mock("@xyflow/react", () => ({
   // `children` prop, not `nodeTypes`/`edgeTypes`).
   Position: { Top: "top", Right: "right", Bottom: "bottom", Left: "left" },
   MarkerType: { Arrow: "arrow", ArrowClosed: "arrowclosed" },
+  getNodesBounds: getNodesBoundsMock,
+  getViewportForBounds: getViewportForBoundsMock,
+}));
+
+vi.mock("html-to-image", () => ({
+  toPng: toPngMock,
 }));
 
 const onNodesChange = vi.fn();
@@ -301,6 +323,13 @@ beforeEach(() => {
   // bidirectional wiring.
   useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage: vi.fn(), sendAgentMessage: vi.fn() });
   roomProviderPropsRef.current = null;
+
+  // "Export as image" defaults: an arbitrary real-looking bounds/viewport
+  // and a resolved data URL — individual tests override these where the
+  // exact values matter.
+  getNodesBoundsMock.mockReturnValue({ x: 0, y: 0, width: 200, height: 100 });
+  getViewportForBoundsMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  toPngMock.mockResolvedValue("data:image/png;base64,fake");
 });
 
 afterEach(() => {
@@ -376,8 +405,8 @@ describe("Canvas", () => {
 
     // 6 shape-panel buttons (rectangle, diamond, circle, pill, cylinder,
     // hexagon) plus the 5 control-bar buttons (zoom out, fit view, zoom in,
-    // undo, redo) added in spec 17.
-    expect(screen.getAllByRole("button")).toHaveLength(11);
+    // undo, redo) added in spec 17, plus the export-as-image button.
+    expect(screen.getAllByRole("button")).toHaveLength(12);
   });
 
   it("renders the canvas control bar wired to the real React Flow zoom methods and Liveblocks history hooks", () => {
@@ -411,6 +440,109 @@ describe("Canvas", () => {
     expect(redo).toHaveBeenCalledTimes(1);
     fireEvent.click(undoButton);
     expect(undo).not.toHaveBeenCalled();
+  });
+
+  describe("export as image", () => {
+    const sampleNode = {
+      id: "node-1",
+      type: CANVAS_NODE_TYPE,
+      position: { x: 10, y: 20 },
+      width: 160,
+      height: 80,
+      data: { label: "Service", color: DEFAULT_NODE_COLOR, textColor: "#ffffff", shape: "rectangle" },
+    };
+
+    it("disables the export button when the canvas has no nodes", () => {
+      renderCanvas();
+
+      expect(screen.getByRole("button", { name: /export as image/i })).toBeDisabled();
+    });
+
+    it("computes bounds/viewport from the real nodes and downloads a PNG when clicked", async () => {
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [sampleNode],
+        edges: [],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+      getNodesBoundsMock.mockReturnValue({ x: 0, y: 0, width: 160, height: 80 });
+      getViewportForBoundsMock.mockReturnValue({ x: 5, y: 7, zoom: 1 });
+      toPngMock.mockResolvedValue("data:image/png;base64,fake");
+      const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+      renderCanvas({ roomId: "project-abc" });
+
+      const exportButton = screen.getByRole("button", { name: /export as image/i });
+      expect(exportButton).not.toBeDisabled();
+
+      await act(async () => {
+        fireEvent.click(exportButton);
+      });
+
+      expect(getNodesBoundsMock).toHaveBeenCalledWith([sampleNode]);
+      // 48px padding (`EXPORT_IMAGE_PADDING_PX`) on every side of the 160x80 bounds.
+      expect(getViewportForBoundsMock).toHaveBeenCalledWith(
+        { x: 0, y: 0, width: 160, height: 80 },
+        256,
+        176,
+        1,
+        1,
+        0,
+      );
+
+      expect(toPngMock).toHaveBeenCalledTimes(1);
+      const [viewportElement, options] = toPngMock.mock.calls[0] as [HTMLElement, Record<string, unknown>];
+      expect(viewportElement.className).toBe("react-flow__viewport");
+      expect(options).toMatchObject({
+        width: 256,
+        height: 176,
+        style: {
+          width: "256px",
+          height: "176px",
+          transform: "translate(5px, 7px) scale(1)",
+        },
+      });
+
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+      const anchor = clickSpy.mock.instances[0] as HTMLAnchorElement;
+      expect(anchor.download).toBe("ghost-ai-canvas-project-abc.png");
+      expect(anchor.href).toBe("data:image/png;base64,fake");
+
+      clickSpy.mockRestore();
+    });
+
+    it("shows a spinner and disables the button while an export is in flight", async () => {
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [sampleNode],
+        edges: [],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+      let resolveToPng!: (dataUrl: string) => void;
+      toPngMock.mockReturnValue(
+        new Promise<string>((resolve) => {
+          resolveToPng = resolve;
+        }),
+      );
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+      renderCanvas();
+
+      const exportButton = screen.getByRole("button", { name: /export as image/i });
+      fireEvent.click(exportButton);
+
+      await waitFor(() => expect(exportButton).toBeDisabled());
+
+      await act(async () => {
+        resolveToPng("data:image/png;base64,fake");
+      });
+
+      await waitFor(() => expect(exportButton).not.toBeDisabled());
+    });
   });
 
   it("wires the real useKeyboardShortcuts hook to the same zoom/undo/redo handlers as the control bar", () => {

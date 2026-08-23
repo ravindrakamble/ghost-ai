@@ -8,6 +8,8 @@ import {
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
+  getNodesBounds,
+  getViewportForBounds,
   useReactFlow,
   type DefaultEdgeOptions,
   type EdgeChange,
@@ -15,6 +17,7 @@ import {
   type NodeChange,
   type NodeTypes,
 } from "@xyflow/react"
+import { toPng } from "html-to-image"
 import {
   ClientSideSuspense,
   LiveblocksProvider,
@@ -93,6 +96,14 @@ const DEFAULT_EDGE_OPTIONS: DefaultEdgeOptions = {
  * Brief, Open Questions #2.
  */
 const ZOOM_TRANSITION_DURATION_MS = 200
+
+/**
+ * Margin (in canvas pixels) added around the exported diagram's own node
+ * bounds (`getNodesBounds`) on every side, so shapes/labels sitting right at
+ * the extreme edge of the diagram don't get cropped flush against the
+ * exported image's border.
+ */
+const EXPORT_IMAGE_PADDING_PX = 48
 
 /**
  * Shallow runtime shape-check for `GET /api/projects/[projectId]/canvas`'s
@@ -456,6 +467,14 @@ function CanvasError() {
  * component itself does not call `/api/ai/design*` or `useRealtimeRun` —
  * that orchestration lives entirely in `AiArchitectTab`, outside the room
  * boundary, per spec 26's Analyst Brief, Open Questions #3.
+ *
+ * "Export as image" (a direct user request, not a numbered spec) adds
+ * `handleExportImage` and the `canvasContainerRef` it reads
+ * `.react-flow__viewport` through, plus `isExportingImage` — see that
+ * handler's own docblock below for the export mechanism itself. Passed down
+ * to `CanvasControlBar` as three new props alongside the existing
+ * zoom/undo/redo ones, the same plain-prop convention spec 17 already
+ * established for that component — no new context.
  */
 function CanvasFlow({
   projectId,
@@ -496,6 +515,16 @@ function CanvasFlow({
 
   const [isReadyForAutosave, setIsReadyForAutosave] = useState(false)
   const hasAttemptedInitialLoadRef = useRef(false)
+
+  /**
+   * Scopes `handleExportImage`'s `.react-flow__viewport` lookup to just this
+   * project's own canvas rather than a bare `document.querySelector` (the
+   * shape React Flow's own "Download Image" example uses) — a real DOM ref,
+   * not a new context, since this only needs to reach a plain `<div>`
+   * `CanvasFlow` itself renders below.
+   */
+  const canvasContainerRef = useRef<HTMLDivElement>(null)
+  const [isExportingImage, setIsExportingImage] = useState(false)
 
   /**
    * Spec 21 (Canvas Autosave): on mount, decide whether to load a
@@ -739,42 +768,110 @@ function CanvasFlow({
     updateMyPresence({ cursor: null })
   }, [updateMyPresence])
 
+  /**
+   * Exports the current canvas as a PNG download — `getNodesBounds`/
+   * `getViewportForBounds` (`@xyflow/react`) plus `toPng` (`html-to-image`)
+   * is the library's own documented pattern for rasterizing a flow: compute
+   * the real bounding box of every node, derive the pan/zoom transform that
+   * fits that box into a target pixel size, apply it to a clone of
+   * `.react-flow__viewport` (the actual transformed layer nodes/edges
+   * render inside — not `.react-flow__renderer`, which also includes
+   * unrelated UI like the selection rectangle), and rasterize that clone.
+   * Exports at the diagram's own authored scale (`minZoom`/`maxZoom` of `1`,
+   * `padding` of `0`) rather than fitting to whatever zoom level the user
+   * happens to be viewing at — `EXPORT_IMAGE_PADDING_PX` is added directly
+   * into the target pixel dimensions instead, so the result is a
+   * predictable, tight crop around the diagram plus a fixed margin.
+   *
+   * No-ops when the canvas is empty (`getNodesBounds([])` has no meaningful
+   * box to fit) or the viewport DOM node isn't mounted yet. Failures (e.g. a
+   * `toPng` rejection from an unsupported browser) are logged, not silently
+   * swallowed — this app has no toast/notification system to surface a
+   * user-facing error for a background-free, click-triggered export, and a
+   * failed export has no other side effect to undo.
+   */
+  const handleExportImage = useCallback(async () => {
+    const container = canvasContainerRef.current
+    if (!container || nodes.length === 0) {
+      return
+    }
+
+    const viewportElement = container.querySelector<HTMLElement>(".react-flow__viewport")
+    if (!viewportElement) {
+      return
+    }
+
+    setIsExportingImage(true)
+
+    try {
+      const bounds = getNodesBounds(nodes)
+      const imageWidth = Math.round(bounds.width + EXPORT_IMAGE_PADDING_PX * 2)
+      const imageHeight = Math.round(bounds.height + EXPORT_IMAGE_PADDING_PX * 2)
+      const viewport = getViewportForBounds(bounds, imageWidth, imageHeight, 1, 1, 0)
+
+      const dataUrl = await toPng(viewportElement, {
+        backgroundColor: "var(--bg-base)",
+        width: imageWidth,
+        height: imageHeight,
+        style: {
+          width: `${imageWidth}px`,
+          height: `${imageHeight}px`,
+          transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+        },
+      })
+
+      const link = document.createElement("a")
+      link.download = `ghost-ai-canvas-${projectId}.png`
+      link.href = dataUrl
+      link.click()
+    } catch (error) {
+      console.error("Failed to export the canvas as an image", error)
+    } finally {
+      setIsExportingImage(false)
+    }
+  }, [nodes, projectId])
+
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          nodeTypes={CANVAS_NODE_TYPES}
-          edgeTypes={CANVAS_EDGE_TYPES}
-          defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-          connectionMode={ConnectionMode.Loose}
-          onPaneMouseMove={handlePaneMouseMove}
-          onPaneMouseLeave={handlePaneMouseLeave}
-          fitView
-        >
-          <Background variant={BackgroundVariant.Dots} />
-        </ReactFlow>
-        <ShapePanel onDropShape={handleDropShape} />
-        <CanvasControlBar
-          onZoomIn={handleZoomIn}
-          onZoomOut={handleZoomOut}
-          onFitView={handleFitView}
-          onUndo={undo}
-          onRedo={redo}
-          canUndo={canUndo}
-          canRedo={canRedo}
-        />
-        <StarterTemplatesModal
-          open={isTemplatesModalOpen}
-          onOpenChange={setIsTemplatesModalOpen}
-          onImport={handleImportTemplate}
-        />
-        <PresenceAvatars />
-        <LiveCursors flowToScreenPosition={flowToScreenPosition} />
+        <div ref={canvasContainerRef} className="relative h-full w-full">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            nodeTypes={CANVAS_NODE_TYPES}
+            edgeTypes={CANVAS_EDGE_TYPES}
+            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+            connectionMode={ConnectionMode.Loose}
+            onPaneMouseMove={handlePaneMouseMove}
+            onPaneMouseLeave={handlePaneMouseLeave}
+            fitView
+          >
+            <Background variant={BackgroundVariant.Dots} />
+          </ReactFlow>
+          <ShapePanel onDropShape={handleDropShape} />
+          <CanvasControlBar
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            onFitView={handleFitView}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onExportImage={handleExportImage}
+            isExportingImage={isExportingImage}
+            canExportImage={nodes.length > 0}
+          />
+          <StarterTemplatesModal
+            open={isTemplatesModalOpen}
+            onOpenChange={setIsTemplatesModalOpen}
+            onImport={handleImportTemplate}
+          />
+          <PresenceAvatars />
+          <LiveCursors flowToScreenPosition={flowToScreenPosition} />
+        </div>
       </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>
   )
