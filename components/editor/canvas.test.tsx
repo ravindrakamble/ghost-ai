@@ -53,6 +53,7 @@ const {
   getNodesBoundsMock,
   getViewportForBoundsMock,
   toPngMock,
+  useCustomTemplatesMock,
 } = vi.hoisted(() => ({
   errorListenerRef: { current: null as ErrorListenerCallback | null },
   useLiveblocksFlowMock: vi.fn(),
@@ -119,6 +120,15 @@ const {
   getNodesBoundsMock: vi.fn(),
   getViewportForBoundsMock: vi.fn(),
   toPngMock: vi.fn(),
+  // Spec 33: `StarterTemplatesModal` (rendered for real by `Canvas`, not
+  // mocked out) calls `useCustomTemplates()` directly on mount — mocked here
+  // for the same "verify wiring, not the child hook's own internals" reason
+  // as `useCanvasAutosaveMock`/`useAiStatusFeedMock`/`useAiChatFeedMock`
+  // above, and so this file's shared `fetchMock` (used for `CanvasFlow`'s
+  // own `GET /api/projects/[projectId]/canvas` load and the new `POST
+  // /api/templates` save call) isn't also polluted by an unrelated
+  // `GET /api/templates` list fetch on every render.
+  useCustomTemplatesMock: vi.fn(),
 }));
 
 vi.mock("@liveblocks/react/suspense", () => ({
@@ -255,6 +265,10 @@ vi.mock("html-to-image", () => ({
   toPng: toPngMock,
 }));
 
+vi.mock("@/hooks/use-custom-templates", () => ({
+  useCustomTemplates: useCustomTemplatesMock,
+}));
+
 const onNodesChange = vi.fn();
 const onEdgesChange = vi.fn();
 const onConnect = vi.fn();
@@ -330,6 +344,19 @@ beforeEach(() => {
   getNodesBoundsMock.mockReturnValue({ x: 0, y: 0, width: 200, height: 100 });
   getViewportForBoundsMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
   toPngMock.mockResolvedValue("data:image/png;base64,fake");
+
+  // Spec 33 default: no saved templates, nothing in flight — individual
+  // tests override where the "My Templates" section's own rendering matters
+  // (covered directly in `starter-templates-modal.test.tsx`, not re-proven
+  // here).
+  useCustomTemplatesMock.mockReturnValue({
+    templates: [],
+    isLoading: false,
+    error: null,
+    removingId: null,
+    refetch: vi.fn(),
+    remove: vi.fn(),
+  });
 });
 
 afterEach(() => {
@@ -405,8 +432,9 @@ describe("Canvas", () => {
 
     // 6 shape-panel buttons (rectangle, diamond, circle, pill, cylinder,
     // hexagon) plus the 5 control-bar buttons (zoom out, fit view, zoom in,
-    // undo, redo) added in spec 17, plus the export-as-image button.
-    expect(screen.getAllByRole("button")).toHaveLength(12);
+    // undo, redo) added in spec 17, plus the export-as-image button, plus
+    // the save-as-template button (spec 33).
+    expect(screen.getAllByRole("button")).toHaveLength(13);
   });
 
   it("renders the canvas control bar wired to the real React Flow zoom methods and Liveblocks history hooks", () => {
@@ -542,6 +570,88 @@ describe("Canvas", () => {
       });
 
       await waitFor(() => expect(exportButton).not.toBeDisabled());
+    });
+  });
+
+  describe("save as template (spec 33)", () => {
+    it("does not render the save-template dialog until the control bar button is clicked", () => {
+      renderCanvas();
+
+      expect(screen.queryByText(/save the current canvas as a private/i)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /save as template/i }));
+
+      expect(screen.getByText(/save the current canvas as a private/i)).toBeInTheDocument();
+    });
+
+    it("POSTs the current live nodes/edges to /api/templates and closes the dialog on success", async () => {
+      const sampleNode = {
+        id: "node-1",
+        type: CANVAS_NODE_TYPE,
+        position: { x: 10, y: 20 },
+        width: 160,
+        height: 80,
+        data: { label: "Service", color: DEFAULT_NODE_COLOR, textColor: "#ffffff", shape: "rectangle" },
+      };
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [sampleNode],
+        edges: [],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+      fetchMock.mockImplementation((url: string) => {
+        if (url === "/api/templates") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ template: { id: "t1", name: "My saved design", description: "", createdAt: "2026-01-01T00:00:00.000Z" } }),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      });
+
+      renderCanvas();
+
+      fireEvent.click(screen.getByRole("button", { name: /save as template/i }));
+      fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "My saved design" } });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /^save template$/i }));
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/templates",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ name: "My saved design", description: undefined, nodes: [sampleNode], edges: [] }),
+        }),
+      );
+
+      await waitFor(() =>
+        expect(screen.queryByText(/save the current canvas as a private/i)).not.toBeInTheDocument(),
+      );
+    });
+
+    it("shows an inline error and keeps the dialog open when the save request fails", async () => {
+      fetchMock.mockImplementation((url: string) => {
+        if (url === "/api/templates") {
+          return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: "Failed to save the template." }) });
+        }
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      });
+
+      renderCanvas();
+
+      fireEvent.click(screen.getByRole("button", { name: /save as template/i }));
+      fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "My saved design" } });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /^save template$/i }));
+      });
+
+      expect(await screen.findByText("Failed to save the template.")).toBeInTheDocument();
+      expect(screen.getByText(/save the current canvas as a private/i)).toBeInTheDocument();
     });
   });
 

@@ -190,6 +190,14 @@ interface RawDesignAgentAction {
 
 interface RawDesignAgentActionsResponse {
   actions: RawDesignAgentAction[]
+  /**
+   * A short (1-2 sentence) explanation of what changed and why, grounded in
+   * `currentGraph` — spec 32's own addition. Required and validated as a
+   * non-empty string by `isRawDesignAgentActionsResponse` below, the same
+   * "validate at the boundary" posture already applied to every other
+   * required field in this response.
+   */
+  summary: string
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -202,6 +210,13 @@ function isNodeColorName(value: unknown): value is NodeColorName {
 
 function isNodeShape(value: unknown): value is NodeShape {
   return typeof value === "string" && (CANVAS_SHAPES as readonly string[]).includes(value)
+}
+
+/** Shared non-empty-string guard — every required string field in the raw
+ * Gemini response (per-action fields, and now the top-level `summary`) is
+ * validated the same way. */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0
 }
 
 /**
@@ -218,7 +233,6 @@ function isValidRawAction(value: unknown): value is RawDesignAgentAction {
   if (typeof candidate.kind !== "string") return false
   if (!(DESIGN_AGENT_ACTION_KINDS as readonly string[]).includes(candidate.kind)) return false
 
-  const isNonEmptyString = (v: unknown): v is string => typeof v === "string" && v.length > 0
   const isOptionalString = (v: unknown): v is string | undefined => v === undefined || typeof v === "string"
 
   switch (candidate.kind as DesignAgentActionKind) {
@@ -259,7 +273,11 @@ function isValidRawAction(value: unknown): value is RawDesignAgentAction {
 function isRawDesignAgentActionsResponse(value: unknown): value is RawDesignAgentActionsResponse {
   if (typeof value !== "object" || value === null) return false
   const candidate = value as Record<string, unknown>
-  return Array.isArray(candidate.actions) && candidate.actions.every(isValidRawAction)
+  return (
+    Array.isArray(candidate.actions) &&
+    candidate.actions.every(isValidRawAction) &&
+    isNonEmptyString(candidate.summary)
+  )
 }
 
 /**
@@ -376,8 +394,12 @@ const DESIGN_AGENT_ACTIONS_JSON_SCHEMA: JSONSchema7 = {
         ],
       },
     },
+    // Spec 32: a short summary of what changed and why, required as a
+    // top-level sibling of `actions` (not nested inside it — one summary
+    // per response, not per action).
+    summary: { type: "string" },
   },
-  required: ["actions"],
+  required: ["actions", "summary"],
 }
 
 const designAgentActionsSchema = jsonSchema<RawDesignAgentActionsResponse>(DESIGN_AGENT_ACTIONS_JSON_SCHEMA, {
@@ -428,6 +450,8 @@ function buildPrompt(prompt: string, currentGraph: DesignAgentGraphSummary): str
     "Only reference existing node/edge IDs from the lists above, or short local IDs you invent for nodes/edges you are adding in this same response (they will be replaced with real IDs).",
     "Prefer editing/extending the existing diagram over replacing it — only delete nodes or edges the request clearly asks to remove.",
     "Space newly added nodes so they do not overlap existing nodes or each other (at least 220 horizontal / 160 vertical units apart).",
+    "If the user's request reads as a review or critique of the existing diagram rather than a request to build something new (e.g. it asks you to review, critique, evaluate, or find problems with the design), actually critique the diagram first: look for single points of failure, missing caching or queueing, unclear service boundaries, and similar architectural issues, grounded in the actual nodes and edges listed above. Only after that critique should you decide which actions (if any) to take to address what you found.",
+    "Always include a `summary` field: a short 1-2 sentence explanation, grounded in the current diagram above, of what you changed and why (or, for a critique with no changes, what issues you found). This must be a real, specific explanation of this response's own content — never a generic placeholder.",
   ].join("\n\n")
 }
 
@@ -436,15 +460,27 @@ export interface InterpretDesignPromptInput {
   currentGraph: DesignAgentGraphSummary
 }
 
+/** Return shape of `interpretDesignPrompt` (spec 32) — the normalized action
+ * list plus the model's own real `summary` string, no longer a bare array. */
+export interface InterpretDesignPromptResult {
+  actions: DesignAgentAction[]
+  summary: string
+}
+
 /**
  * Calls Gemini to turn a design prompt (plus the current canvas graph, for
  * context — acceptance criterion 2) into a validated list of canvas
  * actions, then normalizes model-chosen local node/edge IDs into real,
  * collision-safe IDs (`generateNodeId`/`generateEdgeId`) and resolves
  * references between actions in the same batch (e.g. an `addEdge` action
- * connecting to a node added earlier in the same response).
+ * connecting to a node added earlier in the same response). Also returns the
+ * model's own `summary` of what changed and why (spec 32) — validated
+ * non-empty at the `isRawDesignAgentActionsResponse` boundary above, so it's
+ * a guaranteed non-empty string by the time it reaches a caller.
  */
-export async function interpretDesignPrompt(input: InterpretDesignPromptInput): Promise<DesignAgentAction[]> {
+export async function interpretDesignPrompt(
+  input: InterpretDesignPromptInput,
+): Promise<InterpretDesignPromptResult> {
   const provider = getGoogleProvider()
 
   const { object } = await generateObject({
@@ -460,7 +496,7 @@ export async function interpretDesignPrompt(input: InterpretDesignPromptInput): 
     maxOutputTokens: 8192,
   })
 
-  return normalizeActions(object.actions, input.currentGraph)
+  return { actions: normalizeActions(object.actions, input.currentGraph), summary: object.summary }
 }
 
 /**
