@@ -115,3 +115,98 @@ Brief ready for Senior Developer at `context/spec-status/31-ai-rate-limiting.md`
 - No UI surfaces the limit, remaining quota, or a countdown anywhere — server-side enforcement only, per the brief's explicit Scope Limit.
 
 Implementation ready for QA at `context/spec-status/31-ai-rate-limiting.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit` | PASS — clean, no errors |
+| `npx eslint lib/rate-limit.ts lib/rate-limit.test.ts app/api/ai/design/route.ts app/api/ai/design/route.test.ts app/api/ai/spec/route.ts app/api/ai/spec/route.test.ts` (changed files) | PASS — clean, no warnings/errors |
+| `npx eslint .` (full repo) | Pre-existing errors/warnings only, all in `.trigger/tmp/**` (generated build artifacts) and `components/editor/editor-shell.tsx` (untouched by this diff, `react-hooks/set-state-in-effect`). None in this diff's files. Not a regression. |
+| `npx next build` | PASS — compiles successfully; `/api/ai/design` and `/api/ai/spec` still listed as dynamic routes, no route added/removed, no build error |
+| `npx vitest run --no-file-parallelism` | PASS — 644/644 tests, 66/66 files, independently reproduced. Note: my run passed 100% including `components/editor/ai-sidebar.test.tsx`'s "switches to the Specs tab content on click," which the Dev reported as a 1/644 flaky failure on their run. `ai-sidebar.tsx`/`ai-sidebar.test.tsx` are confirmed untouched by this diff (`git diff main..spec/31-ai-rate-limiting --name-only`; `git log` shows the file was last touched by spec 30, not this branch), and a passing full run here is consistent with the Dev's own characterization of it as an intermittent jsdom "Not implemented: navigation to another Document" timing flake rather than a regression caused by this change. Confirmed not diff-related. |
+
+### Acceptance criteria (brief, `## Analyst Brief`)
+
+1. `checkAiRateLimit` counts in-window `TaskRun` rows and derives `allowed` — PASS. Implemented via `findMany` (ordered by `createdAt asc`) rather than a bare `count`, per the brief's own Open Questions #1 recommendation; `allowed = recentRuns.length < RATE_LIMIT_MAX_REQUESTS`, verified against `lib/rate-limit.ts:58-78` and `lib/rate-limit.test.ts`'s boundary/over-limit cases.
+2. Limit shared across both routes, no `type`/`taskId` discriminator — PASS. Query in `checkAiRateLimit` filters only on `userId`/`createdAt`; `TaskRun` model has no discriminator column (`prisma/schema.prisma:66-76`).
+3. Per-`userId` only, never scoped by `projectId` — PASS. Confirmed no `projectId` in the `where` clause (`lib/rate-limit.ts:62`) and in the exact-call-shape test (`lib/rate-limit.test.ts:130-143`).
+4. `retryAfterSeconds` computed from oldest in-window row, `Math.ceil`, clamped to min 1, `0` when allowed — PASS, matches `lib/rate-limit.ts:72-77` exactly and is covered by dedicated boundary/rounding/clamping tests.
+5. `/api/ai/design`: check strictly after `getProjectAccess`, strictly before `triggerDesignAgent`; 429 body `{ "error": "Too many AI requests, try again shortly" }`; `Retry-After` header as string; no `triggerDesignAgent`/`TaskRun` write — PASS, verified in `app/api/ai/design/route.ts:89-97` and exercised end-to-end (real `checkAiRateLimit`, mocked Prisma) in `app/api/ai/design/route.test.ts`'s new 429 test.
+6. `/api/ai/spec` behaves identically — PASS, `app/api/ai/spec/route.ts:80-88`, same test pattern in `app/api/ai/spec/route.test.ts`.
+7. Failure precedence 401 → 400 → 404/403 → 429 → 502 → 500, rate limit never evaluated before an earlier failure — PASS. Confirmed by reading both route bodies top-to-bottom: identity check, body parse/validation, `getProjectAccess`, then `checkAiRateLimit`, then `triggerDesignAgent`/`triggerGenerateSpec`, then `prisma.taskRun.create`, in that exact order in both files.
+8. User under the limit unaffected — PASS. Default `findMany` stub returns `[]` in `beforeEach` for both route test files, and all pre-existing tests pass unmodified per both my full-suite run and the diff (no existing assertions changed).
+9. No route other than `/api/ai/design`/`/api/ai/spec` touched — PASS, confirmed via `git diff main..spec/31-ai-rate-limiting --name-only`: only those two routes' `route.ts`/`route.test.ts`, `lib/rate-limit.ts`/`.test.ts`, and context docs changed.
+10. No `prisma/schema.prisma`, `trigger/design-agent.ts`, `trigger/generate-spec.ts` change — PASS, confirmed absent from the diff's file list; `prisma/schema.prisma`'s `TaskRun` model (`id, runId, projectId, userId, createdAt`, `@@index([userId, projectId])`) is byte-for-byte unchanged from `main`.
+11. No UI change — PASS, `git diff main..spec/31-ai-rate-limiting --stat -- components/` returns nothing.
+12. `tsc`/`eslint`/`vitest`/`next build` all pass — PASS, independently reproduced above.
+
+All 12 acceptance criteria: PASS.
+
+### Architecture invariants (`context/architecture-context.md`)
+
+1. No long-running AI work in a request handler — unaffected; the added check is a single, fast Prisma query inserted before the existing Trigger.dev call, not inside it. PASS.
+2. Metadata/blob storage separation — not touched by this diff (no blob code changed). PASS (not applicable).
+3. Auth and ownership enforced at every mutation boundary — PASS. Rate limit check is correctly sequenced *after* `getProjectAccess`, so an unauthorized/forbidden caller is rejected before ever reaching the rate-limit or trigger logic; ownership enforcement is not weakened or bypassed.
+4. Client components only where needed — not applicable, no client component touched.
+5. Canvas schema consistency — not applicable, no canvas schema touched.
+
+No invariant violations found.
+
+### Standards compliance (`context/code-standards.md`)
+
+- No `any` type usage in any changed file (the one text match for "any" in `app/api/ai/design/route.ts` is inside a doc-comment sentence, not a type annotation).
+- No raw Tailwind color utilities or hex literals introduced (`grep -nE "zinc-|slate-|#[0-9a-fA-F]{3,6}"` on changed `lib`/`app/api` files: no matches) — expected, since this diff is backend-only.
+- `components/ui/*` untouched.
+- Test files co-located and named per convention (`lib/rate-limit.test.ts`, `app/api/ai/design/route.test.ts`, `app/api/ai/spec/route.test.ts`); Prisma singleton mocked via `vi.mock` + `vi.hoisted`, consistent with existing route tests; no real DB/Clerk session hit.
+
+### Error handling
+
+- 429 path fully covered for both routes: no `TaskRun` row written, no Trigger.dev call made, correct status/header/body — verified in code and by dedicated tests for both routes.
+- Failure precedence explicitly re-verified above (item 7) — an unauthenticated, malformed, or forbidden request cannot be misreported as 429.
+- Known limitation (concurrent-burst race window, Open Questions #3) is honestly disclosed in `lib/rate-limit.ts`'s own docblock and in Dev Notes rather than silently left out — appropriate given the raw spec's explicit Scope Limit against adding the infrastructure that would close it.
+
+### Housekeeping
+
+- `context/progress-tracker.md` updated accurately: Phase 31 entry added, "In Progress" section reflects spec 31 awaiting QA, the "Deferred — Production Hardening" rate-limiting bullet is struck through and marked implemented. Matches what was actually built. PASS.
+
+### Issues found
+
+None. No bugs, no spec gaps.
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent verification (not just trusting Dev/QA accounts)
+
+Read `context/project-overview.md`, this file's full pipeline trail (Analyst Brief, Dev Notes, QA Report), the raw spec at `context/feature-specs/31-ai-rate-limiting.md`, and `context/progress-tracker.md`. Then independently ran `git diff main...spec/31-ai-rate-limiting` and read the actual changed files directly rather than relying on QA's summary:
+
+- `git diff main...spec/31-ai-rate-limiting --stat` — confirms the diff touches exactly `lib/rate-limit.ts`/`.test.ts` (new), `app/api/ai/design/route.ts`/`.test.ts`, `app/api/ai/spec/route.ts`/`.test.ts`, and context docs. Nothing else.
+- `git diff main...spec/31-ai-rate-limiting -- prisma/schema.prisma` and `-- trigger/` both return empty — no schema change, no trigger-task change, matching the raw spec's explicit Scope Limits.
+- `git diff main...spec/31-ai-rate-limiting --name-only -- components/` returns empty — no UI change anywhere, matching acceptance criterion 11.
+- Read `lib/rate-limit.ts` directly: `checkAiRateLimit` is a single `findMany` scoped only to `userId`/`createdAt`, no `projectId` filter, no `type`/`taskId` discriminator (none exists on `TaskRun`) — confirms the limit is genuinely per-user and genuinely shared across both routes, not per-project or per-route as it might have been implemented instead. `rateLimitErrorResponse` reuses the existing `errorResponse` envelope (`lib/api-response.ts`) and adds `Retry-After` as a header, not a body field — consistent with HTTP convention and with how the raw spec's own Notes section described it.
+- Read both route diffs directly: in both `app/api/ai/design/route.ts` and `app/api/ai/spec/route.ts`, `checkAiRateLimit` is called strictly after the `getProjectAccess` success branch and strictly before the Trigger.dev call (`triggerDesignAgent`/`triggerGenerateSpec`) — confirmed by line position, not just by the docblock's own claim about it. A blocked request returns before `prisma.taskRun.create` is ever reached, so no `TaskRun` row is written for a rejected request, and the failure precedence (401 → 400 → 404/403 → 429 → 502 → 500) is preserved exactly as both the brief and QA describe.
+
+### Judgment against project-overview.md
+
+This spec doesn't map to a numbered Core User Flow step, so the relevant question is whether it's legitimate hardening rather than scope creep, and whether it regresses any existing Success Criterion for a user acting normally.
+
+- **Legitimate, in-scope hardening, not scope creep.** This was pulled forward from `progress-tracker.md`'s own "Deferred — Production Hardening" backlog (logged well before this spec existed, not invented mid-pipeline), and it protects exactly the two routes that already implement two In Scope features — "AI-powered architecture generation from prompts" and "AI-powered Markdown spec generation from the canvas graph." It does not touch anything on the Out of Scope wall: it is not a billing/subscription mechanism (no payment, no plan tiers, just a flat per-user request throttle), not an enterprise permission tier (the limit applies identically to every authenticated user regardless of owner/collaborator status), and it adds no UI, so it can't be mistaken for a feature surface. The diff independently confirms no route outside `/api/ai/design` and `/api/ai/spec` was touched, and no other Out of Scope line is anywhere near this diff.
+- **No regression to Success Criteria 4 or 5** ("AI can generate an architecture into the shared room from a prompt" / "The graph can be converted into a persisted Markdown spec") for a user under the limit — the normal case. The rate-limit check is a single additional `await` inserted between two already-existing steps; a user under 5 combined runs in the trailing 10 minutes gets `allowed: true` and the route falls straight through into the exact same `triggerDesignAgent`/`triggerGenerateSpec` → `prisma.taskRun.create` → response path as before this diff, byte-for-byte. Confirmed by reading the diff (no other line in either route changed) and by the pre-existing route test suites passing unmodified in behavior against a default "allowed" stub, per both Dev Notes and QA's independent full-suite run (644/644).
+- **No regression to any other Success Criterion.** Criteria 1, 2, 3, and 6 (project creation, real-time collaboration, starter templates, storage-layer correctness) are untouched by this diff — nothing in `components/`, `prisma/schema.prisma`, Liveblocks code, or the starter-template system appears anywhere in it.
+- **The one accepted tradeoff (concurrent-burst race window, Open Questions #3) is proportionate and honestly disclosed**, not silently swept under the rug — it's documented in `lib/rate-limit.ts`'s own docblock (verified directly) and in Dev Notes, and closing it would have required exactly the external service or schema change the raw spec explicitly forbade. Accepting a best-effort limit rather than a perfectly atomic one is the correct call for a first pass of cost/abuse protection at this stage, consistent with `ai-workflow-rules.md`'s incremental philosophy — this doesn't block any later spec, since a future spec could always add an atomic counter as its own dedicated piece of work without touching this one's contract (`checkAiRateLimit(userId): Promise<{ allowed, retryAfterSeconds }>`).
+
+### `progress-tracker.md` accuracy
+
+At the time QA reviewed it, the file's "Phase 31" and "In Progress" entries accurately said "implemented, ready for QA" / "awaiting QA" — an honest snapshot of that moment, not an inflated claim. It's now stale only because QA has since passed; per this pipeline's convention, I'm updating it below (Completed, Current Phase, Next Up) as part of this sign-off rather than treating the staleness as a defect in what Dev/QA wrote.
+
+### Escalation count
+
+Round 1. No prior CHANGES REQUESTED round on this spec. Not escalating.
