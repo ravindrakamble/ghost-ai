@@ -5,9 +5,10 @@ Update this file whenever the current phase, active feature, or implementation s
 ## Current Phase
 - Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call.
 - Phase 31: AI Rate Limiting — Completed (QA PASS, Product Owner PASS, PR #28 opened against `main`). Adds per-user rate limiting (5 combined `design`+`spec` runs per rolling 10-minute window) to `POST /api/ai/design` and `POST /api/ai/spec` via a new `lib/rate-limit.ts` helper (`checkAiRateLimit`, `rateLimitErrorResponse`) that counts existing `TaskRun` rows — no new external service, no schema change. Full pipeline trail in `context/spec-status/31-ai-rate-limiting.md`.
+- Phase 33: Custom Templates — Implemented by Senior Developer, ready for QA. Branched off `main`'s actual tip (spec 31's merge point, PR #28) per the brief's own explicit instruction — spec 32 (PR #29) is not merged into `main` yet and this spec has no dependency on it. Lets a signed-in user save their current canvas as a private, named `CustomTemplate` (new Prisma model + Blob-stored node/edge JSON at `templates/{ownerId}/{templateId}.json`, mirroring `lib/canvas-blob.ts`/`lib/spec-blob.ts`), list/delete their own saved templates, and re-import a saved template through spec 18's existing clear-then-add mechanism unchanged. See `context/spec-status/33-custom-templates.md` for the full Dev Notes.
 
 ## Current Goal
-- No numbered feature spec currently in progress. Spec 31 (AI Rate Limiting) is complete; human decision needed on what comes next — author a new feature spec (no `context/feature-specs/32-*.md` exists yet), or continue the "Deferred — Production Hardening" pass below (migrations-on-deploy, error monitoring/observability).
+- Spec 33 (Custom Templates) is implemented and awaiting QA. Human decision still needed on spec 32 (PR #29, not merged) and on production-hardening items below once spec 33 clears the pipeline.
 
 ## Completed
 
@@ -452,7 +453,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently.
+- Feature spec 33: Custom Templates — implemented by Senior Developer on branch `spec/33-custom-templates` (off `main`'s tip, not spec 32's unmerged branch), ready for QA. Not yet moved to Completed — that happens once Product Owner PASSes it. See `context/spec-status/33-custom-templates.md` for the full brief + Dev Notes.
 
 ## Next Up
 
@@ -479,7 +480,7 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
 Functionality suggestions raised in conversation (2026-08-24) that extend the app beyond `project-overview.md`'s current scope. None are committed — logged here as backlog candidates for a human to promote into a numbered feature spec:
 
 - **AI critique/refinement mode** — let the design agent review the *existing* canvas ("find single points of failure," "suggest scaling improvements") instead of only generating from a blank prompt. Reuses the spec 22/23 design-agent pipeline.
-- **Save canvas as a custom template** — let users promote their own canvas into the starter-template library (`context/feature-specs/18-starter-template.md`), which is currently a static, curated set only.
+- ~~**Save canvas as a custom template**~~ — promoted to spec 33 (`context/feature-specs/33-custom-templates.md` / `context/spec-status/33-custom-templates.md`), implemented and awaiting QA. Private per-user `CustomTemplate` rows (Prisma metadata + Blob node/edge JSON), listed alongside the built-in `CANVAS_TEMPLATES` library in the same modal, imported through spec 18's existing mechanism unchanged.
 - **Public read-only share link** — a non-collaborator stakeholder currently cannot view a project's canvas or spec at all; a view-only, unauthenticated link would need its own access-control path alongside the existing owner/collaborator model (`architecture-context.md`'s Auth and Collaboration Model).
 - **Diagram-to-IaC export** — generate a Terraform/docker-compose skeleton from the graph alongside the Markdown spec, reusing spec 27's node/edge structural summary (`GenerateSpecGraphNode`/`GenerateSpecGraphEdge` in `trigger/generate-spec.ts`).
 - **Canvas search/jump-to-node** — useful once a diagram grows past what fits on screen; no spec currently covers this.

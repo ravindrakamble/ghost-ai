@@ -15,6 +15,7 @@ function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = 
     onExportImage: vi.fn(),
     isExportingImage: false,
     canExportImage: true,
+    onOpenSaveTemplate: vi.fn(),
     ...overrides,
   }
   render(<CanvasControlBar {...props} />)
@@ -22,23 +23,33 @@ function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = 
 }
 
 describe("CanvasControlBar", () => {
-  it("renders all six buttons, grouped with a divider between each of the three groups", () => {
+  it("renders all seven buttons, grouped with a divider between each of the four groups", () => {
     renderBar()
 
     const buttons = screen.getAllByRole("button")
-    expect(buttons).toHaveLength(6)
+    expect(buttons).toHaveLength(7)
     expect(screen.getByRole("button", { name: /zoom out/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /fit view/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /zoom in/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /undo/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /redo/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /export as image/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /save as template/i })).toBeInTheDocument()
 
-    // Two divider elements: zoom | history | export.
+    // Three divider elements: zoom | history | export | save-as-template.
     const dividers = document.querySelectorAll(".bg-surface-border")
-    expect(dividers).toHaveLength(2)
+    expect(dividers).toHaveLength(3)
     expect(dividers[0]).toHaveAttribute("aria-hidden", "true")
     expect(dividers[1]).toHaveAttribute("aria-hidden", "true")
+    expect(dividers[2]).toHaveAttribute("aria-hidden", "true")
+  })
+
+  it("calls onOpenSaveTemplate when the save-as-template button is clicked", () => {
+    const { onOpenSaveTemplate } = renderBar()
+
+    fireEvent.click(screen.getByRole("button", { name: /save as template/i }))
+
+    expect(onOpenSaveTemplate).toHaveBeenCalledTimes(1)
   })
 
   it("calls onExportImage when the export button is clicked", () => {
@@ -68,6 +79,7 @@ describe("CanvasControlBar", () => {
         onExportImage={vi.fn()}
         isExportingImage
         canExportImage
+        onOpenSaveTemplate={vi.fn()}
       />,
     )
 
