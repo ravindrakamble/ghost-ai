@@ -133,3 +133,113 @@ Commands run, all passing:
 - No live smoke test against the real provisioned Vercel Blob store or a real browser session was performed beyond the migration's own live `prisma migrate dev` run against the provisioned database — recommended as a human smoke test (save a real canvas as a template, reload the modal, import it into a fresh canvas, delete it) before treating this loop as fully proven end to end in production, consistent with prior specs' own recommendation pattern for Blob-backed features.
 
 Implementation ready for QA at `context/spec-status/33-custom-templates.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Branch-base verification
+
+Independently reproduced the Dev's branching claim rather than trusting it:
+- `git merge-base main spec/33-custom-templates` returns `de8314c` at first glance, but that is because the local `main` ref is stale (behind `origin/main`). `git log origin/main -1` confirms `origin/main`'s real tip is `fd9c84f` (spec 31's merge, PR #28), and `de8314c` is an ancestor of `fd9c84f` (direct-to-main commits that predate spec 31's merge), not the other way around.
+- `git merge-base --is-ancestor fd9c84f spec/33-custom-templates` returns true. `git merge-base --is-ancestor fd9c84f origin/main` returns true. So spec/33 does branch from `origin/main`'s actual tip, exactly as Dev Notes claim.
+- Confirmed spec 32 (PR #29: commits `ab04f17`/`bf41ae0`/`855af0b`/`70131f6`) is not an ancestor of `fd9c84f` and is absent from spec/33's history. `git log --oneline --graph --all` shows spec 32's branch as a sibling line that only reconnects to `fd9c84f` via its own separate merge (`70131f6`), never into spec/33.
+- `git grep -n "Critique this design" spec/33-custom-templates` returns no match. `git show spec/33-custom-templates:lib/design-agent-ai.ts | grep summary` returns no match. Neither spec 32 artifact crossed onto this branch.
+- `git diff fd9c84f spec/33-custom-templates --stat` returns exactly the 23 files Dev Notes list (schema, migration, `lib/template-blob.ts`/`.test.ts`, `lib/template-schema.ts`/`.test.ts`, both new routes plus tests, the new hook plus test, the new dialog plus test, and the four modified files: `canvas-control-bar.tsx`, `canvas.tsx`, `starter-templates-modal.tsx`, plus their test files and context docs). No stray file.
+
+### Mechanical gate
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit` | PASS, clean, no errors |
+| `npx eslint` on every file this diff touches (`app/api/templates/**`, `hooks/use-custom-templates.ts(.test.ts)`, `lib/template-blob.ts(.test.ts)`, `lib/template-schema.ts(.test.ts)`, `components/editor/canvas-control-bar.tsx(.test.tsx)`, `components/editor/canvas.tsx(.test.tsx)`, `components/editor/save-template-dialog.tsx(.test.tsx)`, `components/editor/starter-templates-modal.tsx(.test.tsx)`) | PASS, clean, no warnings/errors |
+| `npx eslint .` (full repo) | Pre-existing noise only: a large volume of errors/warnings from `.trigger/tmp/**` (generated build artifacts, not source) plus one pre-existing error in `components/editor/editor-shell.tsx` (`react-hooks/set-state-in-effect`), confirmed via `git diff fd9c84f spec/33-custom-templates -- components/editor/editor-shell.tsx` returning empty, i.e. untouched by this diff and pre-dating the branch. One documentation-accuracy nit: Dev Notes characterizes this as a pre-existing warning, but eslint reports it at error severity. Cosmetic only, does not change the mechanical-gate verdict since the file is not part of this diff either way. |
+| `npx next build` | PASS, compiles successfully; `/api/templates` and `/api/templates/[templateId]` both appear as new registered dynamic (ƒ) routes in the build output, no route removed |
+| `npx prisma migrate status` | PASS, "Database schema is up to date!" against the live provisioned database; `20260824074650_add_custom_template` is one of 5 applied migrations |
+| `npx vitest run --no-file-parallelism` | PASS, 713/713 tests, 72/72 files, independently reproduced |
+
+### Acceptance criteria (`## Analyst Brief`, "Acceptance criteria")
+
+1. `CustomTemplate` model with `id`/`ownerId`/`name`/`description?`/`filePath`/`createdAt`, no `projectId`, real applied migration, PASS. Verified `prisma/schema.prisma:113-122` field-for-field, `prisma/migrations/20260824074650_add_custom_template/migration.sql`, and live `prisma migrate status`.
+2. `POST /api/templates`, 401/400(Zod)/uploads to `templates/{ownerId}/{templateId}.json`/creates row scoped to caller, PASS. Verified `app/api/templates/route.ts:39-93` and the exact `create` then `uploadTemplateJson` then `update` call shapes asserted in `app/api/templates/route.test.ts`.
+3. `GET /api/templates`, auth required, caller's own only, metadata-only (never `filePath`), PASS. `select: { id, name, description, createdAt }`, `where: { ownerId }`, confirmed in `app/api/templates/route.ts:24-37` and asserted via a not-containing-blob check in the test.
+4. `GET`/`DELETE /api/templates/[templateId]` both auth plus owner-only, 404-before-403 precedence, no cross-user access either direction, PASS. `loadOwnedTemplateOrError` (`app/api/templates/[templateId]/route.ts:19-29`) checks not-found before not-owned in both routes; both directions independently tested (404/403 describe blocks for both `GET` and `DELETE`).
+5. `DELETE` removes both the Prisma row and the Blob object, content unretrievable after, PASS. Prisma-delete-then-Blob-delete ordering verified via a call-order-array assertion in the test; a subsequent `GET` on a deleted row 404s (row gone) regardless of Blob delete outcome.
+6. Save-as-template flow from the canvas control bar, name plus optional description, saves live nodes/edges, PASS. `canvas-control-bar.tsx`'s new Save button triggers `onOpenSaveTemplate`, which opens `CanvasFlow`'s `handleSaveTemplate`, which POSTs `{ name, description, nodes, edges }` using its own in-scope `nodes`/`edges` (`canvas.tsx:855-891`), covered by `canvas.test.tsx`'s new save-as-template describe block including an exact-POST-body assertion.
+7. "My Templates" section, visible only to the saving user, enforced via the owner-only API gate, PASS. `starter-templates-modal.tsx`'s new section calls `useCustomTemplates()` against `GET /api/templates`, which is itself scoped server-side by `ownerId` (criterion 3), not just client-side filtering.
+8. Importing a saved template uses the exact same `handleImportTemplate`/`room.batch`/`fitView` mechanism as built-in templates, no second import path, PASS. `starter-templates-modal.tsx`'s `handleImportSaved` fetches `GET /api/templates/[templateId]`, reshapes the response into a `CanvasTemplate`, and calls the same `onImport` prop `CanvasFlow` passes down for built-in templates; the `canvas.tsx` diff shows `handleImportTemplate` itself is untouched.
+9. Deleting removes from the list immediately (no manual refresh) and from Blob storage, PASS. `useCustomTemplates()`'s `remove()` optimistically filters the deleted row out of local state on a successful `DELETE`; Blob-side removal covered by criterion 5.
+10. Built-in `CANVAS_TEMPLATES`, `starter-templates.ts`, `starter-template-preview.tsx` untouched, PASS. `git diff fd9c84f spec/33-custom-templates -- components/editor/starter-templates.ts components/editor/starter-template-preview.tsx` is empty.
+11. `canvas.tsx`'s `handleExportImage`/Export-as-image button untouched, PASS. Read the full `canvas.tsx` diff directly: the only changes are the new save-template state/handler/JSX, all additive; `handleExportImage`, `EXPORT_IMAGE_PADDING_PX`, and the export button wiring in `canvas-control-bar.tsx` are unchanged.
+12. No sharing, no edit-existing-template flow anywhere in the diff, PASS. No collaborator/team field on `CustomTemplate`, no `PATCH`/`PUT /api/templates/[templateId]` route exists.
+13. Mechanical gate (`tsc`/`eslint`/`vitest`/`next build`) all pass, PASS, independently reproduced above.
+
+All 13 acceptance criteria: PASS.
+
+### Full-fidelity round-trip verification (task's specific ask)
+
+Directly compared `lib/template-schema.ts` against spec 27's narrower `GenerateSpecGraphNodeSchema` (`trigger/generate-spec.ts`): the narrower schema is `{ id, label, shape, x, y }` only. `CustomTemplateNodeSchema` (`lib/template-schema.ts:41-48`) is a genuinely distinct, dedicated schema, `{ id, type, position: {x,y}, width?, height?, data: { label, color, textColor, shape } }`, which preserves `color`, `textColor`, `width`, and `height` end to end. Confirmed via `lib/template-schema.test.ts`'s full-fidelity-node test and the companion test that rejects a node missing the exact fields the narrower schema drops, both of which pass. `POST /api/templates` validates with this dedicated schema before persisting to Blob (`app/api/templates/route.ts:52`), and `GET /api/templates/[templateId]` returns the raw stored `nodes`/`edges` JSON unmodified (`app/api/templates/[templateId]/route.ts:75-81`), no lossy re-serialization on the read path either. Round-trip fidelity is genuine, not just documented.
+
+### Architecture invariants (`context/architecture-context.md`)
+
+1. No long-running AI work in a request handler, PASS. Pure CRUD plus Blob persistence; no Trigger.dev involvement anywhere in this diff, consistent with the brief's own Out-of-scope callout.
+2. Metadata and blob storage kept separate, PASS. `CustomTemplate` stores only `filePath` (a reference); the node/edge JSON itself lives in Blob at `templates/{ownerId}/{templateId}.json`, mirroring `ProjectSpec`/`lib/spec-blob.ts`'s existing pattern.
+3. Auth and ownership enforced at every mutation boundary, PASS. `POST` requires `getCallerIdentity`; `GET`/`DELETE /api/templates/[templateId]` both enforce owner-only access before touching Blob or returning any data (verified directly in the route bodies and by the 401/403/404 tests).
+4. Client components only where browser interactivity/real-time state requires them, PASS. `save-template-dialog.tsx`, `starter-templates-modal.tsx`, `use-custom-templates.ts` are all client components and legitimately need local state/effects/fetch; the two new API routes are server-only.
+5. Canvas schema stays consistent between user-created content and imported templates, PASS. `CustomTemplateNodeSchema`/`CustomTemplateEdgeSchema` validate the same full node/edge shape the live canvas already produces (see the round-trip verification above), and import reuses `handleImportTemplate`'s existing mechanism unchanged (criterion 8).
+
+No invariant violations found.
+
+### Standards compliance (`context/code-standards.md`)
+
+- No `any` in any changed file, confirmed via a targeted grep across every changed `.ts`/`.tsx` file, no matches.
+- No raw Tailwind colors (zinc-/slate-) or hardcoded hex values used as styling in JSX, confirmed via targeted grep; the only hex-literal hits are node color/textColor data values in test fixtures (legitimate per-node content, not UI styling tokens) and in `template-schema.ts`'s docblock prose. All actual styling uses existing tokens (text-copy-primary, text-copy-secondary, text-copy-muted, text-state-error, bg-surface-border, bg-elevated, border-surface-border, bg-base).
+- `components/ui/*` untouched, confirmed, `git diff fd9c84f spec/33-custom-templates --stat -- components/ui/` is empty. The new dialog is built entirely on existing Dialog/Input/Label/Textarea/Button primitives.
+
+### Error handling
+
+- Bad input: `POST /api/templates` returns 400 for invalid JSON, empty/whitespace-only name, and any node/edge failing the full-fidelity Zod schema (missing color/textColor/shape, invalid shape enum value), all independently tested.
+- Unauthorized: all three routes (`GET`/`POST /api/templates`, `GET`/`DELETE /api/templates/[templateId]`) return 401 before touching Prisma when `getCallerIdentity()` is null.
+- Missing/not-owned records: `[templateId]` routes return 404 for a nonexistent row and 403 for an existing-but-not-owned row, in that precedence, on both `GET` and `DELETE`.
+- Upstream failures: a genuine Blob failure on `POST` triggers best-effort placeholder-row cleanup and a 500 (not an unhandled throw), covered by both the cleanup-succeeds and cleanup-itself-also-fails branches; a genuine Blob failure on `GET /api/templates/[templateId]` surfaces as 500 (not miscategorized as 404); a Blob delete failure on `DELETE` is caught, logged, and does not fail the request (matching the brief's own accepted-tradeoff resolution for orphaned Blob objects).
+- Client-side: `SaveTemplateDialog` disables Save while the trimmed name is empty or a save is in-flight and surfaces server errors inline without losing the user's draft input; `StarterTemplatesModal`'s saved-template import/delete both surface inline errors without silently failing.
+
+### Housekeeping
+
+`context/progress-tracker.md`'s Current Phase / Current Goal sections were updated to reflect spec 33 as implemented and awaiting QA, including an accurate note about the branch-base decision regarding spec 32. Consistent with what was actually built; no detailed Completed entry yet, which is correct at this pipeline stage (that section is populated after Product Owner review, matching every prior spec's pattern in this file).
+
+### Issues found
+
+None. No bugs, no spec gaps.
+
+QA passed, ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent verification (not just trusting Dev/QA claims)
+
+- Re-derived the branch base myself: `git log origin/main -1` confirms `origin/main`'s real tip is `fd9c84f` (spec 31's merge, PR #28); local `main` is stale at `de8314c` (4 commits behind). `git merge-base --is-ancestor fd9c84f spec/33-custom-templates` is true. `git merge-base --is-ancestor 70131f6 spec/33-custom-templates` (spec 32's merge commit) is false. Confirms Dev/QA's branching account is accurate — spec 33 branches cleanly off `main`'s actual tip and carries none of spec 32's unmerged work.
+- `git diff fd9c84f spec/33-custom-templates --stat` reproduces the same 23-file diff QA reported — no stray files, nothing beyond the stated scope.
+- Read `prisma/schema.prisma`'s diff directly: `CustomTemplate` has exactly `id`, `ownerId`, `name`, `description?`, `filePath`, `createdAt`, `@@index([ownerId, createdAt])`, no `projectId`/`Project` relation, as specified.
+- Read `app/api/templates/route.ts` and `app/api/templates/[templateId]/route.ts` in full: auth-first ordering, metadata-only `GET /api/templates` (`select` explicitly excludes `filePath`), the 404-then-403 ownership precedence on both `GET`/`DELETE /api/templates/[templateId]`, and the Prisma-row-first / best-effort-Blob-delete-second ordering on `DELETE`, all match the brief and QA's account exactly.
+- **Round-trip fidelity, independently checked at the type level, not just by test name**: `lib/template-schema.ts`'s `CustomTemplateNodeSchema` (`{ id, type, position: {x,y}, width?, height?, data: { label, color, textColor, shape } }`) matches `types/canvas.ts`'s actual `CanvasNodeData` interface (`{ label, color, textColor, shape }`) field-for-field. `width`/`height` as optional top-level fields is the correct shape for a React Flow `Node` (they're the library's own measured/explicit dimensions, not `data` fields) — confirmed by reading how `nodes`/`edges` are sourced in `canvas.tsx` (`useLiveblocksFlow` from `@liveblocks/react-flow`, the same values already read by `handleExportImage`/`onCanvasGraphChange`). `lib/template-blob.ts` stores and returns this JSON opaquely (no reshaping in either direction), and `GET /api/templates/[templateId]` returns `snapshot.nodes`/`snapshot.edges` verbatim. This is a genuine, structurally-verified fidelity guarantee, not just a passing test name — spec 27's narrower `GenerateSpecGraphNodeSchema` (`{ id, label, shape, x, y }`) is confirmed absent from this path entirely.
+- Read the full `canvas.tsx` diff directly: the only changes are new, additive save-template state/handler/JSX (`isSaveTemplateDialogOpen`, `handleSaveTemplate`, `<SaveTemplateDialog>`). `handleExportImage`, `EXPORT_IMAGE_PADDING_PX`, and `handleImportTemplate` are untouched — confirmed by reading the diff, not just trusting the docblock's claim. No regression to spec 18's built-in-template import or the export-as-image feature.
+- Read the full `starter-templates-modal.tsx` diff directly: the "My Templates" section is additive below the existing `CANVAS_TEMPLATES` grid; the built-in grid's rendering logic and `CANVAS_TEMPLATES`/`starter-template-preview.tsx` are unmodified (`git diff -- components/editor/starter-templates.ts components/editor/starter-template-preview.tsx` is empty, confirmed directly). The diff lands cleanly on top of the pre-existing uncommitted layout change (flex-column scroll, `line-clamp`, `mt-auto`) rather than fighting or reverting it.
+- Confirmed no `PATCH`/`PUT /api/templates/[templateId]` route exists (`find app/api/templates -type f` lists only the two `GET`/`POST` and `GET`/`DELETE` route files) — the "no edit, no sharing" scope limits are genuinely honored, not just asserted.
+- Spot-checked `app/api/templates/[templateId]/route.test.ts`'s actual `it(...)` titles — they test the real behaviors claimed (401/404/403 precedence, genuine-Blob-failure-vs-nothing-there distinction, delete ordering, still-succeeds-on-Blob-delete-failure), not superficial placeholders.
+
+### Judgment against `project-overview.md`
+
+- **Scope**: fits cleanly inside the existing In Scope line "Starter system design template library and import" as a natural, well-bounded extension — private, owner-only, no sharing, no versioning/edit-in-place. It does not cross any Out of Scope wall: no billing/quota concept introduced despite Blob storage being genuinely consumed (correctly deferred per the brief's own Open Questions #5/callouts, consistent with `ai-workflow-rules.md`'s incremental philosophy), no versioned-history feature (delete-and-re-save only, explicitly avoiding "Versioned spec history and review workflows" territory), no enterprise permission tier introduced (plain owner-only, matching the existing owner/collaborator ceiling).
+- **Success Criteria**: this spec doesn't map onto one of the six numbered criteria one-for-one, but it substantively advances Goal 3 ("Let users import prebuilt starter system designs into the canvas") and directly lifts spec 18's own explicit "no template saving / no custom user templates / no server persistence" scope limit — a genuine capability the product didn't have before, not a technicality. It reuses spec 18's exact clear-then-add import mechanism (`handleImportTemplate`/`room.batch`/`fitView`) with zero duplication, keeping the product's import behavior consistent whether the source is a built-in or a saved template.
+- **No regression**: verified directly (not just via QA's account) that spec 18's built-in template library, its preview rendering, and the canvas's export-as-image feature are byte-for-byte unmodified in this diff.
+
+### `progress-tracker.md` accuracy
+
+The Current Phase/Current Goal entries (as they stood before this review) accurately describe what was actually built — "save a private, named `CustomTemplate`... list/delete their own saved templates, and re-import... through spec 18's existing clear-then-add mechanism unchanged" — matching both Dev Notes and QA's verified account, not an aspirational description. This review updates it from "awaiting QA" to Completed, in the same style as specs 30–32, with the PR link recorded below.
+
+### Recommendation to the human
+
+Same as prior Blob-backed specs (28, 30): no live smoke test against the real provisioned Vercel Blob store or a real browser session was performed by Dev/QA beyond the live migration check. Worth a human smoke test — save a real canvas as a template, reload the modal, import it into a fresh canvas, delete it — before treating this loop as fully proven end to end in production. Not a blocker for this recommendation.
