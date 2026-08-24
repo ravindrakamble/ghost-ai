@@ -8,6 +8,7 @@ const { getCallerIdentityMock, getProjectAccessMock, prismaMock, triggerGenerate
     prismaMock: {
       taskRun: {
         create: vi.fn(),
+        findMany: vi.fn(),
       },
     },
     triggerGenerateSpecMock: vi.fn(),
@@ -58,6 +59,11 @@ const VALID_BODY = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Default "under the limit" stub so every pre-existing test below keeps
+  // passing unmodified in behavior — spec 31's `checkAiRateLimit` runs for
+  // real in these route tests (Analyst Brief, Open Questions #4), backed by
+  // a mocked `prisma.taskRun.findMany` rather than a mocked helper module.
+  prismaMock.taskRun.findMany.mockResolvedValue([])
 })
 
 describe("POST /api/ai/spec", () => {
@@ -185,6 +191,28 @@ describe("POST /api/ai/spec", () => {
     expect(response.status).toBe(403)
     expect(triggerGenerateSpecMock).not.toHaveBeenCalled()
     expect(prismaMock.taskRun.create).not.toHaveBeenCalled()
+  })
+
+  it("returns 429 with a Retry-After header when the caller is rate limited, without triggering the task or writing a TaskRun row", async () => {
+    getCallerIdentityMock.mockResolvedValue({ userId: "user_1", email: "a@example.com" })
+    getProjectAccessMock.mockResolvedValue({ ok: true, project: { id: "p1", name: "P" }, isOwner: true })
+    const now = new Date("2026-01-01T00:05:00.000Z")
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    prismaMock.taskRun.findMany.mockResolvedValue(
+      Array.from({ length: 5 }, () => ({ createdAt: now })),
+    )
+
+    const response = await POST(postRequest({ ...VALID_BODY, roomId: "p1" }))
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get("Retry-After")).toBe("600")
+    const body = await response.json()
+    expect(body).toEqual({ error: "Too many AI requests, try again shortly" })
+    expect(triggerGenerateSpecMock).not.toHaveBeenCalled()
+    expect(prismaMock.taskRun.create).not.toHaveBeenCalled()
+
+    vi.useRealTimers()
   })
 
   it("derives both project access and the triggered task's projectId from roomId only, never a client-supplied projectId", async () => {

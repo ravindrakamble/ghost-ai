@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { errorResponse } from "@/lib/api-response"
 import { getCallerIdentity, getProjectAccess, type ProjectAccessResult } from "@/lib/project-access"
 import { triggerGenerateSpec } from "@/lib/trigger"
+import { checkAiRateLimit, rateLimitErrorResponse } from "@/lib/rate-limit"
 import { AiChatMessageSchema } from "@/types/tasks"
 import { GenerateSpecGraphNodeSchema, GenerateSpecGraphEdgeSchema } from "@/trigger/generate-spec"
 
@@ -53,9 +54,9 @@ const SpecRequestBodySchema = z.object({
  * client-provided project IDs", acceptance criterion 1).
  *
  * Failure precedence: 401 unauthenticated -> 400 malformed body -> 404/403
- * via `getProjectAccess` -> 502 upstream Trigger.dev failure -> 500 Prisma
- * write failure. Auth is checked before body parsing, matching
- * `/api/ai/design`'s own precedent.
+ * via `getProjectAccess` -> 429 rate limited (spec 31) -> 502 upstream
+ * Trigger.dev failure -> 500 Prisma write failure. Auth is checked before
+ * body parsing, matching `/api/ai/design`'s own precedent.
  */
 export async function POST(request: NextRequest) {
   const identity = await getCallerIdentity()
@@ -79,6 +80,11 @@ export async function POST(request: NextRequest) {
   const access = await getProjectAccess(body.roomId)
   if (!access.ok) {
     return accessErrorResponse(access)
+  }
+
+  const rateLimit = await checkAiRateLimit(identity.userId)
+  if (!rateLimit.allowed) {
+    return rateLimitErrorResponse(rateLimit.retryAfterSeconds)
   }
 
   let triggeredRun

@@ -8,6 +8,7 @@ const { getCallerIdentityMock, getProjectAccessMock, prismaMock, triggerDesignAg
     prismaMock: {
       taskRun: {
         create: vi.fn(),
+        findMany: vi.fn(),
       },
     },
     triggerDesignAgentMock: vi.fn(),
@@ -40,6 +41,11 @@ function postRequest(body?: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Default "under the limit" stub so every pre-existing test below keeps
+  // passing unmodified in behavior — spec 31's `checkAiRateLimit` runs for
+  // real in these route tests (Analyst Brief, Open Questions #4), backed by
+  // a mocked `prisma.taskRun.findMany` rather than a mocked helper module.
+  prismaMock.taskRun.findMany.mockResolvedValue([])
 })
 
 describe("POST /api/ai/design", () => {
@@ -109,6 +115,32 @@ describe("POST /api/ai/design", () => {
     expect(response.status).toBe(403)
     expect(triggerDesignAgentMock).not.toHaveBeenCalled()
     expect(prismaMock.taskRun.create).not.toHaveBeenCalled()
+  })
+
+  it("returns 429 with a Retry-After header when the caller is rate limited, without triggering the task or writing a TaskRun row", async () => {
+    getCallerIdentityMock.mockResolvedValue({ userId: "user_1", email: "a@example.com" })
+    getProjectAccessMock.mockResolvedValue({
+      ok: true,
+      project: { id: "p1", name: "P" },
+      isOwner: true,
+    })
+    const now = new Date("2026-01-01T00:05:00.000Z")
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    prismaMock.taskRun.findMany.mockResolvedValue(
+      Array.from({ length: 5 }, () => ({ createdAt: now })),
+    )
+
+    const response = await POST(postRequest({ prompt: "p", roomId: "p1", projectId: "p1" }))
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get("Retry-After")).toBe("600")
+    const body = await response.json()
+    expect(body).toEqual({ error: "Too many AI requests, try again shortly" })
+    expect(triggerDesignAgentMock).not.toHaveBeenCalled()
+    expect(prismaMock.taskRun.create).not.toHaveBeenCalled()
+
+    vi.useRealTimers()
   })
 
   it("triggers the design-agent task and creates one TaskRun row for an owner or collaborator", async () => {

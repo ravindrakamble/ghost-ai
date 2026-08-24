@@ -3,12 +3,26 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call. No feature spec 31 currently exists in `context/feature-specs/` — spec 30 was the last one defined. Next phase is either authoring a new feature spec or beginning the "Deferred — Production Hardening" pass below; human call.
+- Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call.
+- Phase 31: AI Rate Limiting — Completed (QA PASS, Product Owner PASS, PR #28 opened against `main`). Adds per-user rate limiting (5 combined `design`+`spec` runs per rolling 10-minute window) to `POST /api/ai/design` and `POST /api/ai/spec` via a new `lib/rate-limit.ts` helper (`checkAiRateLimit`, `rateLimitErrorResponse`) that counts existing `TaskRun` rows — no new external service, no schema change. Full pipeline trail in `context/spec-status/31-ai-rate-limiting.md`.
 
 ## Current Goal
-- Human decision on what comes next: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability).
+- No numbered feature spec currently in progress. Spec 31 (AI Rate Limiting) is complete; human decision needed on what comes next — author a new feature spec (no `context/feature-specs/32-*.md` exists yet), or continue the "Deferred — Production Hardening" pass below (migrations-on-deploy, error monitoring/observability).
 
 ## Completed
+
+- Feature spec 31: AI Rate Limiting
+  - `lib/rate-limit.ts` (new) — `RATE_LIMIT_WINDOW_MS` (10 min), `RATE_LIMIT_MAX_REQUESTS` (5), `RateLimitResult` interface, `checkAiRateLimit(userId)`, and `rateLimitErrorResponse(retryAfterSeconds)`. The helper runs a single `prisma.taskRun.findMany({ where: { userId, createdAt: { gte: windowStart } }, orderBy: { createdAt: "asc" }, select: { createdAt: true } })`, deriving `allowed` from `recentRuns.length < RATE_LIMIT_MAX_REQUESTS` and, when blocked, `retryAfterSeconds` from the oldest row's `createdAt` (`Math.ceil`, clamped to a minimum of `1`). No `type`/`taskId` discriminator on the query — `TaskRun` has none — so design and spec runs from the same user share one counter, and no `projectId` filter, so the limit applies per-user across every project they can access.
+  - `lib/rate-limit.test.ts` (new, 9 tests) — covers the constants, empty-window/under-limit/boundary/over-limit/rounding/clamping cases, the exact Prisma call shape, and `rateLimitErrorResponse`'s status/header/body.
+  - `app/api/ai/design/route.ts` / `app/api/ai/spec/route.ts` (modified) — `checkAiRateLimit(identity.userId)` called strictly after the `getProjectAccess` success branch and strictly before `triggerDesignAgent`/`triggerGenerateSpec`; on `allowed: false`, returns `rateLimitErrorResponse(...)` (429 + `Retry-After` header) without calling the trigger function or writing a `TaskRun` row. Failure precedence updated to 401 → 400 → 404/403 → 429 → 502 → 500 in both routes' docblocks and behavior.
+  - `app/api/ai/design/route.test.ts` / `app/api/ai/spec/route.test.ts` (modified) — a default `prismaMock.taskRun.findMany.mockResolvedValue([])` ("under the limit") stub added to `beforeEach` so every pre-existing test keeps passing unmodified in behavior, plus one new 429 test per route (status, `Retry-After` header, error body, trigger function/`prisma.taskRun.create` not called).
+  - No `prisma/schema.prisma`, `trigger/design-agent.ts`, or `trigger/generate-spec.ts` touched — this spec's own explicit Scope Limits; no new external rate-limiting service, reusing the existing `TaskRun` table only. No UI change anywhere.
+  - Known, disclosed limitation: a best-effort read-then-write check (no atomic increment or row lock) means a burst of near-simultaneous requests from the same user could momentarily exceed the limit before their own prior `TaskRun` rows are written — an explicit, approved tradeoff of the no-new-infrastructure Scope Limit, documented directly in `lib/rate-limit.ts`'s own docblock.
+  - 644/644 tests passing across 66/66 files. `npx tsc --noEmit`, `npx eslint` (clean on every changed file), `npx vitest run --no-file-parallelism`, `npx next build` all pass.
+  - QA: PASS on first pass, no bugs or spec gaps found. All 12 acceptance criteria independently re-verified against the code, full mechanical gate independently reproduced.
+  - Product Owner: PASS — ready for human review (round 1, no escalation). Independently re-verified via `git diff main...spec/31-ai-rate-limiting` (not trusting Dev/QA claims) that the diff touches only `lib/rate-limit.ts`/`.test.ts`, the two AI routes'/`.test.ts` files, and context docs — empty diff against `prisma/schema.prisma`, `trigger/`, and `components/`. Judged this a legitimate, pre-logged hardening pass (pulled from `progress-tracker.md`'s own "Deferred — Production Hardening" backlog, not invented scope) protecting two already-in-scope AI generation features, touching nothing on the Out of Scope wall (not billing, not an enterprise permission tier, no UI). Confirmed no regression to Success Criteria 4/5 (AI generation / spec generation) for a user under the limit — the check adds one `await` between two already-existing steps, and a user under 5 combined runs in 10 minutes falls through to the exact same trigger → `TaskRun` write → response path as before this diff. The one accepted tradeoff (concurrent-burst race window) is proportionate and honestly disclosed, consistent with `ai-workflow-rules.md`'s incremental philosophy, and doesn't block any later spec from building on this one's contract.
+  - PR opened against `main`: [PR #28](https://github.com/ravindrakamble/ghost-ai/pull/28) — not yet merged, human's call.
+  - Full pipeline trail in `context/spec-status/31-ai-rate-limiting.md`.
 
 - Feature (direct user request, not a numbered spec): auto-open the project sidebar on `/editor` home + fix stale project list after creating/deleting
   - `components/editor/editor-shell.tsx` — `EditorShell` now reads `roomId` via `useParams<{ roomId?: string }>()` (same convention `project-sidebar.tsx`/`use-project-actions.ts` already use) and opens the project sidebar automatically whenever that transitions to `undefined` (landing on `/editor`, including navigating there from inside a project via the new Home link) — an effect, not a mount-time default, since `EditorShell` doesn't remount across that sibling navigation. Only opens, never force-closes: manually closing the sidebar while still on `/editor` doesn't get overridden, since `roomId` hasn't changed.
@@ -438,12 +452,12 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 30 completed above; no feature spec 31 currently exists in `context/feature-specs/`)
+- None currently.
 
 ## Next Up
 
-- Human decision: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability). With spec 30's PR opened (pending human review/merge), the generate -> persist -> view -> download loop is reachable end to end from the UI for the first time — no further feature spec is currently required to close that loop; any next feature spec would be a genuinely new product surface, not a continuation of this one.
-- Human review/merge of spec 25/26/27/28/29/30's PRs and the still-open PRs for specs 12–24.
+- A human decision on what comes next now that spec 31 is complete: author a new feature spec (no `context/feature-specs/32-*.md` exists yet — would be a genuinely new product surface, since the generate -> persist -> view -> download loop is already reachable end to end from the UI as of spec 30), or begin the rest of the "Deferred — Production Hardening" pass below (migrations-on-deploy, error monitoring/observability).
+- Human review/merge of spec 25/26/27/28/29/30/31's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
 
@@ -455,10 +469,22 @@ Update this file whenever the current phase, active feature, or implementation s
 
 Cross-cutting gaps found during the pre-pipeline review that don't block any individual spec 06–30, so they're logged here rather than wedged into an unrelated spec. Revisit as a dedicated pass once the feature specs are done:
 
-- **Rate limiting** on `/api/ai/design` and `/api/ai/spec` — either endpoint can trigger a paid Gemini + Trigger.dev run; nothing currently stops a project collaborator from spamming them.
+- ~~**Rate limiting**~~ — done. Spec 31 (`context/feature-specs/31-ai-rate-limiting.md` / `context/spec-status/31-ai-rate-limiting.md`) added per-user rate limiting (5 combined `design`+`spec` runs per rolling 10-minute window) to `/api/ai/design` and `/api/ai/spec` via `lib/rate-limit.ts`. QA PASS, Product Owner PASS, PR #28 opened against `main` — not yet merged, human's call.
 - ~~**Vercel Blob access model**~~ — resolved. The provisioned store is confirmed `private` (a `public` `put`/`get` call is rejected outright); `lib/canvas-blob.ts` was corrected to match (`fix/canvas-blob-private-access`, merged into `main` alongside spec 27's PR), and `lib/spec-blob.ts` (spec 28) follows the same `access: "private"` convention from the start.
 - **Migrations on deploy** — no spec currently wires `prisma migrate deploy` into the build/deploy step.
 - **Error monitoring / observability** — nothing in the context docs specifies a monitoring tool (e.g. Sentry) for production.
+
+## Deferred — Future Product Ideas
+
+Functionality suggestions raised in conversation (2026-08-24) that extend the app beyond `project-overview.md`'s current scope. None are committed — logged here as backlog candidates for a human to promote into a numbered feature spec:
+
+- **AI critique/refinement mode** — let the design agent review the *existing* canvas ("find single points of failure," "suggest scaling improvements") instead of only generating from a blank prompt. Reuses the spec 22/23 design-agent pipeline.
+- **Save canvas as a custom template** — let users promote their own canvas into the starter-template library (`context/feature-specs/18-starter-template.md`), which is currently a static, curated set only.
+- **Public read-only share link** — a non-collaborator stakeholder currently cannot view a project's canvas or spec at all; a view-only, unauthenticated link would need its own access-control path alongside the existing owner/collaborator model (`architecture-context.md`'s Auth and Collaboration Model).
+- **Diagram-to-IaC export** — generate a Terraform/docker-compose skeleton from the graph alongside the Markdown spec, reusing spec 27's node/edge structural summary (`GenerateSpecGraphNode`/`GenerateSpecGraphEdge` in `trigger/generate-spec.ts`).
+- **Canvas search/jump-to-node** — useful once a diagram grows past what fits on screen; no spec currently covers this.
+- **Node-level comments/annotations** — async collaboration on a specific node, distinct from the existing live cursors/presence (spec 19) and the room-wide `ai-chat` feed (spec 25).
+- **Notify on spec-generation completion** — a toast or email when a run finishes if the user has navigated away from the tab; today `useRealtimeRun` only updates state while the component is mounted.
 
 ## Architecture Decisions
 
