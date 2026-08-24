@@ -339,6 +339,28 @@ describe("WorkspaceShell", () => {
     });
   });
 
+  it("fetches the public link alongside collaborators when the Share dialog opens for an owner (spec 34)", async () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /share/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/projects/p1/collaborators");
+      expect(fetchMock).toHaveBeenCalledWith("/api/projects/p1/public-link");
+    });
+  });
+
+  it("does not fetch the public link when the Share dialog opens for a non-owner collaborator (spec 34)", async () => {
+    render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /share/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/projects/p1/collaborators");
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/projects/p1/public-link");
+  });
+
   it("defaults sendChatMessage to a function that fails (input preserved, error shown) before Canvas pushes a real one", () => {
     render(<WorkspaceShell project={{ id: "p1", name: "Project One" }} isOwner={true} />);
 

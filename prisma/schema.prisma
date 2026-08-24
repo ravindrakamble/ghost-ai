@@ -32,17 +32,23 @@ enum ProjectStatus {
 }
 
 model Project {
-  id             String              @id @default(cuid())
-  ownerId        String
-  name           String
-  description    String?
-  status         ProjectStatus       @default(DRAFT)
-  canvasJsonPath String?
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
-  collaborators  ProjectCollaborator[]
-  taskRuns       TaskRun[]
-  specs          ProjectSpec[]
+  id               String                @id @default(cuid())
+  ownerId          String
+  name             String
+  description      String?
+  status           ProjectStatus         @default(DRAFT)
+  canvasJsonPath   String?
+  /// Public, unauthenticated read-only share token (spec 34). `null` means
+  /// no active public link. `@unique` so `app/api/public/[token]/route.ts`
+  /// can resolve a project with a single `findUnique`. Owner-only to
+  /// generate/regenerate (overwrite) or revoke (set back to `null`) — see
+  /// `app/api/projects/[projectId]/public-link/route.ts`.
+  publicShareToken String?               @unique
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  collaborators    ProjectCollaborator[]
+  taskRuns         TaskRun[]
+  specs            ProjectSpec[]
 
   @@index([ownerId])
   @@index([createdAt])
