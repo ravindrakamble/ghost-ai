@@ -117,3 +117,86 @@ This branch was originally cut from the tip of `spec/31-ai-rate-limiting` (a sta
 - None beyond what the brief itself already scoped out (no critique-only/non-applying mode, no new action kind, no new API route — all confirmed unchanged by this diff).
 
 Implementation ready for QA at `context/spec-status/32-ai-design-critique.md`.
+
+## QA Report
+
+**Verdict: PASS**
+
+### Branch-base verification
+
+- `git merge-base main spec/32-ai-design-critique` → `de8314c9de613d201c1b50b9878fba2d88e8b4ae`, identical to local `main`'s own tip. The claimed branch-base correction landed correctly.
+- `git diff --stat main...spec/32-ai-design-critique` shows exactly the 9 files Dev Notes lists (`lib/design-agent-ai.ts`/`.test.ts`, `trigger/design-agent.ts`/`.test.ts`, `components/editor/ai-architect-tab.tsx`/`.test.tsx`, `context/feature-specs/32-ai-design-critique.md`, `context/progress-tracker.md`, `context/spec-status/32-ai-design-critique.md`).
+- `lib/rate-limit.ts` does not exist on this branch (`git show spec/32-ai-design-critique:lib/rate-limit.ts` → fatal: path does not exist). `git diff main...spec/32-ai-design-critique | grep -i "rate.limit"` only matches prose in the two markdown files (progress-tracker note, Analyst Brief's out-of-scope callout) — no rate-limiting code crossed over from spec 31.
+
+### Mechanical gate (reproduced independently, not trusted from Dev Notes)
+
+- `npx tsc --noEmit` — clean, no errors. PASS
+- `npx eslint lib/design-agent-ai.ts lib/design-agent-ai.test.ts trigger/design-agent.ts trigger/design-agent.test.ts components/editor/ai-architect-tab.tsx components/editor/ai-architect-tab.test.tsx` — clean, no warnings/errors. PASS
+- `npx vitest run lib/design-agent-ai.test.ts trigger/design-agent.test.ts components/editor/ai-architect-tab.test.tsx --no-file-parallelism` — 70/70 passing. PASS
+- `npx vitest run --no-file-parallelism` (full suite) — 646/646 passing across 65 files, ~265s, no flakes observed on this run. PASS
+- `npx next build` — Turbopack production build succeeds, TypeScript passes, 17 routes compile, `/api/ai/design` and `/api/ai/design/token` still present as dynamic routes, no new route added. PASS
+
+### Acceptance criteria (Analyst Brief, 13 items) — verified directly against code, not summarized from Dev Notes
+
+1. `DESIGN_AGENT_ACTIONS_JSON_SCHEMA` requires `summary` as a top-level string sibling of `actions` (`required: ["actions", "summary"]`); `isRawDesignAgentActionsResponse` validates it via the (now module-scoped) `isNonEmptyString`; a missing/empty/non-string `summary` fails `jsonSchema()`'s `validate` callback the same way an invalid action does, surfacing as a `generateObject` rejection. Confirmed in code and by 3 dedicated tests (missing/empty-string/non-string). PASS
+2. `interpretDesignPrompt`'s return type is `Promise<InterpretDesignPromptResult>` (`{ actions, summary }`); every call site (`trigger/design-agent.ts`) destructures both fields, no bare-array callers remain. PASS
+3. `buildPrompt` contains an explicit "Always include a `summary` field..." instruction and an explicit critique-mode instruction (SPOFs, missing caching/queueing, unclear boundaries) gated on the request "reading as a review or critique." Confirmed via `buildPrompt`'s source and the prompt-content test. PASS
+4. `runDesignAgent` destructures `{ actions, summary }` from `interpretDesignPrompt(...)` and returns `{ roomId, actionCount, summary }` as `DesignAgentResult`. PASS
+5. The `"complete"`-stage broadcast's `text` is the real `summary` variable, not the old `actions.length > 0 ? ... : ...` generic string (confirmed removed from the diff and replaced). PASS
+6. `ai-architect-tab.tsx`'s completion effect calls `resolveSuccessMessage(realtimeRun.output?.summary)`, which returns the real summary when it's a non-empty string. `realtimeRun` is genuinely typed via `useRealtimeRun<typeof designAgentTask>(...)` with a type-only import of `designAgentTask` — `.output` is `DesignAgentResult | undefined`, not `any`. PASS
+7. `resolveSuccessMessage` falls back to `DESIGN_AGENT_SUCCESS_MESSAGE` for `undefined`/`""`/non-string (e.g. `42`) input; covered by a parameterized `it.each([undefined, "", 42])` test that passed. PASS
+8. `buildDesignAgentFailureMessage`'s function body is untouched in the diff (only nearby doc comments were extended) — confirmed via `git diff` showing no change inside the function itself. PASS
+9. A "Critique this design" `<button>` is rendered outside the `chatMessages.length === 0` gate (always reachable), and `handleCritique` routes through the same `submitPromptText` → `submitDesignRequest` → `POST /api/ai/design` → `POST /api/ai/design/token` pipeline `handleSubmit` uses. Verified in code and by the test asserting identical request body shape (`{ prompt, roomId, projectId }`) and no new endpoint hit. PASS
+10. `DESIGN_AGENT_ACTION_KINDS` is unchanged (still exactly the 7 original kinds; diff only hoists `isNonEmptyString` to module scope, doesn't touch the kinds array or any per-kind JSON Schema). PASS
+11. `git diff --stat main...spec/32-ai-design-critique -- trigger/generate-spec.ts lib/generate-spec-ai.ts components/editor/specs-tab.tsx` returns empty — all three untouched. PASS
+12. No new AI provider abstraction — `generateObject`/`jsonSchema()` call in `lib/design-agent-ai.ts` extended in place (added `summary` to the existing schema object and validator), not wrapped or replaced. PASS
+13. All four mechanical-gate commands pass, reproduced independently above. PASS
+
+### Scope-limit / invariant checks
+
+- No critique-only/non-applying mode added — `handleCritique` routes through the exact same action-application pipeline (`applyDesignAgentActions`) as every other prompt; no new "dry run" flag anywhere in the diff.
+- `components/ui/*` diff is empty — no design-system components touched.
+- No raw Tailwind colors/hex values introduced (`grep -E "zinc-|slate-|#[0-9a-fA-F]{3,6}"` against the changed source files returns nothing outside doc-comment prose).
+- No `any` introduced in the diff.
+- Architecture invariants (`architecture-context.md`) unaffected: AI work still lives in the `trigger/design-agent.ts` task, not a request handler; no new storage/blob layer touched; `app/api/ai/design/route.ts` (the auth/ownership enforcement boundary) is untouched by this diff, so its existing auth/ownership checks still gate the critique quick action identically to a typed prompt; `ai-architect-tab.tsx` remains a client component for the same real-time-state reasons as before.
+- `context/progress-tracker.md`'s "Current Goal"/"In Progress" sections were updated to accurately describe what was actually built, and correctly flag that spec 31 is not included on this branch.
+
+### Issues found
+
+None. No bugs or spec gaps identified.
+
+QA passed — ready for Product Owner review.
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent verification (not trusting Dev/QA accounts)
+
+- `git merge-base main spec/32-ai-design-critique` → `de8314c9de613d201c1b50b9878fba2d88e8b4ae`, identical to `main`'s own tip. `git diff --stat main...spec/32-ai-design-critique` shows exactly the 9 files claimed. Re-confirmed independently, not taken on Dev/QA's word.
+- Read the full `git diff main...spec/32-ai-design-critique` for `lib/design-agent-ai.ts`, `trigger/design-agent.ts`, and `components/editor/ai-architect-tab.tsx` directly:
+  - `summary` is a genuine required top-level sibling of `actions` in `DESIGN_AGENT_ACTIONS_JSON_SCHEMA` (`required: ["actions", "summary"]`) and validated via `isNonEmptyString` at the same boundary as every other required field.
+  - `buildPrompt` genuinely instructs the model to (a) critique the diagram (SPOFs, missing caching/queueing, unclear boundaries) when the request reads as a review, and (b) always produce a real, specific, non-placeholder `summary`.
+  - `runDesignAgent`'s `"complete"` broadcast `text` is now the real `summary` variable — the old `actions.length > 0 ? "Ghost AI made N change(s)..." : "..."` generic string is fully gone from the diff, not just supplemented.
+  - `ai-architect-tab.tsx`'s completion effect now calls `resolveSuccessMessage(realtimeRun.output?.summary)`; `realtimeRun` is genuinely typed via `useRealtimeRun<typeof designAgentTask>(...)` with a type-only import (confirmed `.output` is `DesignAgentResult | undefined`, not `any`/a cast). `buildDesignAgentFailureMessage`'s own function body is untouched in the diff — only nearby doc comments were extended — confirming acceptance criterion 8 (failure path unchanged) directly rather than trusting the claim.
+  - The "Critique this design" `<button>` (line ~578) is rendered in the always-present footer block, structurally outside the `chatMessages.length === 0 ? ... : ...` conditional that gates `STARTER_PROMPTS` (line ~515) — confirmed by reading the surrounding JSX directly, not inferring from prose. It is genuinely reachable for the entire lifetime of a room session, not just before the first message.
+  - `handleCritique` → `submitPromptText` → `submitDesignRequest` is the exact same function `handleSubmit` calls for a typed prompt; no new fetch target, no new request shape. Confirmed in code and cross-checked against the test asserting an identical `{ prompt, roomId, projectId }` body against `/api/ai/design`.
+- Confirmed empty diffs against `main` for `trigger/generate-spec.ts`, `lib/generate-spec-ai.ts`, `components/editor/specs-tab.tsx`, `lib/rate-limit.ts`, and `app/api/ai/design/route.ts` — no Out-of-Scope crossing, no spec-31 rate-limiting code present on this branch, and the auth/ownership boundary (`getProjectAccess` inside the untouched route) still gates the critique quick action identically to a typed prompt.
+- `DESIGN_AGENT_ACTION_KINDS` is referenced (`isValidRawAction`'s existing `includes` check) but not modified anywhere in the diff — still exactly the 7 original kinds.
+- Read the new/updated test blocks in `components/editor/ai-architect-tab.test.tsx` directly (not just Dev's/QA's summary of them): the `it.each([undefined, "", 42])` fallback test, the "shows the critique quick action even when chatMessages already has content" test, and the "auto-submits... without filling the textarea" test all genuinely exercise the behaviors claimed — not just asserting rendering.
+
+### Judgment against `project-overview.md`
+
+- **Success Criterion 4** ("AI can generate an architecture into the shared room from a prompt") — this spec doesn't change the generation mechanism itself, but it substantively strengthens the *quality of collaboration* around it, which is the whole point of Goal 5 ("Let collaborators refine the generated architecture") and Core User Flow step 7. Before this spec, every successful run — whether it added a queue, deleted half the diagram, or did nothing useful — produced the identical canned "I've updated the canvas based on your prompt — take a look!" message. A user had no way to know *what* changed or *why* without manually diffing the canvas themselves. A real, Gemini-grounded 1-2 sentence explanation is a genuine trust/usability improvement to an already-shipped feature, not a technicality bolted on to satisfy a checklist — it's the difference between a black-box tool and something that behaves like an actual collaborator explaining its own reasoning, which is core to the product's "collaborators refine the generated architecture" framing.
+- **Critique quick action** — this is a real, substantively new use of the existing generation pipeline (a review/critique framing, not just a build framing), reachable with one click at any point in a room's life (verified above, not just before the first message), and it explicitly asks the model to *apply* improvements rather than only describe them — so it produces real canvas mutations a user can then keep refining, consistent with the existing action-application pipeline and Goal 5. This isn't a second feature bolted on for its own sake; it's a natural, low-effort extension of the same generation loop already in Scope ("AI-powered architecture generation from prompts").
+- **Scope** — nothing here touches Out of Scope (billing, enterprise tiers, versioned spec history, object storage migration, mobile). No new API route, no new AI provider, no new action kind, no critique-only/non-applying mode — all confirmed absent from the diff directly, not assumed from the brief's own Out-of-scope callouts.
+- **No regression to specs 22-26/31** — `trigger/generate-spec.ts`, `lib/generate-spec-ai.ts`, `components/editor/specs-tab.tsx` are byte-for-byte untouched (confirmed via empty `git diff --stat`). The failure-path chat message, the `ai-status-feed` broadcast mechanism, the two-call `POST /api/ai/design` → token → `useRealtimeRun` pipeline, and all 7 `DESIGN_AGENT_ACTION_KINDS` are unchanged in shape — only the "complete" stage's `text` source and the addition of a new caller-supplied prompt changed. Spec 31's rate-limiting code is confirmed absent from this branch (`lib/rate-limit.ts` doesn't exist here), and since `app/api/ai/design/route.ts` itself is untouched, the critique action will fall under spec 31's per-user rate limit identically to any other prompt once that branch merges — no special-casing needed or introduced.
+
+### `progress-tracker.md` accuracy
+
+The version on this branch (`Current Goal` section) accurately describes the branch's real state: spec 32 implemented, ready for QA at the time it was written, and correctly flags that spec 31 exists on a separate unmerged branch and isn't included here. This matches what QA actually verified (branch-base correction, the 9-file diff, no spec-31 code present). I'm updating "Current Goal"/"Completed" below to reflect the now-completed PO pass, per this pipeline's own convention (PO is the one that moves an entry to Completed).
+
+### Escalation
+
+Not needed. No product-fit or scope ambiguity found in this pass — round 1, no escalation.
+
+PO passed — opening PR against `main` and updating `context/progress-tracker.md`.
