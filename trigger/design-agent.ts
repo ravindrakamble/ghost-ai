@@ -22,6 +22,17 @@ export interface DesignAgentPayload {
 export interface DesignAgentResult {
   roomId: string
   actionCount: number
+  /**
+   * The model's own short (1-2 sentence) explanation of what changed and why
+   * (spec 32), sourced from `interpretDesignPrompt`'s `summary` field.
+   * Non-empty by construction — `isRawDesignAgentActionsResponse`
+   * (`lib/design-agent-ai.ts`) validates it as a required non-empty string
+   * before `interpretDesignPrompt` can resolve at all, so a schema-invalid
+   * response (including a missing/empty `summary`) already makes
+   * `generateObject` reject and `runDesignAgent` fall into its `catch`
+   * branch before this field is ever populated.
+   */
+  summary: string
 }
 
 export const DESIGN_AGENT_TASK_ID = "design-agent"
@@ -76,7 +87,7 @@ export async function runDesignAgent(payload: DesignAgentPayload): Promise<Desig
       text: "Ghost AI is generating changes…",
     })
 
-    const actions = await interpretDesignPrompt({ prompt, currentGraph })
+    const { actions, summary } = await interpretDesignPrompt({ prompt, currentGraph })
 
     await setDesignAgentPresence(roomId, { thinking: true, cursor: lastActionCursor(actions) })
 
@@ -84,15 +95,16 @@ export async function runDesignAgent(payload: DesignAgentPayload): Promise<Desig
 
     await broadcastDesignAgentStatus(roomId, {
       stage: "complete",
-      text:
-        actions.length > 0
-          ? `Ghost AI made ${actions.length} change${actions.length === 1 ? "" : "s"} to the design.`
-          : "Ghost AI didn't find any changes to make for that request.",
+      // Spec 32: the model's own real summary of what it changed and why,
+      // replacing the previous generic count-based string — see
+      // `DesignAgentResult.summary`'s own doc for why this is guaranteed
+      // non-empty by the time this line runs.
+      text: summary,
     })
 
     logger.log("design-agent task completed", { roomId, actionCount: actions.length })
 
-    return { roomId, actionCount: actions.length }
+    return { roomId, actionCount: actions.length, summary }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     logger.error("design-agent task failed", { roomId, error: message })
