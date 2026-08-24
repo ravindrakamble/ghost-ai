@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { errorResponse } from "@/lib/api-response"
 import { getCallerIdentity, getProjectAccess, type ProjectAccessResult } from "@/lib/project-access"
 import { triggerDesignAgent } from "@/lib/trigger"
+import { checkAiRateLimit, rateLimitErrorResponse } from "@/lib/rate-limit"
 
 /**
  * Maps a failed `getProjectAccess` result to this repo's standard error
@@ -51,11 +52,12 @@ function isValidDesignRequestBody(body: DesignRequestBody): body is ValidDesignR
  * the AI is a collaborative action available to any project member.
  *
  * Failure precedence: 401 unauthenticated -> 400 malformed/inconsistent body
- * -> 404/403 via `getProjectAccess` -> 502 upstream Trigger.dev failure -> 500
- * Prisma write failure. Auth is checked before body parsing (unlike the
- * canvas route, which gets `projectId` from the URL) since this route's
- * `projectId` only exists inside the body — an unauthenticated caller should
- * never learn whether their body was well-formed.
+ * -> 404/403 via `getProjectAccess` -> 429 rate limited (spec 31) -> 502
+ * upstream Trigger.dev failure -> 500 Prisma write failure. Auth is checked
+ * before body parsing (unlike the canvas route, which gets `projectId` from
+ * the URL) since this route's `projectId` only exists inside the body — an
+ * unauthenticated caller should never learn whether their body was
+ * well-formed.
  *
  * `roomId` and `projectId` are two independently client-supplied fields per
  * this spec's own text; every prior spec (10, 11, 21) treats room ID and
@@ -87,6 +89,11 @@ export async function POST(request: NextRequest) {
   const access = await getProjectAccess(body.projectId)
   if (!access.ok) {
     return accessErrorResponse(access)
+  }
+
+  const rateLimit = await checkAiRateLimit(identity.userId)
+  if (!rateLimit.allowed) {
+    return rateLimitErrorResponse(rateLimit.retryAfterSeconds)
   }
 
   let triggeredRun
