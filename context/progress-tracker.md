@@ -5,9 +5,10 @@ Update this file whenever the current phase, active feature, or implementation s
 ## Current Phase
 - Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call.
 - Phase 31: AI Rate Limiting — Completed (QA PASS, Product Owner PASS, PR #28 opened against `main`). Adds per-user rate limiting (5 combined `design`+`spec` runs per rolling 10-minute window) to `POST /api/ai/design` and `POST /api/ai/spec` via a new `lib/rate-limit.ts` helper (`checkAiRateLimit`, `rateLimitErrorResponse`) that counts existing `TaskRun` rows — no new external service, no schema change. Full pipeline trail in `context/spec-status/31-ai-rate-limiting.md`.
+- Phase 34: Public Share Link — Implemented, awaiting QA. Lets a project owner generate/revoke a single public, unauthenticated, read-only share link (`Project.publicShareToken`) so a stakeholder without an account can view a static snapshot of the canvas and latest spec at `/share/[token]`, via a new unauthenticated `GET /api/public/[token]` — no Liveblocks room join, no edit affordances. Full pipeline trail in `context/spec-status/34-public-share-link.md`.
 
 ## Current Goal
-- No numbered feature spec currently in progress. Spec 31 (AI Rate Limiting) is complete; human decision needed on what comes next — author a new feature spec (no `context/feature-specs/32-*.md` exists yet), or continue the "Deferred — Production Hardening" pass below (migrations-on-deploy, error monitoring/observability).
+- Spec 34 (Public Share Link) is implemented and ready for QA. Once that pipeline finishes, a human decision is still needed on what comes next after specs 32-34 settle — author a new feature spec (`context/feature-specs/35-38` already exist as raw drafts: IaC export, canvas search, node comments, completion notifications), or continue the "Deferred — Production Hardening" pass below (migrations-on-deploy, error monitoring/observability).
 
 ## Completed
 
@@ -452,7 +453,16 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-- None currently.
+- Feature spec 34: Public Share Link — implemented on `spec/34-public-share-link` (branched from `main`'s real tip, `fd9c84f`, per spec 33's own precedent — verified via `git merge-base` before starting). Not yet reviewed by QA/Product Owner, so not moved to Completed.
+  - `prisma/schema.prisma` — `Project.publicShareToken String? @unique`; migration `20260824084745_add_project_public_share_token`.
+  - `lib/public-project.ts` (new) — shared `getPublicProjectData(token)` lookup, used directly by both the new unauthenticated route and the public page (a deliberate deviation from the raw spec's literal "the page fetches the route" wording — see that spec-status file's Dev Notes, Key Decision #4, for why).
+  - `app/api/projects/[projectId]/public-link/route.ts` (new) — owner-only `GET`/`POST`/`DELETE`.
+  - `app/api/public/[token]/route.ts` (new) — unauthenticated `GET`.
+  - `app/share/[token]/page.tsx` (new) — public Server Component page.
+  - `components/editor/public-canvas-preview.tsx`, `components/editor/public-spec-view.tsx` (new).
+  - `hooks/use-public-link.ts` (new); `components/editor/share-dialog.tsx`, `components/editor/workspace-shell.tsx`, `proxy.ts` (modified).
+  - 707/707 tests passing across 73 files (63 net-new/extended over spec 31's 644/66 baseline). `npx tsc --noEmit`, `npx eslint .`, `npx next build` all clean.
+  - Full pipeline trail in `context/spec-status/34-public-share-link.md`.
 
 ## Next Up
 
@@ -464,6 +474,7 @@ Update this file whenever the current phase, active feature, or implementation s
 - Spec 18's no-confirmation-dialog posture on the destructive template-import clear — Product Owner accepted it for this stage but flagged that Liveblocks undo doesn't fully cover the multiplayer case (a second collaborator's own just-made edits could be lost without their own prompt). Recommended as a candidate follow-up (lightweight confirmation, or gating it when other collaborators are present), not a blocker for spec 19+.
 - Spec 19's live two-tab/multiplayer behavior (self-exclusion with a real second tab, cursor tracking through pan/zoom, avatar overflow past 5 collaborators) has not been verified in a real browser — recommended as a human smoke test before spec 20+ builds further on this presence mechanism, not a blocker.
 - Spec 23's full pipeline (real Gemini call → real Storage mutation → real client-side render, plus live AI status/presence) has not been exercised end-to-end against live services (no `GEMINI_API_KEY`/Gemini account or live Liveblocks room in this environment) — recommended as a human smoke test before spec 24+ builds further on the `ai-status-feed`/AI presence mechanism this spec produces, not a blocker.
+- Spec 34 found the shared dev Postgres database already carrying spec 33's `CustomTemplate` table (applied via spec 33's own `migrate dev` run against the same instance, before its PR merged) with no corresponding migration file in `main`'s (or spec 34's) local history. Spec 34's own migration was applied via `prisma db execute` + `migrate resolve` instead of `migrate dev` specifically to avoid the destructive `migrate reset` the drift check otherwise prompts. Flagging for whoever merges spec 33: confirm the two branches' independently-created migrations (spec 33's `CustomTemplate` create, spec 34's `Project.publicShareToken` add) reconcile cleanly in `main`'s migration history once both land — they're non-conflicting at the SQL level, but the bookkeeping across two independently-migrated unmerged branches on one shared database hasn't been double-checked by a human yet.
 
 ## Deferred — Production Hardening (after spec 30)
 
@@ -473,6 +484,7 @@ Cross-cutting gaps found during the pre-pipeline review that don't block any ind
 - ~~**Vercel Blob access model**~~ — resolved. The provisioned store is confirmed `private` (a `public` `put`/`get` call is rejected outright); `lib/canvas-blob.ts` was corrected to match (`fix/canvas-blob-private-access`, merged into `main` alongside spec 27's PR), and `lib/spec-blob.ts` (spec 28) follows the same `access: "private"` convention from the start.
 - **Migrations on deploy** — no spec currently wires `prisma migrate deploy` into the build/deploy step.
 - **Error monitoring / observability** — nothing in the context docs specifies a monitoring tool (e.g. Sentry) for production.
+- **Anonymous request rate limiting for `GET /api/public/[token]`** — new as of spec 34. This is the first fully unauthenticated, data-serving route in the app; `lib/rate-limit.ts` (spec 31) is keyed by authenticated Clerk `userId` and has no meaning here. No per-IP/per-token throttling exists anywhere yet. An unrevoked public link is effectively public forever with no request-rate protection.
 
 ## Deferred — Future Product Ideas
 
@@ -480,7 +492,7 @@ Functionality suggestions raised in conversation (2026-08-24) that extend the ap
 
 - **AI critique/refinement mode** — let the design agent review the *existing* canvas ("find single points of failure," "suggest scaling improvements") instead of only generating from a blank prompt. Reuses the spec 22/23 design-agent pipeline.
 - **Save canvas as a custom template** — let users promote their own canvas into the starter-template library (`context/feature-specs/18-starter-template.md`), which is currently a static, curated set only.
-- **Public read-only share link** — a non-collaborator stakeholder currently cannot view a project's canvas or spec at all; a view-only, unauthenticated link would need its own access-control path alongside the existing owner/collaborator model (`architecture-context.md`'s Auth and Collaboration Model).
+- ~~**Public read-only share link**~~ — implemented as spec 34 (`context/feature-specs/34-public-share-link.md` / `context/spec-status/34-public-share-link.md`). Awaiting QA/Product Owner review.
 - **Diagram-to-IaC export** — generate a Terraform/docker-compose skeleton from the graph alongside the Markdown spec, reusing spec 27's node/edge structural summary (`GenerateSpecGraphNode`/`GenerateSpecGraphEdge` in `trigger/generate-spec.ts`).
 - **Canvas search/jump-to-node** — useful once a diagram grows past what fits on screen; no spec currently covers this.
 - **Node-level comments/annotations** — async collaboration on a specific node, distinct from the existing live cursors/presence (spec 19) and the room-wide `ai-chat` feed (spec 25).

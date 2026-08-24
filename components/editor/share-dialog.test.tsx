@@ -24,6 +24,15 @@ function baseProps(overrides: Partial<React.ComponentProps<typeof ShareDialog>> 
     removingId: null,
     onInvite: vi.fn().mockResolvedValue(true),
     onRemove: vi.fn().mockResolvedValue(true),
+    publicLink: {
+      token: null,
+      isLoading: false,
+      error: null,
+      isGenerating: false,
+      isRevoking: false,
+      onGenerate: vi.fn().mockResolvedValue(true),
+      onRevoke: vi.fn().mockResolvedValue(true),
+    },
     ...overrides,
   };
 }
@@ -142,5 +151,83 @@ describe("ShareDialog", () => {
     rerender(<ShareDialog {...baseProps({ open: true, onOpenChange })} />);
 
     expect(screen.getByLabelText(/collaborator email/i)).toHaveValue("");
+  });
+
+  describe("Public link (spec 34)", () => {
+    it("shows no public-link controls at all for a non-owner collaborator", () => {
+      render(<ShareDialog {...baseProps({ isOwner: false, publicLink: { ...baseProps().publicLink, token: "tok-1" } })} />);
+
+      expect(screen.queryByText("Public link")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /generate public link/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /revoke public link/i })).not.toBeInTheDocument();
+    });
+
+    it("shows a 'Generate public link' button for an owner when no link exists yet", () => {
+      render(<ShareDialog {...baseProps({ publicLink: { ...baseProps().publicLink, token: null } })} />);
+
+      expect(screen.getByRole("button", { name: /generate public link/i })).toBeInTheDocument();
+      expect(screen.queryByLabelText(/public share link/i)).not.toBeInTheDocument();
+    });
+
+    it("calls onGenerate when the Generate public link button is clicked", async () => {
+      const onGenerate = vi.fn().mockResolvedValue(true);
+      render(
+        <ShareDialog
+          {...baseProps({ publicLink: { ...baseProps().publicLink, token: null, onGenerate } })}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /generate public link/i }));
+
+      await waitFor(() => expect(onGenerate).toHaveBeenCalled());
+    });
+
+    it("shows the full share URL and a Revoke button once a token exists", () => {
+      render(<ShareDialog {...baseProps({ projectId: "p1", publicLink: { ...baseProps().publicLink, token: "tok-1" } })} />);
+
+      const input = screen.getByLabelText(/public share link/i) as HTMLInputElement;
+      expect(input.value).toContain("/share/tok-1");
+      expect(screen.getByRole("button", { name: /^copy$/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /revoke public link/i })).toBeInTheDocument();
+    });
+
+    it("copies the public share link and shows temporary 'Copied!' feedback", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<ShareDialog {...baseProps({ publicLink: { ...baseProps().publicLink, token: "tok-1" } })} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+
+      await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(expect.stringContaining("/share/tok-1")));
+      expect(await screen.findByRole("button", { name: /^copied!$/i })).toBeInTheDocument();
+
+      vi.advanceTimersByTime(2100);
+
+      await waitFor(() => expect(screen.getByRole("button", { name: /^copy$/i })).toBeInTheDocument());
+    });
+
+    it("calls onRevoke when the Revoke public link button is clicked", async () => {
+      const onRevoke = vi.fn().mockResolvedValue(true);
+      render(
+        <ShareDialog
+          {...baseProps({ publicLink: { ...baseProps().publicLink, token: "tok-1", onRevoke } })}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /revoke public link/i }));
+
+      await waitFor(() => expect(onRevoke).toHaveBeenCalled());
+    });
+
+    it("shows a loading state while the public link is being fetched", () => {
+      render(<ShareDialog {...baseProps({ publicLink: { ...baseProps().publicLink, isLoading: true } })} />);
+
+      expect(screen.getByText(/loading public link/i)).toBeInTheDocument();
+    });
+
+    it("surfaces a public-link error", () => {
+      render(<ShareDialog {...baseProps({ publicLink: { ...baseProps().publicLink, error: "Forbidden" } })} />);
+
+      expect(screen.getByText("Forbidden")).toBeInTheDocument();
+    });
   });
 });

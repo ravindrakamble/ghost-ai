@@ -6,6 +6,7 @@ import { Canvas } from "@/components/editor/canvas"
 import { ShareDialog } from "@/components/editor/share-dialog"
 import { WorkspaceNavbar } from "@/components/editor/workspace-navbar"
 import { useCollaborators } from "@/hooks/use-collaborators"
+import { usePublicLink } from "@/hooks/use-public-link"
 import type { CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
 import type { Project } from "@/types/project"
 import type { CanvasEdge, CanvasNode } from "@/types/canvas"
@@ -108,6 +109,14 @@ interface WorkspaceShellProps {
  * request body. `chatMessages` itself needed no new plumbing — it already
  * existed here (spec 25) and is simply threaded one hop further, alongside
  * `canvasNodes`/`canvasEdges`, to `SpecsTab` too.
+ *
+ * `usePublicLink` (spec 34) mirrors `useCollaborators`'s exact ownership
+ * shape: owned here, its `refetch()` added to `handleOpenShare` alongside
+ * the collaborators one — but only when `isOwner`, since a collaborator's
+ * `GET /api/projects/[projectId]/public-link` call would just 403 (owner-only,
+ * per this spec's Scope Limit). The resulting `{ token, isLoading, error,
+ * isGenerating, isRevoking, onGenerate, onRevoke }` bundle is threaded down
+ * to `ShareDialog` as a single `publicLink` prop.
  */
 export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false)
@@ -124,10 +133,23 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
   const [canvasEdges, setCanvasEdges] = useState<CanvasEdge[]>([])
   const { collaborators, isLoading, error, isInviting, removingId, invite, remove, refetch } =
     useCollaborators(project.id)
+  const {
+    token: publicLinkToken,
+    isLoading: isPublicLinkLoading,
+    error: publicLinkError,
+    isGenerating: isGeneratingPublicLink,
+    isRevoking: isRevokingPublicLink,
+    refetch: refetchPublicLink,
+    generate: generatePublicLink,
+    revoke: revokePublicLink,
+  } = usePublicLink(project.id)
 
   function handleOpenShare() {
     setIsShareOpen(true)
     void refetch()
+    if (isOwner) {
+      void refetchPublicLink()
+    }
   }
 
   function handleCanvasGraphChange(nodes: CanvasNode[], edges: CanvasEdge[]) {
@@ -181,6 +203,15 @@ export function WorkspaceShell({ project, isOwner }: WorkspaceShellProps) {
         removingId={removingId}
         onInvite={invite}
         onRemove={remove}
+        publicLink={{
+          token: publicLinkToken,
+          isLoading: isPublicLinkLoading,
+          error: publicLinkError,
+          isGenerating: isGeneratingPublicLink,
+          isRevoking: isRevokingPublicLink,
+          onGenerate: generatePublicLink,
+          onRevoke: revokePublicLink,
+        }}
       />
     </div>
   )

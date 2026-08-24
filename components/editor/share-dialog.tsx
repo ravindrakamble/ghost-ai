@@ -13,6 +13,23 @@ import {
 import { Input } from "@/components/ui/input"
 import type { Collaborator } from "@/types/collaborator"
 
+/**
+ * Public share link state/actions (spec 34), threaded down as a single
+ * nested object rather than flattened onto `ShareDialogProps` — the
+ * collaborator section already owns flat `isLoading`/`error` props for a
+ * different concern (the collaborator list), so nesting avoids a naming
+ * collision instead of inventing a second pair of differently-named props.
+ */
+interface PublicLinkSectionProps {
+  token: string | null
+  isLoading: boolean
+  error: string | null
+  isGenerating: boolean
+  isRevoking: boolean
+  onGenerate: () => Promise<boolean>
+  onRevoke: () => Promise<boolean>
+}
+
 interface ShareDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -25,6 +42,7 @@ interface ShareDialogProps {
   removingId: string | null
   onInvite: (email: string) => Promise<boolean>
   onRemove: (collaboratorId: string) => Promise<boolean>
+  publicLink: PublicLinkSectionProps
 }
 
 /** First letter of the display name, or the email, uppercased — avatar fallback. */
@@ -75,10 +93,12 @@ export function ShareDialog({
   removingId,
   onInvite,
   onRemove,
+  publicLink,
 }: ShareDialogProps) {
   const [email, setEmail] = useState("")
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [isCopied, setIsCopied] = useState(false)
+  const [isPublicLinkCopied, setIsPublicLinkCopied] = useState(false)
 
   // Every close path (Escape, backdrop click, the dialog's own close
   // button) routes through this callback, so resetting transient local
@@ -89,6 +109,7 @@ export function ShareDialog({
       setEmail("")
       setInviteError(null)
       setIsCopied(false)
+      setIsPublicLinkCopied(false)
     }
     onOpenChange(nextOpen)
   }
@@ -113,6 +134,23 @@ export function ShareDialog({
       setTimeout(() => setIsCopied(false), 2000)
     } catch {
       setInviteError("Couldn't copy the link. Please copy it manually from the address bar.")
+    }
+  }
+
+  /** Builds the full `/share/{token}` URL client-side, mirroring
+   * `handleCopyLink` above — this codebase has no server-side
+   * origin-resolution mechanism, so `POST /api/projects/[projectId]/public-link`
+   * returns only the raw token (spec 34's Analyst Brief, Open Questions #5). */
+  async function handleCopyPublicLink() {
+    if (!publicLink.token) return
+    const link = `${window.location.origin}/share/${publicLink.token}`
+    try {
+      await navigator.clipboard.writeText(link)
+      setIsPublicLinkCopied(true)
+      setTimeout(() => setIsPublicLinkCopied(false), 2000)
+    } catch {
+      // Falls through to the shared error line below the public link
+      // section rather than a second dedicated error state.
     }
   }
 
@@ -205,6 +243,58 @@ export function ShareDialog({
             </ul>
           )}
         </div>
+
+        {isOwner && (
+          <div className="flex flex-col gap-1.5 border-t border-surface-border pt-4">
+            <p className="text-xs font-medium text-copy-muted">Public link</p>
+
+            {publicLink.error && <p className="text-xs text-state-error">{publicLink.error}</p>}
+
+            {publicLink.isLoading ? (
+              <p className="py-2 text-center text-sm text-copy-muted">Loading public link…</p>
+            ) : publicLink.token ? (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    value={`${typeof window !== "undefined" ? window.location.origin : ""}/share/${publicLink.token}`}
+                    className="text-copy-primary"
+                    aria-label="Public share link"
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="shrink-0 gap-1.5"
+                    onClick={() => void handleCopyPublicLink()}
+                  >
+                    {isPublicLinkCopied ? <Check /> : <Copy />}
+                    {isPublicLinkCopied ? "Copied!" : "Copy"}
+                  </Button>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full justify-center text-state-error hover:text-state-error"
+                  disabled={publicLink.isRevoking}
+                  onClick={() => void publicLink.onRevoke()}
+                >
+                  {publicLink.isRevoking ? <Loader2 className="animate-spin" /> : "Revoke public link"}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-center gap-1.5"
+                disabled={publicLink.isGenerating}
+                onClick={() => void publicLink.onGenerate()}
+              >
+                {publicLink.isGenerating ? <Loader2 className="animate-spin" /> : "Generate public link"}
+              </Button>
+            )}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
