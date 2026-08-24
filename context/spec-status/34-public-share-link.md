@@ -142,3 +142,110 @@ Instead: hand-wrote this spec's own migration SQL (`ALTER TABLE "Project" ADD CO
 - No rate limiting on `GET /api/public/[token]` (per the brief's own Open Questions #6 resolution) — recommended, not built, as a production-hardening backlog item: this is the first fully unauthenticated data-serving route in the app, and an unrevoked link is effectively public forever.
 - The live shared dev Postgres database has spec 33's `CustomTemplate` table applied from an earlier `migrate dev` run on the unmerged `spec/33-custom-templates` branch. This isn't part of this branch's schema and isn't touched by this diff, but a human merging spec 33 later should confirm its own migration history reconciles cleanly against this branch's `20260824084745_add_project_public_share_token` migration (both are additive, non-conflicting column/table changes, so no SQL-level conflict is expected — flagging only because migration-history bookkeeping across two independently-migrated unmerged branches on one shared database is unusual enough to be worth a human's attention at merge time).
 - No live browser/manual smoke test of `/share/[token]` against a real signed-out session was performed in this environment (no running dev server). Recommended as a human smoke test: generate a link as an owner, open it in an incognito window, confirm the diagram/spec render and no navbar/edit affordances appear.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+- npx tsc --noEmit -- pass (clean, no output).
+- npx eslint (correct invocation per package.json's "lint": "eslint" script) -- pass. Note: running the broader "npx eslint ." in this environment surfaces roughly 445 errors/7173 warnings, but every one of them is inside gitignored, untracked local artifacts (.trigger/tmp/** -- Trigger.dev's local dev build cache -- and .agents/skills/**), not anything in this branch's diff. Confirmed via git status --porcelain --ignored (.trigger/ and .agents/ both gitignored) and by grepping the lint output for every file this spec touches -- zero hits. eslint.config.mjs itself is unmodified by this branch. This is a pre-existing local-environment lint-scope gap, not a regression introduced by spec 34.
+- npx next build -- pass. Build output confirms all three new routes are real: /api/projects/[projectId]/public-link, /api/public/[token], /share/[token].
+- npx vitest run --no-file-parallelism -- pass. 707/707 tests, 73 files, exit code 0. Matches Dev's reported count exactly.
+- npx prisma migrate status -- pass. "Database schema is up to date!", 5 migrations found, including this spec's 20260824084745_add_project_public_share_token.
+- Migration-drift handling verified safe: prisma/schema.prisma's diff against fd9c84f adds only Project.publicShareToken String? @unique -- no CustomTemplate model anywhere on this branch. The migration SQL (ALTER TABLE "Project" ADD COLUMN "publicShareToken" TEXT; CREATE UNIQUE INDEX "Project_publicShareToken_key" ...) is additive and non-destructive. Dev's use of prisma db execute + migrate resolve --applied instead of the drift-remediation migrate reset correctly avoided dropping spec 33's unrelated, unmerged CustomTemplate table/data on the shared dev database.
+- git merge-base spec/34-public-share-link main = fd9c84f (spec 31's merge point), confirmed as reported. Diffed the full branch against fd9c84f: no CustomTemplate model, no "Critique this design" button, no template-blob.ts/template-schema.ts/app/api/templates/** anywhere in code -- the only hits for those terms in the diff are prose in this spec-status file and progress-tracker.md documenting the drift issue.
+
+### Acceptance criteria (Analyst Brief, 13 items)
+
+1. PASS -- publicShareToken String? @unique on Project, real applied migration, verified via schema diff + prisma migrate status.
+2. PASS -- POST /api/projects/[projectId]/public-link uses getOwnedProjectOrError (401 -> 404 -> 403 precedence confirmed by reading the handler and its 14-test suite), generates/overwrites the token, returns { token }.
+3. PASS -- DELETE clears publicShareToken to null via the same gate; since GET /api/public/[token] does a findUnique keyed on publicShareToken, a cleared token can never match again -- no caching layer sits in between, so this is a genuine, immediate 404, not a stale-cache risk.
+4. PASS -- GET /api/public/[token] has no Clerk check, 404 ("Not found") for no match, and getPublicProjectData's Prisma select clause is scoped to name, canvasJsonPath, specs.filePath/createdAt only -- ownerId, ProjectCollaborator, and publicShareToken itself are structurally impossible to leak (excluded at the query level, not just omitted from the response object by convention). No raw Blob URL is returned.
+5. PASS -- /share/[token]/page.tsx renders project name, PublicCanvasPreview (static SVG, no @xyflow/react), and PublicSpecView (plain Server Component, no client interactivity) with no navbar, no chat, no AI sidebar. No RoomProvider/useStorage/Liveblocks import anywhere in the new files (grepped).
+6. PASS -- nodes.length === 0 renders an explicit "No diagram has been saved for this project yet." empty state rather than an empty/broken SVG or a 404; a missing canvasJsonPath short-circuits before calling fetchCanvasSnapshot at all.
+7. PASS -- spec: null case is a plain conditional that omits the section entirely, not an error.
+8. PASS -- Share dialog's "Public link" section, isOwner-gated, shows the full origin/share/token URL with the same isCopied/"Copied!"/2s-timeout convention as the existing collaborator-link copy button. Covered by share-dialog.test.tsx's new 8-test block.
+9. PASS -- Revoke calls DELETE, sets local token state to null on success, which flips the dialog back to the "Generate public link" button state.
+10. PASS -- The public-link section is fully absent (not just disabled) when isOwner is false -- verified in code and by a specific test that passes a non-owner prop bundle with a truthy token present and asserts the whole section, including the "Public link" heading text, does not render (good defense-in-depth against a stale/leaked client-side token). Direct POST/DELETE calls are independently rejected 403 by the route's own ownership check regardless of what the UI shows.
+11. PASS -- proxy.ts's isPublicRoute diff adds exactly "/share(.*)" and "/api/public(.*)", two previously-unclaimed prefixes (grepped: no other route lives under either). No other line in proxy.ts changed.
+12. PASS -- app/api/liveblocks-auth/route.ts has a zero-line diff against fd9c84f (confirmed via git diff). No Liveblocks import anywhere in this spec's new files.
+13. PASS -- full mechanical gate reproduced independently above, all green.
+
+### Architecture invariants
+
+- No long-running AI work in a request handler -- this spec adds no AI code path at all.
+- Metadata (Prisma) vs. blob storage (Vercel Blob) separation preserved -- publicShareToken is a plain Prisma column; canvas/spec content is still resolved through the existing fetchCanvasSnapshot/fetchSpecMarkdown blob helpers, reused unmodified.
+- Auth/ownership enforced at every mutation -- POST/DELETE /api/projects/[projectId]/public-link both gate on getOwnedProjectOrError, the correct owner-only (not collaborator-inclusive) check per the brief's own explicit instruction.
+- "Room tokens require verified project membership" invariant untouched -- app/api/liveblocks-auth/route.ts has a zero-line diff.
+- First genuinely public/unauthenticated route in the app is scoped narrowly and deliberately (two new regex prefixes only) rather than a broad allowlist change.
+
+### Standards compliance
+
+- No "any" in any new/changed file (grepped ": any", "<any>", "as any" -- zero hits).
+- No raw Tailwind grays (zinc-/slate-) or hex colors in any new/changed file -- public-canvas-preview.tsx uses var(--border-default) and other files use the existing semantic token classes (text-copy-primary, bg-elevated, border-surface-border, etc.).
+- components/ui/* untouched (zero-file diff against that path).
+- context/progress-tracker.md updated accurately: Phase 34 entry, "In Progress" section with real file list and test counts, the CustomTemplate migration-drift flag carried into both the phase log and a new "Deferred -- Production Hardening" bullet for public-endpoint rate limiting, and the old "Public read-only share link" future-idea bullet struck through and linked to this spec.
+
+### Error handling
+
+- Bad/never-valid token -> 404, identical shape to a revoked token (verified in both lib/public-project.test.ts and app/api/public/[token]/route.test.ts).
+- Unauthorized (unauthenticated) -> 401 on all three public-link methods, verified before any Prisma write is attempted (update mocks asserted not.toHaveBeenCalled()).
+- Wrong-owner (authenticated non-owner, i.e. a collaborator) -> 403, not 404, on all three methods.
+- Missing project -> 404 on all three public-link methods.
+- Missing/corrupt canvas blob or missing spec -> explicit non-error empty states (nodes: []/edges: [], spec: null), never conflated with the "token not found" 404.
+- Genuine upstream Blob failure (not "nothing there") -> correctly left to throw and surface as a 500 in GET /api/public/[token], not silently swallowed into an empty state or misrepresented as a 404.
+
+### Issues found
+
+None. No bugs, no spec gaps.
+
+**QA passed -- ready for Product Owner review.**
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent verification (not just trusting Dev/QA accounts)
+
+Re-confirmed `git merge-base spec/34-public-share-link main` = `fd9c84f` (spec 31's merge point) directly, then read the diff myself (`git diff main...spec/34-public-share-link --stat` and the substantive files) rather than relying solely on Dev Notes/QA Report:
+
+- `proxy.ts` — the only change is `isPublicRoute` gaining `"/share(.*)"` and `"/api/public(.*)"`. Confirmed via a directory listing that these are the *only* files under `app/share/` and `app/api/public/` on this branch (`app/share/[token]/page.tsx` + its test, `app/api/public/[token]/route.ts` + its test) — so the two new public prefixes expose exactly one page and one API route each, nothing broader.
+- `lib/public-project.ts` — read in full. `getPublicProjectData`'s Prisma `select` is `{ name: true, canvasJsonPath: true, specs: { select: { filePath: true, createdAt: true } } }` — `ownerId`, `publicShareToken`, and any `ProjectCollaborator` relation are structurally absent from the query, not merely omitted from the response object by convention. This is the strongest form of "can't leak it" available (a bug in the response-building code couldn't accidentally expose these fields, since they're never fetched in the first place).
+- `app/api/projects/[projectId]/public-link/route.ts` — all three handlers (`GET`/`POST`/`DELETE`) gate on `getOwnedProjectOrError`, the owner-only check, matching the brief's explicit instruction not to reuse the collaborator-inclusive `getProjectAccess`.
+- `app/api/public/[token]/route.ts` — no Clerk import, no auth check, 404 on no match, 500 on a genuine thrown error from `getPublicProjectData`.
+- `app/share/[token]/page.tsx` and `components/editor/public-canvas-preview.tsx` — read in full. No `@xyflow/react`, no Liveblocks import, no interactive/mutation affordance of any kind — a static SVG preview and a plain project-name header only. `notFound()` on a null lookup.
+- Grepped the full diff for "liveblocks", "RoomProvider", "useStorage" — every hit is prose in `.md` files (spec text, spec-status doc, progress tracker); zero hits in any `.ts`/`.tsx` file. No Liveblocks import anywhere in the actual code diff.
+- `app/api/liveblocks-auth/route.ts` — zero-line diff, confirmed directly.
+- `prisma/schema.prisma` diff — the only model change is `Project` gaining `publicShareToken String? @unique` (plus a docblock comment). No `CustomTemplate` model anywhere on this branch, consistent with Dev/QA's account of the migration-drift handling. The new migration SQL is purely additive (`ALTER TABLE ... ADD COLUMN`, `CREATE UNIQUE INDEX`) — no destructive statement.
+- `components/editor/share-dialog.tsx` diff — the new "Public link" section is wrapped in `isOwner && (...)`, so it doesn't render at all for a collaborator (not just disabled/hidden via CSS). No new mutation surface reachable without that gate.
+
+Everything Dev and QA reported checks out against the actual diff.
+
+### Judgment: legitimate extension, not scope creep
+
+This is the first genuinely new, unauthenticated capability in the app, and it isn't literally named in `project-overview.md`'s Features/Core User Flow — so per this review's own charter, I formed an independent view rather than deferring to the brief's framing:
+
+- **Out of Scope wall (`project-overview.md`)**: touches none of it. No billing/subscription code anywhere in the diff. No new *authenticated* permission tier — the public link is not a third role alongside owner/collaborator; it's a revocable, owner-controlled, read-only, unauthenticated *snapshot* URL, structurally closer to "export/share" than to an access-control tier. No versioned spec history (only the single latest spec is ever shown, no history UI). No object-storage migration (reuses the existing private Blob helpers unmodified). No mobile app code.
+- **Origin of the spec**: `context/feature-specs/34-public-share-link.md` already existed as an authored spec file in this project's normal spec queue (the same mechanism specs 06–33 came from), not something invented mid-pipeline by the Analyst. `ai-workflow-rules.md`'s "do not invent product behavior that is not defined in the context files" is satisfied — the Analyst implemented against a real, pre-existing spec document. `progress-tracker.md`'s own "Deferred — Future Product Ideas" list had this exact idea logged (now struck through and linked to spec 34), so it wasn't sprung on the pipeline without prior visibility either.
+- **Product fit**: a real-time collaborative system-design tool has an obvious, common need to show a design to someone outside the team (a stakeholder, a manager) without granting them an account or edit rights. A revocable, read-only, no-mutation, no-Liveblocks-join snapshot view is a conservative, narrowly-scoped way to deliver that — it doesn't dilute any of the six Success Criteria, and it doesn't weaken any existing invariant (`architecture-context.md`'s "room tokens require verified project membership" is untouched, confirmed by the zero-diff on `liveblocks-auth/route.ts`).
+- **Does it "move the needle" on Success Criteria?** Not directly — none of the six criteria mention sharing. This spec is additive product surface, not a strengthening of an existing criterion (unlike, say, spec 30's "closes the full generate→persist→view→download loop"). I'm treating that as acceptable rather than disqualifying: the task framing explicitly asked me to judge fit against Scope/Out-of-Scope, not to require every spec to advance a numbered Success Criterion, and this one is clearly compatible with the product's overall direction (Goal 2's "collaborative... workspace" implies stakeholders beyond the core editing team are a natural audience).
+
+### Rough edges — acceptable for this stage
+
+- **No rate limiting on `GET /api/public/[token]`** — correctly identified by the brief itself (Open Questions #6) as out of scope for this spec, not invented infrastructure. Honestly logged in `progress-tracker.md`'s "Deferred — Production Hardening" section as a new item. This is a genuine pre-launch consideration (an unrevoked link has no throttling), but it doesn't block spec 34 from being product-ready at this stage, and it doesn't block anything else from being built on top of it — a future hardening pass can add per-IP/per-token throttling without touching this spec's contract.
+- **No live browser smoke test of `/share/[token]` against a real signed-out session** — disclosed directly in Dev Notes as a known limitation, consistent with the same category of disclosed-but-not-blocking gap seen in specs 23/26/28/30/31. Recommended as a human smoke test, not a blocker.
+- **Migration-drift bookkeeping between spec 33's unmerged `CustomTemplate` migration and spec 34's `publicShareToken` migration** — both additive, non-conflicting at the SQL level per QA's and my own independent schema-diff read; correctly flagged in `progress-tracker.md`'s Open Questions for whoever merges spec 33 to double-check, not a blocker for spec 34 itself.
+
+None of these rise to the level of blocking a later spec from building on this one correctly — the public-link contract (`Project.publicShareToken`, `getPublicProjectData`, the two new routes) is stable and narrowly scoped regardless of whether rate limiting or a live smoke test happens later.
+
+### `progress-tracker.md` accuracy
+
+The current "In Progress" entry for spec 34 (file list, test counts, migration-drift note, the struck-through "Public read-only share link" future-idea bullet, and the new rate-limiting hardening bullet) matches what QA actually verified and what I independently confirmed in the diff — not an aspirational description. Moving this entry to Completed below (see the update to `context/progress-tracker.md`), with the PR link added; nothing else in the file needed correction.
+
+### Escalation
+
+Not needed. This was a legitimate, if not `Success-Criteria`-literal, product-fit call — worked through directly above rather than requiring a second round or a human tiebreaker.
+
+This is also the last spec in the current run — specs 35–38 remain queued as raw drafts in `context/feature-specs/`, not started.
