@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
 import { useRealtimeRun } from "@trigger.dev/react-hooks"
-import { AlertCircle, Bot, Loader2, Send } from "lucide-react"
+import { AlertCircle, Bot, Loader2, Send, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type {
@@ -11,12 +11,30 @@ import type {
   SendAgentChatMessage,
   SendChatMessage,
 } from "@/types/tasks"
+// Type-only import of the design-agent task (spec 32, Open Questions #1) —
+// erased at build, never bundles `@trigger.dev/sdk`/`trigger/design-agent.ts`'s
+// server logic into the client bundle. `typeof designAgentTask` is what lets
+// `useRealtimeRun<typeof designAgentTask>` below genuinely type
+// `realtimeRun.output` as `DesignAgentResult | undefined`, mirroring
+// `specs-tab.tsx`'s existing precedent of type-only-importing a narrow type
+// from a non-`components/` module.
+import type { designAgentTask } from "@/trigger/design-agent"
 
 const STARTER_PROMPTS = [
   "Design an e-commerce backend",
   "Create a chat app architecture",
   "Build a CI/CD pipeline",
 ] as const
+
+/**
+ * Fixed prompt text for the "Critique this design" quick action (spec 32).
+ * Deliberately phrased as a review/critique request (so `buildPrompt`'s new
+ * critique-mode instruction in `lib/design-agent-ai.ts` actually triggers)
+ * and explicitly asks for improvements to be applied, not just described —
+ * per the brief's Open Questions #3.
+ */
+const CRITIQUE_PROMPT =
+  "Critique this design — review the current diagram for architectural issues (single points of failure, missing caching or queueing, unclear boundaries) and apply improvements."
 
 /**
  * Formats an `AiChatMessage.timestamp` (epoch-ms) for display next to a
@@ -170,15 +188,29 @@ async function parseJsonBody(response: Response): Promise<unknown> {
 }
 
 /**
- * AI-authored message pushed onto `ai-chat` once this client's own
- * triggered run completes successfully (acceptance criterion 6). Generic
- * rather than echoing model-specific output — this spec's own Scope Limits
- * forbid fetching/reading the final graph, so no richer summary is available
- * client-side (the canvas itself already reflects the real result via the
- * existing, unmodified `useLiveblocksFlow` subscription).
+ * Fallback AI-authored message pushed onto `ai-chat` once this client's own
+ * triggered run completes successfully, used only when
+ * `realtimeRun.output?.summary` (spec 32, the model's own real explanation of
+ * what it changed and why) is missing, empty, or not a string — a run must
+ * never push an empty or malformed chat message (acceptance criterion 7).
+ * Before spec 32 this was the only completion message; it is now strictly a
+ * fallback.
  */
 const DESIGN_AGENT_SUCCESS_MESSAGE =
   "I've updated the canvas based on your prompt — take a look!"
+
+/**
+ * Resolves the real completion message for a successfully settled run: the
+ * model's own `summary` (spec 32, acceptance criterion 6) when it is a
+ * genuine non-empty string, otherwise the generic fallback above (acceptance
+ * criterion 7). `run.output` is typed as `DesignAgentResult | undefined` via
+ * `useRealtimeRun<typeof designAgentTask>`'s generic — see this file's
+ * `designAgentTask` type-only import — so `output?.summary` is real,
+ * non-`any` access, not a cast.
+ */
+function resolveSuccessMessage(summary: string | undefined): string {
+  return typeof summary === "string" && summary.length > 0 ? summary : DESIGN_AGENT_SUCCESS_MESSAGE
+}
 
 /**
  * Error-describing message pushed onto `ai-chat` for any failure mode
@@ -253,6 +285,16 @@ function buildDesignAgentFailureMessage(detail?: string): string {
  * Questions #6). The status *line* itself stays gated on `isGenerating`
  * alone — spec 24's already-shipped element, not duplicated by a second one
  * (spec 26's Analyst Brief, Open Questions #4).
+ *
+ * Spec 32 makes two further changes on top of the above, both reusing this
+ * exact pipeline unchanged: (1) the completion effect's success branch now
+ * reads the model's real `realtimeRun.output?.summary` (typed via
+ * `useRealtimeRun<typeof designAgentTask>`'s generic) instead of always
+ * pushing the same hardcoded string — see `resolveSuccessMessage`; (2) a
+ * "Critique this design" quick action (`handleCritique`) submits a fixed
+ * critique prompt through the same `submitPromptText`/`submitDesignRequest`
+ * path `handleSubmit` already used for typed prompts — no new request shape,
+ * no new endpoint.
  */
 export function AiArchitectTab({
   projectId = "",
@@ -283,7 +325,7 @@ export function AiArchitectTab({
    */
   const handledRunIdRef = useRef<string | null>(null)
 
-  const { run: realtimeRun } = useRealtimeRun(runId ?? undefined, {
+  const { run: realtimeRun } = useRealtimeRun<typeof designAgentTask>(runId ?? undefined, {
     accessToken: publicToken ?? undefined,
     enabled: Boolean(runId && publicToken),
   })
@@ -346,7 +388,7 @@ export function AiArchitectTab({
     handledRunIdRef.current = runId
 
     if (realtimeRun.isSuccess) {
-      pushAgentMessage(DESIGN_AGENT_SUCCESS_MESSAGE)
+      pushAgentMessage(resolveSuccessMessage(realtimeRun.output?.summary))
     } else {
       pushAgentMessage(buildDesignAgentFailureMessage(realtimeRun.error?.message))
     }
@@ -395,24 +437,54 @@ export function AiArchitectTab({
     [projectId, pushAgentMessage],
   )
 
-  function handleSubmit() {
-    const trimmed = input.trim()
-    if (!trimmed || isBusy) return
-
+  /**
+   * Shared submit path for both the typed-prompt flow (`handleSubmit`) and
+   * the "Critique this design" quick action (`handleCritique`, spec 32) —
+   * both push the prompt onto `ai-chat` via `sendMessage` and then route it
+   * through the exact same `submitDesignRequest`/`POST /api/ai/design`
+   * pipeline, per acceptance criterion 9. Only the source of `promptText`
+   * and what happens to the textarea afterward differ between the two
+   * callers.
+   */
+  function submitPromptText(promptText: string): boolean {
     try {
-      sendMessage(trimmed)
+      sendMessage(promptText)
     } catch {
       // Preserve the input's contents on failure (spec 25's acceptance
       // criterion 4) — no `setInput("")` here, and the design-agent request
       // never starts if the prompt itself couldn't even be recorded in
       // `ai-chat`.
       setSendError(true)
-      return
+      return false
     }
 
-    setInput("")
     setSendError(false)
-    void submitDesignRequest(trimmed)
+    void submitDesignRequest(promptText)
+    return true
+  }
+
+  function handleSubmit() {
+    const trimmed = input.trim()
+    if (!trimmed || isBusy) return
+
+    if (submitPromptText(trimmed)) {
+      setInput("")
+    }
+  }
+
+  /**
+   * "Critique this design" quick action (spec 32, Open Questions #2).
+   * Auto-submits the fixed `CRITIQUE_PROMPT` directly — rather than only
+   * filling the textarea like `handleStarterPrompt` — since the raw spec
+   * text describes this control as "submitting" a fixed prompt, a
+   * deliberately different, one-click contract from the starter chips' own
+   * documented fill-only behavior (`ui-context.md`). Routes through the same
+   * `submitPromptText`/`submitDesignRequest` path a typed prompt uses, so
+   * the request shape hitting `POST /api/ai/design` is identical either way.
+   */
+  function handleCritique() {
+    if (isBusy) return
+    submitPromptText(CRITIQUE_PROMPT)
   }
 
   function handleInputChange(event: ChangeEvent<HTMLTextAreaElement>) {
@@ -493,6 +565,25 @@ export function AiArchitectTab({
             <span>Failed to send. Try again.</span>
           </div>
         ) : null}
+        {/*
+          Spec 32: "Critique this design" quick action. Deliberately rendered
+          here — near the input row, outside the `chatMessages.length === 0`
+          empty-state block the `STARTER_PROMPTS` chips live in — so it stays
+          reachable for the entire lifetime of a room session, not only
+          before the first message is ever sent (Open Questions #2(b)). A
+          distinct control from the starter chips: clicking it submits
+          immediately (Open Questions #2(a)) rather than only filling the
+          textarea.
+        */}
+        <button
+          type="button"
+          onClick={handleCritique}
+          disabled={isBusy}
+          className="flex w-fit items-center gap-1.5 self-start rounded-full border border-surface-border bg-elevated px-3 py-1.5 text-xs text-ai-text hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+          Critique this design
+        </button>
         <div className="flex items-end gap-2">
           <Textarea
             ref={textareaRef}

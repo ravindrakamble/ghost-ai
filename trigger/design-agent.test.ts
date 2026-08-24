@@ -50,10 +50,12 @@ const taskRegistrationCall = taskMock.mock.calls[0]?.[0]
 
 const EMPTY_GRAPH = { nodes: [], edges: [] }
 
+const DEFAULT_SUMMARY = "No changes were needed."
+
 beforeEach(() => {
   vi.clearAllMocks()
   getCurrentDesignGraphMock.mockResolvedValue(EMPTY_GRAPH)
-  interpretDesignPromptMock.mockResolvedValue([])
+  interpretDesignPromptMock.mockResolvedValue({ actions: [], summary: DEFAULT_SUMMARY })
   applyDesignAgentActionsMock.mockResolvedValue(undefined)
   broadcastDesignAgentStatusMock.mockResolvedValue(undefined)
   setDesignAgentPresenceMock.mockResolvedValue(undefined)
@@ -76,11 +78,11 @@ describe("runDesignAgent", () => {
         y: 200,
       },
     ]
-    interpretDesignPromptMock.mockResolvedValue(actions)
+    interpretDesignPromptMock.mockResolvedValue({ actions, summary: "Added an API Gateway node." })
 
     const result = await runDesignAgent({ prompt: "design a checkout flow", roomId: "room-1" })
 
-    expect(result).toEqual({ roomId: "room-1", actionCount: 1 })
+    expect(result).toEqual({ roomId: "room-1", actionCount: 1, summary: "Added an API Gateway node." })
 
     expect(getCurrentDesignGraphMock).toHaveBeenCalledWith("room-1")
     expect(interpretDesignPromptMock).toHaveBeenCalledWith({
@@ -106,7 +108,7 @@ describe("runDesignAgent", () => {
       { kind: "deleteEdge", edgeId: "e1" },
       { kind: "addNode", nodeId: "n2", shape: "circle", label: "", color: "#1F1F1F", textColor: "#EDEDED", width: 80, height: 80, x: 300, y: 400 },
     ]
-    interpretDesignPromptMock.mockResolvedValue(actions)
+    interpretDesignPromptMock.mockResolvedValue({ actions, summary: DEFAULT_SUMMARY })
 
     await runDesignAgent({ prompt: "p", roomId: "room-1" })
 
@@ -118,7 +120,10 @@ describe("runDesignAgent", () => {
   })
 
   it("sets the cursor to null when the batch has no addNode/moveNode action", async () => {
-    interpretDesignPromptMock.mockResolvedValue([{ kind: "deleteNode", nodeId: "n1" }])
+    interpretDesignPromptMock.mockResolvedValue({
+      actions: [{ kind: "deleteNode", nodeId: "n1" }],
+      summary: DEFAULT_SUMMARY,
+    })
 
     await runDesignAgent({ prompt: "p", roomId: "room-1" })
 
@@ -131,15 +136,31 @@ describe("runDesignAgent", () => {
     expect(clearDesignAgentPresenceMock).toHaveBeenCalledWith("room-1")
   })
 
-  it("reports an empty-batch completion message distinctly from a non-empty one", async () => {
-    interpretDesignPromptMock.mockResolvedValue([])
+  it("uses the model's real summary — not a generic count-based string — as the 'complete' broadcast's text", async () => {
+    interpretDesignPromptMock.mockResolvedValue({
+      actions: [],
+      summary: "The diagram already has a single point of failure at the API Gateway with no redundancy.",
+    })
 
-    await runDesignAgent({ prompt: "p", roomId: "room-1" })
+    await runDesignAgent({ prompt: "critique this", roomId: "room-1" })
 
     const completeCall = broadcastDesignAgentStatusMock.mock.calls.find(
       (call: unknown[]) => (call[1] as { stage: string }).stage === "complete",
     )
-    expect((completeCall?.[1] as { text: string }).text).toMatch(/didn't find any changes/i)
+    expect((completeCall?.[1] as { text: string }).text).toBe(
+      "The diagram already has a single point of failure at the API Gateway with no redundancy.",
+    )
+  })
+
+  it("resolves with the real summary as part of DesignAgentResult", async () => {
+    interpretDesignPromptMock.mockResolvedValue({
+      actions: [{ kind: "deleteNode", nodeId: "n1" }],
+      summary: "Removed the redundant node.",
+    })
+
+    const result = await runDesignAgent({ prompt: "p", roomId: "room-1" })
+
+    expect(result).toEqual({ roomId: "room-1", actionCount: 1, summary: "Removed the redundant node." })
   })
 })
 
@@ -167,7 +188,10 @@ describe("runDesignAgent — failure handling", () => {
   })
 
   it("broadcasts an error status, clears presence, and rethrows when applying actions fails", async () => {
-    interpretDesignPromptMock.mockResolvedValue([{ kind: "deleteNode", nodeId: "n1" }])
+    interpretDesignPromptMock.mockResolvedValue({
+      actions: [{ kind: "deleteNode", nodeId: "n1" }],
+      summary: DEFAULT_SUMMARY,
+    })
     applyDesignAgentActionsMock.mockRejectedValue(new Error("mutateStorage failed"))
 
     await expect(runDesignAgent({ prompt: "p", roomId: "room-1" })).rejects.toThrow("mutateStorage failed")
@@ -199,7 +223,7 @@ describe("runDesignAgent — failure handling", () => {
   })
 
   it("still clears presence when the run succeeds with zero actions", async () => {
-    interpretDesignPromptMock.mockResolvedValue([])
+    interpretDesignPromptMock.mockResolvedValue({ actions: [], summary: DEFAULT_SUMMARY })
 
     await runDesignAgent({ prompt: "p", roomId: "room-1" })
 
