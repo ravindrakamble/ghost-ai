@@ -3,10 +3,11 @@
 Update this file whenever the current phase, active feature, or implementation state changes.
 
 ## Current Phase
-- Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call. No feature spec 31 currently exists in `context/feature-specs/` — spec 30 was the last one defined. Next phase is either authoring a new feature spec or beginning the "Deferred — Production Hardening" pass below; human call.
+- Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call.
+- Phase 31: AI Rate Limiting — implemented, ready for QA (branch `spec/31-ai-rate-limiting`). Adds per-user rate limiting (5 combined `design`+`spec` runs per rolling 10-minute window) to `POST /api/ai/design` and `POST /api/ai/spec` via a new `lib/rate-limit.ts` helper (`checkAiRateLimit`, `rateLimitErrorResponse`) that counts existing `TaskRun` rows — no new external service, no schema change. Full pipeline trail in `context/spec-status/31-ai-rate-limiting.md`.
 
 ## Current Goal
-- Human decision on what comes next: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability).
+- QA review of spec 31 (`context/spec-status/31-ai-rate-limiting.md`), then Product Owner review, on branch `spec/31-ai-rate-limiting`.
 
 ## Completed
 
@@ -438,11 +439,11 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 30 completed above; no feature spec 31 currently exists in `context/feature-specs/`)
+- Feature spec 31: AI Rate Limiting — implemented by Senior Developer, awaiting QA. `lib/rate-limit.ts` (new), `lib/rate-limit.test.ts` (new), `app/api/ai/design/route.ts`/`route.test.ts` (modified), `app/api/ai/spec/route.ts`/`route.test.ts` (modified). Branch `spec/31-ai-rate-limiting`. See `context/spec-status/31-ai-rate-limiting.md` for the full Analyst Brief and Dev Notes.
 
 ## Next Up
 
-- Human decision: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability). With spec 30's PR opened (pending human review/merge), the generate -> persist -> view -> download loop is reachable end to end from the UI for the first time — no further feature spec is currently required to close that loop; any next feature spec would be a genuinely new product surface, not a continuation of this one.
+- QA and Product Owner review of spec 31, then a human decision on what comes next after that: author a new feature spec, or begin the rest of the "Deferred — Production Hardening" pass below (migrations-on-deploy, error monitoring/observability). With spec 30's PR opened (pending human review/merge), the generate -> persist -> view -> download loop is reachable end to end from the UI for the first time — no further feature spec is currently required to close that loop; any next feature spec would be a genuinely new product surface, not a continuation of this one.
 - Human review/merge of spec 25/26/27/28/29/30's PRs and the still-open PRs for specs 12–24.
 
 ## Open Questions
@@ -455,10 +456,22 @@ Update this file whenever the current phase, active feature, or implementation s
 
 Cross-cutting gaps found during the pre-pipeline review that don't block any individual spec 06–30, so they're logged here rather than wedged into an unrelated spec. Revisit as a dedicated pass once the feature specs are done:
 
-- **Rate limiting** on `/api/ai/design` and `/api/ai/spec` — either endpoint can trigger a paid Gemini + Trigger.dev run; nothing currently stops a project collaborator from spamming them.
+- ~~**Rate limiting**~~ — implemented, awaiting QA. `context/feature-specs/31-ai-rate-limiting.md` / `context/spec-status/31-ai-rate-limiting.md` covers `/api/ai/design` and `/api/ai/spec` via `lib/rate-limit.ts`, on branch `spec/31-ai-rate-limiting`.
 - ~~**Vercel Blob access model**~~ — resolved. The provisioned store is confirmed `private` (a `public` `put`/`get` call is rejected outright); `lib/canvas-blob.ts` was corrected to match (`fix/canvas-blob-private-access`, merged into `main` alongside spec 27's PR), and `lib/spec-blob.ts` (spec 28) follows the same `access: "private"` convention from the start.
 - **Migrations on deploy** — no spec currently wires `prisma migrate deploy` into the build/deploy step.
 - **Error monitoring / observability** — nothing in the context docs specifies a monitoring tool (e.g. Sentry) for production.
+
+## Deferred — Future Product Ideas
+
+Functionality suggestions raised in conversation (2026-08-24) that extend the app beyond `project-overview.md`'s current scope. None are committed — logged here as backlog candidates for a human to promote into a numbered feature spec:
+
+- **AI critique/refinement mode** — let the design agent review the *existing* canvas ("find single points of failure," "suggest scaling improvements") instead of only generating from a blank prompt. Reuses the spec 22/23 design-agent pipeline.
+- **Save canvas as a custom template** — let users promote their own canvas into the starter-template library (`context/feature-specs/18-starter-template.md`), which is currently a static, curated set only.
+- **Public read-only share link** — a non-collaborator stakeholder currently cannot view a project's canvas or spec at all; a view-only, unauthenticated link would need its own access-control path alongside the existing owner/collaborator model (`architecture-context.md`'s Auth and Collaboration Model).
+- **Diagram-to-IaC export** — generate a Terraform/docker-compose skeleton from the graph alongside the Markdown spec, reusing spec 27's node/edge structural summary (`GenerateSpecGraphNode`/`GenerateSpecGraphEdge` in `trigger/generate-spec.ts`).
+- **Canvas search/jump-to-node** — useful once a diagram grows past what fits on screen; no spec currently covers this.
+- **Node-level comments/annotations** — async collaboration on a specific node, distinct from the existing live cursors/presence (spec 19) and the room-wide `ai-chat` feed (spec 25).
+- **Notify on spec-generation completion** — a toast or email when a run finishes if the user has navigated away from the tab; today `useRealtimeRun` only updates state while the component is mounted.
 
 ## Architecture Decisions
 
