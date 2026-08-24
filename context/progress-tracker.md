@@ -6,7 +6,7 @@ Update this file whenever the current phase, active feature, or implementation s
 - Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call. No feature spec 31 currently exists in `context/feature-specs/` — spec 30 was the last one defined. Next phase is either authoring a new feature spec or beginning the "Deferred — Production Hardening" pass below; human call.
 
 ## Current Goal
-- Human decision on what comes next: author a new feature spec, or begin the "Deferred — Production Hardening" pass below (rate limiting on `/api/ai/design`/`/api/ai/spec`, migrations-on-deploy, error monitoring/observability).
+- Feature spec 32 (AI Design Critique) is implemented on `spec/32-ai-design-critique` (branched directly off `main`, per the standing per-spec-branch rule) and ready for QA. Note for whoever reviews this next: spec 31 (AI Rate Limiting) exists on its own separate branch (`spec/31-ai-rate-limiting`) with its own already-recorded Dev/QA/PO pass in `context/spec-status/31-ai-rate-limiting.md`, but has not been merged into `main` — so this branch (and this file, as committed here) does not include spec 31's code or its `progress-tracker.md` updates. Human decision needed on merge order between spec 31 and spec 32 once both are reviewed.
 
 ## Completed
 
@@ -438,7 +438,7 @@ Update this file whenever the current phase, active feature, or implementation s
 
 ## In Progress
 
-(none — spec 30 completed above; no feature spec 31 currently exists in `context/feature-specs/`)
+- Feature spec 32: AI Design Critique — implemented, ready for QA. `lib/design-agent-ai.ts` (`summary` added to `DESIGN_AGENT_ACTIONS_JSON_SCHEMA`/`RawDesignAgentActionsResponse`/`interpretDesignPrompt`'s return type, plus a critique-mode prompt instruction), `trigger/design-agent.ts` (`DesignAgentResult.summary`, the `"complete"` broadcast now uses the real summary instead of a generic count-based string), `components/editor/ai-architect-tab.tsx` (`useRealtimeRun<typeof designAgentTask>`-typed `.output.summary` drives the real completion chat message with a fallback to the old generic string, plus a "Critique this design" quick action that auto-submits through the existing `submitDesignRequest` pipeline, rendered outside the empty-state-only `STARTER_PROMPTS` block so it stays reachable once a conversation exists). Full trail in `context/spec-status/32-ai-design-critique.md`. Note: this branch was cut from `main` and does not include spec 31 (AI Rate Limiting), which lives on its own separate, not-yet-merged `spec/31-ai-rate-limiting` branch — see the Current Goal note above.
 
 ## Next Up
 
