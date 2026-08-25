@@ -44,6 +44,7 @@ import type { CanvasTemplate } from "@/components/editor/starter-templates"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { CanvasSearchHighlightContext } from "@/hooks/use-canvas-search-highlight"
+import { NodeCommentsContext, useNodeComments } from "@/hooks/use-node-comments"
 import { useAiChatFeed } from "@/hooks/use-ai-chat-feed"
 import { useAiStatusFeed } from "@/hooks/use-ai-status-feed"
 import { useCanvasAutosave, type CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
@@ -246,7 +247,7 @@ export function Canvas({
         <RoomProvider
           id={roomId}
           initialPresence={{ cursor: null, thinking: false }}
-          initialStorage={{ messages: new LiveList([]) }}
+          initialStorage={{ messages: new LiveList([]), nodeComments: new LiveList([]) }}
         >
           <CanvasRoomBoundary>
             <ClientSideSuspense fallback={<CanvasLoading />}>
@@ -521,6 +522,17 @@ function CanvasError() {
  * no push-up to `WorkspaceShell`, since nothing outside the canvas needs to
  * know about search/highlight state (unlike most recent specs' `on*Change`
  * push-ups above). See spec 36's Analyst Brief, Concrete deliverables.
+ *
+ * Spec 37 (Node Comments) calls `useNodeComments()` once (valid here for the
+ * same reason `useAiChatFeed()`/`useAiStatusFeed()` already are —
+ * `CanvasFlow` sits inside `RoomProvider`) and wraps its returned
+ * `{ comments, sendComment }` in a new `NodeCommentsContext.Provider`,
+ * nested alongside the existing `CanvasNodeUpdateContext`/
+ * `CanvasEdgeUpdateContext`/`CanvasSearchHighlightContext` providers — a
+ * fourth nested provider, spec 36's own precedent. Like search-highlight
+ * state, node comments have no consumer outside the room-bounded
+ * `CanvasFlow` subtree, so there's no push-up to `WorkspaceShell`. See spec
+ * 37's Analyst Brief, Concrete deliverables and Open Questions #3.
  */
 function CanvasFlow({
   projectId,
@@ -693,6 +705,14 @@ function CanvasFlow({
   useEffect(() => {
     onSendAgentMessageChange(sendAgentMessage)
   }, [sendAgentMessage, onSendAgentMessageChange])
+
+  // Spec 37 (Node Comments): the room's node-scoped comment threads —
+  // subscribed once here and distributed to every `CanvasNode` leaf via
+  // `NodeCommentsContext` below, filtered per-node by
+  // `useNodeCommentsForNode`. Never pushed up to `WorkspaceShell` — no
+  // consumer outside this room-bounded subtree, same as search-highlight
+  // state.
+  const nodeCommentsResult = useNodeComments()
 
   // Spec 30 (Generate Spec Button): pushes the room's live nodes/edges up to
   // `WorkspaceShell` -> `SpecsTab`, the exact same effect-based push shape as
@@ -978,54 +998,56 @@ function CanvasFlow({
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
         <CanvasSearchHighlightContext.Provider value={highlightedNodeId}>
-          <div ref={canvasContainerRef} className="relative h-full w-full">
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              nodeTypes={CANVAS_NODE_TYPES}
-              edgeTypes={CANVAS_EDGE_TYPES}
-              defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-              connectionMode={ConnectionMode.Loose}
-              onPaneMouseMove={handlePaneMouseMove}
-              onPaneMouseLeave={handlePaneMouseLeave}
-              fitView
-            >
-              <Background variant={BackgroundVariant.Dots} />
-            </ReactFlow>
-            <ShapePanel onDropShape={handleDropShape} />
-            <CanvasControlBar
-              onZoomIn={handleZoomIn}
-              onZoomOut={handleZoomOut}
-              onFitView={handleFitView}
-              onUndo={undo}
-              onRedo={redo}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              onExportImage={handleExportImage}
-              isExportingImage={isExportingImage}
-              canExportImage={nodes.length > 0}
-              onOpenSaveTemplate={() => setIsSaveTemplateDialogOpen(true)}
-              nodes={nodes}
-              onJumpToNode={handleJumpToNode}
-            />
-            <StarterTemplatesModal
-              open={isTemplatesModalOpen}
-              onOpenChange={setIsTemplatesModalOpen}
-              onImport={handleImportTemplate}
-            />
-            <SaveTemplateDialog
-              open={isSaveTemplateDialogOpen}
-              onOpenChange={setIsSaveTemplateDialogOpen}
-              onSave={handleSaveTemplate}
-              isSaving={isSavingTemplate}
-              error={saveTemplateError}
-            />
-            <PresenceAvatars />
-            <LiveCursors flowToScreenPosition={flowToScreenPosition} />
-          </div>
+          <NodeCommentsContext.Provider value={nodeCommentsResult}>
+            <div ref={canvasContainerRef} className="relative h-full w-full">
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                nodeTypes={CANVAS_NODE_TYPES}
+                edgeTypes={CANVAS_EDGE_TYPES}
+                defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                connectionMode={ConnectionMode.Loose}
+                onPaneMouseMove={handlePaneMouseMove}
+                onPaneMouseLeave={handlePaneMouseLeave}
+                fitView
+              >
+                <Background variant={BackgroundVariant.Dots} />
+              </ReactFlow>
+              <ShapePanel onDropShape={handleDropShape} />
+              <CanvasControlBar
+                onZoomIn={handleZoomIn}
+                onZoomOut={handleZoomOut}
+                onFitView={handleFitView}
+                onUndo={undo}
+                onRedo={redo}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onExportImage={handleExportImage}
+                isExportingImage={isExportingImage}
+                canExportImage={nodes.length > 0}
+                onOpenSaveTemplate={() => setIsSaveTemplateDialogOpen(true)}
+                nodes={nodes}
+                onJumpToNode={handleJumpToNode}
+              />
+              <StarterTemplatesModal
+                open={isTemplatesModalOpen}
+                onOpenChange={setIsTemplatesModalOpen}
+                onImport={handleImportTemplate}
+              />
+              <SaveTemplateDialog
+                open={isSaveTemplateDialogOpen}
+                onOpenChange={setIsSaveTemplateDialogOpen}
+                onSave={handleSaveTemplate}
+                isSaving={isSavingTemplate}
+                error={saveTemplateError}
+              />
+              <PresenceAvatars />
+              <LiveCursors flowToScreenPosition={flowToScreenPosition} />
+            </div>
+          </NodeCommentsContext.Provider>
         </CanvasSearchHighlightContext.Provider>
       </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>

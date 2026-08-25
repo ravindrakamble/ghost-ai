@@ -1,5 +1,5 @@
 import type { LiveList } from "@liveblocks/client"
-import type { AiChatMessage } from "@/types/tasks"
+import type { AiChatMessage, NodeComment } from "@/types/tasks"
 
 /**
  * Realtime collaboration types for the shared Liveblocks room. Field shapes
@@ -53,9 +53,18 @@ export type UserMeta = {
  * a declared root shape), added here for consistency with the `Presence`/
  * `UserMeta` convention above. See spec 25's Analyst Brief, Open Questions
  * #2.
+ *
+ * `nodeComments` is spec 37's own additive field — one flat, persisted
+ * `LiveList` shared by every node in the room (each entry carries its own
+ * `nodeId`), the same `LiveList`-per-feed shape as `messages` above rather
+ * than a `LiveMap`-per-node structure. Entries are validated against
+ * `types/tasks.ts#NodeCommentSchema` before being trusted anywhere in the
+ * UI, same convention as `messages`. See spec 37's Analyst Brief, Concrete
+ * deliverables.
  */
 export type Storage = {
   messages: LiveList<AiChatMessage>;
+  nodeComments: LiveList<NodeComment>;
 };
 
 declare global {

@@ -50,6 +50,7 @@ const {
   fetchMock,
   useAiStatusFeedMock,
   useAiChatFeedMock,
+  useNodeCommentsMock,
   roomProviderPropsRef,
   getNodesBoundsMock,
   getViewportForBoundsMock,
@@ -113,11 +114,18 @@ const {
   // `hooks/use-ai-chat-feed.test.ts` — mocked here for the same "verify
   // wiring only" reason as `useAiStatusFeedMock` above.
   useAiChatFeedMock: vi.fn(),
+  // Spec 37: `useNodeComments`'s own internals (real `useStorage`/
+  // `useMutation`/`useSelf` subscription, Zod validation, `sendComment`) are
+  // unit-tested in `hooks/use-node-comments.test.tsx` — mocked here for the
+  // same "verify wiring only" reason as `useAiChatFeedMock` above.
+  useNodeCommentsMock: vi.fn(),
   // `RoomProvider`'s full props (including the new `initialStorage`, which
   // doesn't serialize meaningfully through JSON.stringify since it holds a
   // real `LiveList` instance) — captured via a ref the same way
   // `reactFlowPropsRef` captures `ReactFlow`'s props below.
-  roomProviderPropsRef: { current: null as { initialStorage?: { messages: unknown } } | null },
+  roomProviderPropsRef: {
+    current: null as { initialStorage?: { messages: unknown; nodeComments: unknown } } | null,
+  },
   // "Export as image": `handleExportImage`'s own three real dependencies —
   // mocked for the same "verify wiring, not the library" reason as every
   // other external SDK call in this file.
@@ -151,7 +159,7 @@ vi.mock("@liveblocks/react/suspense", () => ({
     children: ReactNode;
     id: string;
     initialPresence: unknown;
-    initialStorage?: { messages: unknown };
+    initialStorage?: { messages: unknown; nodeComments: unknown };
   }) => {
     roomProviderPropsRef.current = props;
     return (
@@ -203,6 +211,16 @@ vi.mock("@/hooks/use-ai-status-feed", () => ({
 vi.mock("@/hooks/use-ai-chat-feed", () => ({
   useAiChatFeed: useAiChatFeedMock,
 }));
+
+vi.mock("@/hooks/use-node-comments", async () => {
+  const actual = await vi.importActual<typeof import("@/hooks/use-node-comments")>(
+    "@/hooks/use-node-comments",
+  );
+  return {
+    ...actual,
+    useNodeComments: useNodeCommentsMock,
+  };
+});
 
 vi.mock("@clerk/nextjs", () => ({
   useUser: useUserMock,
@@ -341,6 +359,10 @@ beforeEach(() => {
   // sendAgentMessage spies — individual tests override this to exercise the
   // bidirectional wiring.
   useAiChatFeedMock.mockReturnValue({ messages: [], sendMessage: vi.fn(), sendAgentMessage: vi.fn() });
+
+  // Spec 37 default: no node comments yet, a fresh sendComment spy —
+  // individual tests override this to exercise the wiring.
+  useNodeCommentsMock.mockReturnValue({ comments: [], sendComment: vi.fn() });
   roomProviderPropsRef.current = null;
 
   // "Export as image" defaults: an arbitrary real-looking bounds/viewport
@@ -1082,6 +1104,24 @@ describe("Canvas", () => {
       renderCanvas({ onSendAgentMessageChange });
 
       expect(onSendAgentMessageChange).toHaveBeenCalledWith(sendAgentMessage);
+    });
+  });
+
+  describe("node comments (spec 37)", () => {
+    it("initializes RoomProvider's Storage with an empty nodeComments LiveList", () => {
+      renderCanvas();
+
+      expect(roomProviderPropsRef.current?.initialStorage?.nodeComments).toBeDefined();
+      const nodeComments = roomProviderPropsRef.current?.initialStorage?.nodeComments as {
+        length: number;
+      };
+      expect(nodeComments.length).toBe(0);
+    });
+
+    it("calls useNodeComments (subscribed inside the room boundary)", () => {
+      renderCanvas();
+
+      expect(useNodeCommentsMock).toHaveBeenCalled();
     });
   });
 

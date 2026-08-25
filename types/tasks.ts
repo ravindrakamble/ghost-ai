@@ -145,3 +145,54 @@ export type SendChatMessage = (content: string) => void
  * deliverables.
  */
 export type SendAgentChatMessage = (content: string) => void
+
+/**
+ * Formal, code-level schema for spec 37's node-scoped comment threads —
+ * one flat, persisted Liveblocks Storage `LiveList` (`root.nodeComments`,
+ * `liveblocks.config.ts`) shared by every node in the room, matching
+ * `ai-chat`'s own flat-`LiveList`-per-feed shape rather than a
+ * `LiveMap`-per-node structure. Every entry carries its own `nodeId` so a
+ * single list can serve every node, per the raw spec text.
+ *
+ * Deliberately a **fully independent schema/type** from
+ * `AiChatMessageSchema`/`AiChatMessage` — no shared base type — matching
+ * this codebase's existing convention of independent per-feed types (e.g.
+ * `AiStatusMessage` vs. `AiChatMessageSchema` staying unrelated above). A
+ * `NodeComment` has no `role` field (comments aren't user/assistant-typed
+ * the way chat messages are), which is the concrete reason a shared base
+ * type wasn't used — see spec 37's Analyst Brief, Open Questions #6.
+ */
+export const NodeCommentSchema = z.object({
+  /** Stable identifier for React list rendering — same rationale as
+   * `AiChatMessageSchema.id` above (falling back to array index as a key is
+   * a known React anti-pattern once comments can arrive from multiple
+   * senders into a live-appending list). */
+  id: z.string().min(1),
+  /** The canvas node this comment belongs to (`CanvasNode.id`,
+   * `types/canvas.ts`) — filtering by this field is what lets one flat
+   * `LiveList` serve every node's own thread. */
+  nodeId: z.string().min(1),
+  /** Display name resolved from the room's own already-resolved Liveblocks
+   * identity (`useSelf().info.name`) — same convention as
+   * `AiChatMessageSchema.sender`. */
+  sender: z.string().min(1),
+  content: z.string().min(1),
+  /** Epoch-ms (`Date.now()`) — same convention as
+   * `AiChatMessageSchema.timestamp`. */
+  timestamp: z.number().finite(),
+})
+
+/** Inferred from `NodeCommentSchema`. */
+export type NodeComment = z.infer<typeof NodeCommentSchema>
+
+/**
+ * Function shape for sending an outgoing node comment (spec 37) — mirrors
+ * `SendChatMessage`'s own doc/contract conventions: synchronous (a
+ * Liveblocks Storage `LiveList` write via `useMutation` is itself a
+ * synchronous, locally-applied operation, not an HTTP-style call that
+ * returns a rejecting promise), and throws synchronously if the outgoing
+ * comment fails `NodeCommentSchema`'s own validation or if the underlying
+ * Storage mutation itself throws (e.g. genuinely disconnected from the
+ * room).
+ */
+export type SendNodeComment = (nodeId: string, content: string) => void

@@ -3,6 +3,7 @@
 import { useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from "react"
 import { Handle, NodeResizer, Position, type NodeProps } from "@xyflow/react"
 import { NodeColorToolbar } from "@/components/editor/node-color-toolbar"
+import { NodeCommentsPopover } from "@/components/editor/node-comments-popover"
 import { ShapeVisual } from "@/components/editor/shape-visual"
 import { useCanvasSearchHighlight } from "@/hooks/use-canvas-search-highlight"
 import { useUpdateCanvasNode } from "@/hooks/use-update-canvas-node"
@@ -71,6 +72,14 @@ import { type CanvasNode as CanvasNodeType, type NodeColorPair } from "@/types/c
  * `ring-brand` ring, deliberately distinct from `ShapeVisual`'s own 1px
  * `border-brand` selected-state border, so a search-jump stays visually
  * obvious even when the jumped-to node also happens to be selected).
+ *
+ * Spec 37 (Node Comments) adds one more minimal, explicitly-permitted
+ * addition to this file: `<NodeCommentsPopover nodeId={id} />` renders as
+ * one more sibling inside the same `group relative` wrapper `<div>` above
+ * (the same wrapper `ShapeVisual`, the four connection `Handle`s, and spec
+ * 36's highlight-ring class already share) — the only change this spec
+ * makes here, per its own explicit Scope Limit. See spec 37's Analyst
+ * Brief, Concrete deliverables and Open Questions #4.
  */
 const CONNECTION_HANDLES: ReadonlyArray<{ id: string; position: Position }> = [
   { id: "top", position: Position.Top },
@@ -179,6 +188,7 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
             className="!h-2.5 !w-2.5 !rounded-full !border !border-base !bg-copy-primary opacity-0 transition-opacity duration-150 group-hover:opacity-100"
           />
         ))}
+        <NodeCommentsPopover nodeId={id} />
       </div>
       {/*
         Rendered after `ShapeVisual`, not before: its controls are

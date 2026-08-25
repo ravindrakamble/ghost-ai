@@ -120,8 +120,12 @@ describe("CanvasNode", () => {
 
   const cssShapes: NodeShape[] = ["rectangle", "pill", "circle"]
   it.each(cssShapes)("renders %s as a CSS div, not an SVG", (shape) => {
+    // Scoped to `ShapeVisual`'s own root, not the whole node wrapper — spec
+    // 37's `NodeCommentsPopover` trigger renders its own `MessageCircle` SVG
+    // icon as a further sibling in that wrapper, unrelated to shape
+    // rendering.
     const { container } = renderNode(makeProps({ label: "X", shape }))
-    expect(container.querySelector("svg")).toBeNull()
+    expect(getShapeRoot(container).querySelector("svg")).toBeNull()
     expect(screen.getByText("X").parentElement?.tagName).toBe("DIV")
   })
 
@@ -348,6 +352,14 @@ describe("CanvasNode", () => {
       const wrapper = container.firstElementChild as HTMLElement
       expect(wrapper.className).toContain("ring-4")
       expect(wrapper.className).toContain("ring-offset-2")
+    })
+  })
+
+  describe("node comments trigger (spec 37)", () => {
+    it("renders the comments trigger as a sibling inside the shared group wrapper, even with no provider in the tree", () => {
+      const { container } = renderNode(makeProps())
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.querySelector('[aria-label="Add a comment"]')).not.toBeNull()
     })
   })
 })
