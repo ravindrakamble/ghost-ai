@@ -134,3 +134,52 @@ export async function generateSpecMarkdown(input: GenerateSpecInput): Promise<st
 
   return text
 }
+
+/**
+ * Input to `generateIacSkeleton`: just the graph, per spec 35's Analyst
+ * Brief — no chat history is involved in Terraform generation, unlike
+ * `generateSpecMarkdown`'s `GenerateSpecInput`.
+ */
+export interface GenerateIacInput {
+  nodes: GenerateSpecGraphNode[]
+  edges: GenerateSpecGraphEdge[]
+}
+
+/**
+ * Mirrors `buildPrompt` above, but instructs the model to emit a Terraform
+ * skeleton instead of a Markdown spec — per spec 35's Analyst Brief, Concrete
+ * deliverables. Plain text only (no code fence wrapper, no explanatory
+ * prose), since the download route serves this as `text/plain`, not
+ * Markdown. No real provider credentials or apply-ready state — an inferred,
+ * plausible resource type per node, a starting skeleton only.
+ */
+function buildIacPrompt(input: GenerateIacInput): string {
+  return [
+    "You are Ghost AI, a system-design assistant. Write a Terraform (HCL) skeleton that represents the infrastructure implied by the software architecture diagram described below.",
+    `The diagram has these nodes/components: ${JSON.stringify(input.nodes)}`,
+    `and these edges/connections between them: ${JSON.stringify(input.edges)}`,
+    "For each node, infer a plausible Terraform resource type from its label and shape (e.g. a node labeled \"API Gateway\" might become an API gateway resource, a node labeled \"Database\" might become a database resource) and emit a corresponding resource block with a reasonable name and a few representative arguments.",
+    "This is a starting skeleton only, not production-ready infrastructure-as-code: do not include real provider credentials, do not assume any specific cloud provider unless a node's label makes one obvious, and do not produce apply-ready state.",
+    "If the diagram has no nodes, still produce a short Terraform comment (using # or //) noting that the canvas is currently empty and inviting the team to add content before regenerating.",
+    "Respond with the Terraform (HCL) content only — no commentary before or after it, and do not wrap the response in a Markdown code fence.",
+  ].join("\n\n")
+}
+
+/**
+ * Calls Gemini to turn the current canvas graph into a Terraform skeleton
+ * (spec 35's Analyst Brief). Mirrors `generateSpecMarkdown` exactly: the
+ * same cached lazy Gemini provider, the same single `generateText` call, the
+ * same `maxOutputTokens: 8192` budget, no retry logic — a failure is a
+ * thrown error, propagated as-is. Returns the model's raw text, no parsing.
+ */
+export async function generateIacSkeleton(input: GenerateIacInput): Promise<string> {
+  const provider = getGoogleProvider()
+
+  const { text } = await generateText({
+    model: provider(GEMINI_MODEL_ID),
+    prompt: buildIacPrompt(input),
+    maxOutputTokens: 8192,
+  })
+
+  return text
+}

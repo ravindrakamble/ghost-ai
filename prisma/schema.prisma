@@ -92,11 +92,21 @@ model TaskRun {
 /// project are expected, one per generation run, never overwritten (spec 28's
 /// Analyst Brief, Open Questions #5).
 model ProjectSpec {
-  id        String   @id @default(cuid())
-  projectId String
-  filePath  String
-  createdAt DateTime @default(now())
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id          String   @id @default(cuid())
+  projectId   String
+  filePath    String
+  /// Blob reference to the generated Terraform skeleton (spec 35), at
+  /// `specs/{projectId}/{specId}.tf` (`lib/spec-blob.ts#iacBlobPathname`).
+  /// Nullable — unlike `filePath`, which every row has always had — because
+  /// every `ProjectSpec` row created before this field shipped has no
+  /// Terraform content and never will; there is no real content to backfill,
+  /// so a required column with a placeholder default would misrepresent "no
+  /// IaC was ever generated" as "an empty but valid IaC file exists" (spec
+  /// 35's Analyst Brief). `null` means no Terraform skeleton was ever
+  /// generated for this spec.
+  iacFilePath String?
+  createdAt   DateTime @default(now())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId, createdAt])
 }

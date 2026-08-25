@@ -20,7 +20,7 @@ function jsonResponse(ok: boolean, body: unknown) {
 
 describe("useProjectSpecs", () => {
   it("fetches the spec list on mount", async () => {
-    const specs = [{ id: "s1", filename: "spec-s1.md", createdAt: "2026-01-01T00:00:00.000Z" }];
+    const specs = [{ id: "s1", filename: "spec-s1.md", createdAt: "2026-01-01T00:00:00.000Z", hasIac: true }];
     fetchMock.mockResolvedValue(jsonResponse(true, { specs }));
 
     const { result } = renderHook(() => useProjectSpecs("p1"));
@@ -54,10 +54,10 @@ describe("useProjectSpecs", () => {
   });
 
   it("re-fetches when refetch is called", async () => {
-    const firstSpecs = [{ id: "s1", filename: "spec-s1.md", createdAt: "2026-01-01T00:00:00.000Z" }];
+    const firstSpecs = [{ id: "s1", filename: "spec-s1.md", createdAt: "2026-01-01T00:00:00.000Z", hasIac: false }];
     const secondSpecs = [
       ...firstSpecs,
-      { id: "s2", filename: "spec-s2.md", createdAt: "2026-01-02T00:00:00.000Z" },
+      { id: "s2", filename: "spec-s2.md", createdAt: "2026-01-02T00:00:00.000Z", hasIac: true },
     ];
     fetchMock
       .mockResolvedValueOnce(jsonResponse(true, { specs: firstSpecs }))

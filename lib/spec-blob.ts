@@ -98,3 +98,59 @@ export async function fetchSpecMarkdown(blobUrl: string): Promise<string | null>
 
   return new Response(result.stream).text()
 }
+
+/**
+ * Deterministic per-spec blob pathname for the generated Terraform skeleton
+ * (spec 35), mirroring `specBlobPathname`'s `.md` pathname — same
+ * `specs/{projectId}/{specId}` root per `architecture-context.md`'s Storage
+ * Model, just a second file extension for the same `specId`.
+ */
+export function iacBlobPathname(projectId: string, specId: string): string {
+  return `specs/${projectId}/${specId}.tf`
+}
+
+/**
+ * Uploads the generated spec's Terraform content to
+ * `specs/{projectId}/{specId}.tf`. Structurally identical to
+ * `uploadSpecMarkdown` — same access level, same `allowOverwrite: true` (a
+ * retried upload for the same already-created `ProjectSpec` row shouldn't
+ * fail on a duplicate pathname) — except `contentType: "text/plain"` instead
+ * of `"text/markdown"`, since Terraform/HCL isn't Markdown. Returns the
+ * blob's URL, the value persisted as `ProjectSpec.iacFilePath` (spec 35's
+ * Analyst Brief).
+ */
+export async function uploadSpecIac(
+  projectId: string,
+  specId: string,
+  terraform: string,
+): Promise<string> {
+  const token = requireBlobToken()
+
+  const { url } = await put(iacBlobPathname(projectId, specId), terraform, {
+    access: SPEC_BLOB_ACCESS,
+    contentType: "text/plain",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    token,
+  })
+
+  return url
+}
+
+/**
+ * Fetches a previously-generated spec's Terraform content from Blob, given
+ * the URL stored in `ProjectSpec.iacFilePath`. Structurally identical to
+ * `fetchSpecMarkdown` — same not-found-vs-genuine-failure distinction:
+ * `null` only when the blob itself reports missing/non-200, a real upstream
+ * error still throws (spec 35's Analyst Brief).
+ */
+export async function fetchSpecIac(blobUrl: string): Promise<string | null> {
+  const token = requireBlobToken()
+
+  const result = await get(blobUrl, { access: SPEC_BLOB_ACCESS, token })
+  if (!result || result.statusCode !== 200) {
+    return null
+  }
+
+  return new Response(result.stream).text()
+}
