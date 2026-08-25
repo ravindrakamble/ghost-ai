@@ -125,3 +125,112 @@ Commands run, all green:
 - No live browser/manual smoke test of the search-popover-open → type → select → viewport-jump → highlight-glow flow against a real running dev server was performed in this environment (no live Liveblocks room / signed-in session available here) — recommended as a human smoke test, not a blocker; every acceptance criterion is verified at the unit/integration level via RTL against real component code (not mocked-out rendering of `CanvasSearchPopover`/`CanvasNode` themselves).
 - Consistent with the brief's own Out-of-scope callouts, all honored as specified: no edge search (`CanvasEdgeData` is never referenced by `findMatches`), no cross-project/cross-room search (matching is scoped to the `nodes` prop `CanvasFlow` already holds via `useLiveblocksFlow`, no new fetch/query), no Cmd/Ctrl+K shortcut (`hooks/use-keyboard-shortcuts.ts` has a zero-line diff — independently confirmed via `git diff`), no highlight/query/open-state sync through Liveblocks Storage or Presence, and no new `app/api` route or `trigger` task.
 - `canvas-node.tsx`'s diff is intentionally minimal per the brief's explicit Scope Limit — confirmed via `git diff` that the only changes are the new import and the wrapper `<div>`'s className becoming a conditional `cn(...)` call; every other line (drag, resize, label-edit, select, connection-handle behavior) is byte-for-byte unchanged.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | PASS — clean, no errors |
+| `npx eslint .` | PASS — 0 errors/warnings in this diff's files. Full-repo run shows the same 1 pre-existing error (`components/editor/editor-shell.tsx`, `react-hooks/set-state-in-effect`) and 1 pre-existing warning (`.agents/skills/.../__root.tsx`) already documented by spec 35's QA pass; confirmed via `git diff 751e68c ed875b1` that neither file appears in this branch's diff for spec 36 — both are pre-existing and unrelated |
+| `npx vitest run --no-file-parallelism` | PASS — 837/837 tests, 81/81 files |
+| `npx next build` | PASS — succeeds; no new route added (this is a pure client-side feature, confirmed against the route list in the build output — no new `app/api` entry) |
+
+All Dev Notes claims about the mechanical gate were independently reproduced and confirmed accurate.
+
+### Acceptance criteria checklist
+
+1. **PASS** — `canvas-control-bar.tsx` renders a `Search`-icon trigger (`variant="ghost" size="icon-lg"`) as its own fifth group, preceded by another divider div, matching the existing divider convention exactly.
+2. **PASS** — `components/ui/popover.tsx` genuinely wraps `@base-ui/react/popover` under the `base-nova` preset, structurally identical to `dialog.tsx` (same `data-slot` convention, same `cn()` merge pattern, same `Portal`/`Positioner`/`Popup` shape). `canvas-search-popover.tsx` uses `Popover`/`PopoverTrigger`/`PopoverContent` plus the existing `components/ui/input.tsx` — no `Command`/`cmdk` import anywhere in the diff or `package.json`.
+3. **PASS** — `findMatches()` does a case-insensitive substring match against `node.data.label`, computed via `useMemo` over the `nodes` prop (`CanvasFlow`'s live `useLiveblocksFlow().nodes`, threaded through `CanvasControlBar` unchanged).
+4. **PASS** — `SEARCH_RESULTS_LIMIT = 20` constant, capped after sorting by match index ascending, then by label on ties. Verified in code and by tests in `canvas-search-popover.test.tsx`.
+5. **PASS** — `handleJumpToNode` in `canvas.tsx` calls `getNodesBounds([node])` — confirmed via `git diff` this is the same imported `@xyflow/react` utility `handleExportImage` already uses (not a second import or hand-rolled calculation) — derives the box's own center, and calls the same `setCenter` destructured from the existing `useReactFlow()` call. `handleSelect` closes the popover immediately after calling `onSelectNode`.
+6. **PASS** — selecting a result sets `highlightedNodeId` and schedules it back to `null` after `SEARCH_HIGHLIGHT_DURATION_MS = 1500`, via a `useRef`-tracked timeout explicitly cleared before scheduling a new one, so rapid re-selection never leaves two nodes highlighted or a stale clear firing late. Verified in code and by the rapid-succession test in `canvas.test.tsx`.
+7. **PASS** — `CanvasSearchHighlightContext` is a plain `React.createContext<string | null>(null)`; no Liveblocks Storage/Presence API (`useStorage`, `useMutation`, `useUpdateMyPresence`, `LiveObject`, etc.) appears anywhere in this file or `canvas-search-popover.tsx`.
+8. **PASS** — the diff for `canvas-node.tsx` shows exactly one new import, two new lines in the component body, and the wrapper div's className becoming a `cn()` call. No other line changed.
+9. **PASS** — no edge-related code appears anywhere in the diff.
+10. **PASS** — `findMatches` only ever receives the room-scoped `nodes` prop from `CanvasFlow` — no new fetch, query, or cross-room data source.
+11. **PASS** — `hooks/use-keyboard-shortcuts.ts` has a zero-line diff for this commit range.
+12. **PASS** — all four mechanical gate commands reproduced independently above, all green.
+
+### Architecture invariants
+
+- No long-running AI work in a request handler — this feature does no server round-trip at all (pure client-side, in-memory filter over already-loaded `nodes`). OK.
+- Metadata vs. blob storage kept separate — not applicable; no persistence of any kind is added by this spec. OK.
+- Auth/ownership enforced at every mutation boundary — not applicable; no new mutation route exists (confirmed: no new `app/api` entry in the `next build` route list). OK.
+- Client components used only where browser interactivity/real-time state requires them — `canvas-search-popover.tsx`, `popover.tsx`, and `use-canvas-search-highlight.ts` are all correctly marked `"use client"`; this is inherently a client-only, stateful UI feature. OK.
+- Canvas schema consistency between user-created content and imported templates — untouched; this spec reads `data.label` and node position/width/height only, writes nothing back to `CanvasNode`/`CanvasNodeData`. OK.
+- No violation found.
+
+### Standards compliance spot-check
+
+- No raw Tailwind grayscale (zinc-/slate-/gray-/neutral-) or hex colors in any changed file — grepped every new/changed file in this diff; zero matches. The highlight ring uses the existing `ring-brand`/`ring-offset-base` tokens, not a new color.
+- No `any` observed in any new/changed line across the diff.
+- `components/ui/*` — only `popover.tsx` added, genuinely via the shadcn CLI mechanism (confirmed structurally identical to `dialog.tsx`'s generated shape); no existing `components/ui/*` file was modified.
+- `canvas-node.tsx` — confirmed minimal, single-purpose diff per Acceptance Criterion 8 above.
+- Hooks convention — `use-canvas-search-highlight.ts` lives in the top-level `hooks/` folder and structurally mirrors `use-update-canvas-node.ts`'s context/hook pair, as claimed.
+
+### Error handling
+
+- Empty/whitespace-only query: renders a hint rather than throwing or rendering an unbounded list — handled.
+- No matches: renders a "no matching nodes" message — handled.
+- Untitled/empty-label nodes: skipped, preventing every blank-labeled node from flooding results on an empty-string substring match — handled.
+- Unmount mid-highlight: a dedicated cleanup effect clears the pending timeout on unmount, preventing a setState call after unmount — handled.
+- Rapid re-search: the previous highlight timeout is explicitly cleared before scheduling a new one — handled and test-covered.
+- No provider case (hook called outside CanvasFlow's tree): returns null via useContext's default, no throw — handled and test-covered.
+
+This is a read-only, client-side-only feature with no network/auth/malformed-input surface of its own beyond the above; all failure modes implied by the spec are handled.
+
+### Housekeeping
+
+- `context/progress-tracker.md` updated: "Current Goal" now correctly reflects spec 36 as Dev-complete/awaiting QA+PO (not yet Completed), and a new "Feature spec 36" entry under "Completed" accurately summarizes what was built, matching the actual diff.
+
+### Additional verification notes
+
+- Independently confirmed that the `getNodesBounds` mock in `canvas.test.tsx` is the same pre-existing mock already exercised by `handleExportImage`'s own test, and the new spec-36 tests reuse it identically — the "same bounds utility, not a separate hand-rolled one" claim holds at the test level too, not just in production code.
+- Independently confirmed the default node id in `canvas-node.test.tsx`'s `makeProps()` matches the highlighted-id fixture used in the new search-highlight tests — the highlight-ring assertions exercise a genuine id match, not a coincidental always-true condition.
+- No issues found. No Bug or Spec gap items to log.
+
+QA passed — ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent verification (not just trusting Dev/QA accounts)
+
+Read `context/project-overview.md` in full, the raw spec at `context/feature-specs/36-canvas-search.md`, this file's Analyst Brief/Dev Notes/QA Report end to end, and independently diffed the branch (`git diff main...spec/36-canvas-search --stat` and every substantive file, not sampled) rather than trusting the pipeline's own claims at face value:
+
+- `components/editor/canvas-node.tsx` — read the full diff myself. Confirmed the only changes are: one new import (`useCanvasSearchHighlight`), two new lines in the component body (`useCanvasSearchHighlight()` call + an `isSearchHighlighted` comparison), and the outer `group relative` wrapper `<div>`'s static `className` string becoming a `cn(...)` call that conditionally appends `rounded-xl ring-4 ring-brand ring-offset-2 ring-offset-base`. No line touching drag, resize, label-edit, select, or the four connection `Handle` elements is present in the diff. This is the one explicitly-permitted exception per the Analyst Brief's Scope Limit, and it is genuinely minimal — not a re-styling or re-render of `ShapeVisual` itself.
+- `hooks/use-canvas-search-highlight.ts` — read in full. A plain `React.createContext<string | null>(null)` plus a thin consumer hook, structurally identical in shape to `use-update-canvas-node.ts`. No Liveblocks import of any kind.
+- `components/editor/canvas-search-popover.tsx` — read in full. `findMatches` is a pure function over the `nodes` prop (case-insensitive substring match on `data.label`, sorted by match index then label, capped at `SEARCH_RESULTS_LIMIT = 20`, empty-label nodes skipped, empty query returns no results). Grepped this file for `Liveblocks|useStorage|useMutation|Presence|LiveObject|LiveList|useOthers` — the only hit is a doc-comment line referencing `useLiveblocksFlow` as the origin of the `nodes` prop; zero actual Liveblocks API usage. Local `query`/`open` state via plain `useState`, nothing pushed to a shared store.
+- `components/editor/canvas.tsx` — read the full diff. `handleJumpToNode` calls `getNodesBounds([node])` (confirmed this is the same imported `@xyflow/react` utility `handleExportImage` already uses above it, not a second import), derives the center by hand from that box, and calls `setCenter` (destructured from the same pre-existing `useReactFlow()` call) with the new `SEARCH_JUMP_ZOOM = 1` constant and the existing `ZOOM_TRANSITION_DURATION_MS`. `highlightedNodeId` is plain `useState`, guarded by a `useRef`-tracked timeout that's explicitly cleared before scheduling a new one (rapid-reselect-safe) and cleared again on unmount via a dedicated effect. `CanvasSearchHighlightContext.Provider` is nested inside the existing `CanvasNodeUpdateContext`/`CanvasEdgeUpdateContext` providers, still entirely inside the room-bounded `CanvasFlow` subtree — no push-up to `WorkspaceShell`, no new prop threaded through `Canvas`/`CanvasProps`.
+- `components/editor/canvas-control-bar.tsx` — read the full diff. Two new props (`nodes`, `onJumpToNode`), a fifth button group added after another copy of the existing `bg-surface-border` divider `<div>`, rendering `<CanvasSearchPopover nodes={nodes} onSelectNode={onJumpToNode} />`. No other button, prop, or existing group touched.
+- `components/ui/popover.tsx` — read in full. Genuinely built on `@base-ui/react/popover` (`Root`/`Trigger`/`Portal`/`Positioner`/`Popup`), same `data-slot` convention, same `cn(...)` className-merge pattern as `dialog.tsx`. No `cmdk`/`Command` import anywhere in this file, `canvas-search-popover.tsx`, or `package.json`.
+- `context/progress-tracker.md`'s Dev-authored diff — the "In Progress" entry for spec 36 accurately describes the file list, test-count delta (818/80 → 837/80+1), and explicitly flags "not yet reviewed by QA or the Product Owner — do not move to Completed," which matches what QA and I both actually did.
+
+Everything Dev and QA reported checks out against the actual diff; nothing was taken on trust that a direct read didn't independently confirm.
+
+### Judgment: legitimate, narrowly-scoped canvas ergonomics feature — not scope creep
+
+- **Out of Scope wall (`project-overview.md`)**: touches none of it. No billing/subscription code. No new permission tier — search is available to whoever already has canvas access (owner/collaborator), it doesn't create or bypass any access boundary. No versioned spec history. No object-storage migration (nothing persisted at all — this feature reads `nodes` already in memory and writes nothing to Prisma, Blob, or Liveblocks). No mobile app code. The raw spec at `context/feature-specs/36-canvas-search.md` pre-existed in the normal spec queue (not invented mid-pipeline), and its own Scope Limits (no cross-project search, no edge search, no keyboard shortcut, no `canvas-node.tsx` behavior change beyond the highlight) were all honored — independently confirmed above, not just asserted by Dev/QA.
+- **Does it strengthen a numbered Success Criterion?** Not directly — none of the six criteria in `project-overview.md` mention search or navigation. This is squarely in the same category spec 34's own Product Owner review reasoned through: additive product surface that doesn't dilute any Success Criterion and is clearly compatible with Goal 2 ("collaborative real-time canvas for system design") and Goal 5 ("let collaborators refine the generated architecture") — a diagram has to be findable/navigable to be refined once it grows past what fits on screen, which is the exact problem this spec names in its own opening line. Per the precedent set in specs 34/35's own reviews, acceptable additive surface does not need to be disqualified for failing to literally strengthen one of the six numbered criteria.
+- **Zero new Liveblocks-synced state — a real invariant, verified, not assumed.** This was the single most important thing to check independently rather than trust: the brief, Dev Notes, and QA Report all *claim* the highlight is local-only, but I re-derived it myself from the diff. `CanvasSearchHighlightContext` is a bare `React.createContext`, provided via component state in `CanvasFlow` (`useState`/`useRef`, not `useMutation`/`useStorage`/presence updaters), and grepping the two new component files for every Liveblocks API name turned up zero real usage — only a doc-comment reference. This means: no new field ever reaches `RoomProvider`'s storage schema, no other collaborator's client ever receives this user's search state, and no `architecture-context.md` invariant about intentional vs. accidental synced state is at risk. This is the correct call for what is explicitly a private, per-user navigation aid.
+- **`canvas-node.tsx` untouched beyond the one permitted addition — verified, not assumed.** Read the actual diff hunk myself (not just Dev's/QA's description of it): exactly one new import, two new body lines, and the wrapper `<div>`'s className becoming a `cn(...)` call. Every prior spec's investment in this file's drag/resize/edit/select/connection-handle behavior (specs 11, 14, 16 per the brief's own Dependencies section) is preserved byte-for-byte outside those three hunks.
+
+### Rough edges — acceptable for this stage
+
+- **No live browser/manual smoke test** of open → type → select → viewport-jump → highlight-glow against a real running dev server/Liveblocks room — disclosed directly in Dev Notes as a known limitation, the same category of disclosed-but-not-blocking gap already accepted for specs 23/26/28/30/31/34. Recommended as a human smoke test before considering this feature genuinely done end to end, not a blocker to this review.
+- **`SEARCH_JUMP_ZOOM = 1` and the exact ring visual treatment** are Dev-level judgment calls the raw spec text left unpinned (Open Questions #1/#2 in the Analyst Brief) — reasonable defaults, don't affect any acceptance criterion, and are trivially adjustable later without touching this spec's data contract (a `CanvasNode[]` in, an `onSelectNode`/`onJumpToNode` callback out) if a human wants a different feel.
+- None of these rise to the level of blocking a later spec (37 Node Comments, 38 Completion Notifications) from building on this one correctly — the new `CanvasSearchHighlightContext`/`useCanvasSearchHighlight()` pair and `canvas-search-popover.tsx` are self-contained, narrowly scoped, and don't touch any shared data contract those specs would depend on.
+
+### `progress-tracker.md` accuracy
+
+The current "In Progress" entry for spec 36 (file list, the "not yet reviewed by QA or the Product Owner — do not move to Completed" caveat, test-count delta) matches what QA actually verified and what I independently confirmed in the diff above — an honest record, not aspirational. Moving this entry to Completed below, matching the exact structure spec 34/35's own Completed entries use.
+
+### Escalation
+
+Not needed. This is a legitimate, narrowly-scoped product-fit call, worked through directly above on round 1 — no ambiguity that required sending back to the Analyst.
