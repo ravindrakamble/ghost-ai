@@ -2,6 +2,8 @@
 
 import { Download, Loader2, Maximize, Redo2, Save, Undo2, ZoomIn, ZoomOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { CanvasSearchPopover } from "@/components/editor/canvas-search-popover"
+import type { CanvasNode } from "@/types/canvas"
 
 export interface CanvasControlBarProps {
   /** Calls the real React Flow instance's `zoomIn` (with a duration). */
@@ -34,6 +36,19 @@ export interface CanvasControlBarProps {
    * Questions #3.
    */
   onOpenSaveTemplate: () => void
+  /**
+   * The room's live `nodes` (spec 36, Canvas Node Search) — threaded through
+   * to `CanvasSearchPopover` unchanged, the same "handler/data down, dumb
+   * child renders" convention every other button here already follows.
+   */
+  nodes: CanvasNode[]
+  /**
+   * `CanvasFlow`'s `handleJumpToNode` — called once a search result is
+   * selected. `CanvasControlBar` itself stays a thin composer; the search
+   * popover's own query/filter/open state lives in `CanvasSearchPopover`,
+   * not here. See spec 36's Analyst Brief, Concrete deliverables.
+   */
+  onJumpToNode: (node: CanvasNode) => void
 }
 
 /**
@@ -72,6 +87,17 @@ export interface CanvasControlBarProps {
  * group, after another copy of the same divider — a plain `onOpenSaveTemplate`
  * trigger, no busy/disabled state of its own here (the save dialog owns its
  * own in-flight state once open).
+ *
+ * "Canvas Node Search" (spec 36) adds a **fifth** group — another copy of
+ * the same divider, followed by `<CanvasSearchPopover>` — after the existing
+ * Save-as-template group, per this file's own established precedent of every
+ * new capability appending its own trailing group rather than inserting into
+ * the middle of the bar. `CanvasControlBar` stays a thin composer here too:
+ * it does not own the search query/filter/open state, only renders/wires
+ * the self-contained popover component, the same split already used for
+ * `SaveTemplateDialog`/`StarterTemplatesModal` (owned/rendered by
+ * `CanvasFlow`, this component only gets a trigger prop) adapted for a
+ * same-position-anchored popover instead of a centered modal.
  */
 export function CanvasControlBar({
   onZoomIn,
@@ -85,6 +111,8 @@ export function CanvasControlBar({
   isExportingImage,
   canExportImage,
   onOpenSaveTemplate,
+  nodes,
+  onJumpToNode,
 }: CanvasControlBarProps) {
   return (
     <div className="pointer-events-none absolute bottom-24 left-6 z-10">
@@ -146,6 +174,8 @@ export function CanvasControlBar({
         >
           <Save />
         </Button>
+        <div aria-hidden className="mx-1 h-5 w-px bg-surface-border" />
+        <CanvasSearchPopover nodes={nodes} onSelectNode={onJumpToNode} />
       </div>
     </div>
   )

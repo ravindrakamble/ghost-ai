@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { CanvasControlBar } from "./canvas-control-bar"
+import { DEFAULT_NODE_COLOR, DEFAULT_NODE_TEXT_COLOR, type CanvasNode } from "@/types/canvas"
 
 function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = {}) {
   const props = {
@@ -16,6 +17,8 @@ function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = 
     isExportingImage: false,
     canExportImage: true,
     onOpenSaveTemplate: vi.fn(),
+    nodes: [] as CanvasNode[],
+    onJumpToNode: vi.fn(),
     ...overrides,
   }
   render(<CanvasControlBar {...props} />)
@@ -23,11 +26,11 @@ function renderBar(overrides: Partial<Parameters<typeof CanvasControlBar>[0]> = 
 }
 
 describe("CanvasControlBar", () => {
-  it("renders all seven buttons, grouped with a divider between each of the four groups", () => {
+  it("renders all eight buttons, grouped with a divider between each of the five groups", () => {
     renderBar()
 
     const buttons = screen.getAllByRole("button")
-    expect(buttons).toHaveLength(7)
+    expect(buttons).toHaveLength(8)
     expect(screen.getByRole("button", { name: /zoom out/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /fit view/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /zoom in/i })).toBeInTheDocument()
@@ -35,13 +38,28 @@ describe("CanvasControlBar", () => {
     expect(screen.getByRole("button", { name: /redo/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /export as image/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /save as template/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /search nodes/i })).toBeInTheDocument()
 
-    // Three divider elements: zoom | history | export | save-as-template.
+    // Four divider elements: zoom | history | export | save-as-template | search.
     const dividers = document.querySelectorAll(".bg-surface-border")
-    expect(dividers).toHaveLength(3)
-    expect(dividers[0]).toHaveAttribute("aria-hidden", "true")
-    expect(dividers[1]).toHaveAttribute("aria-hidden", "true")
-    expect(dividers[2]).toHaveAttribute("aria-hidden", "true")
+    expect(dividers).toHaveLength(4)
+    dividers.forEach((divider) => expect(divider).toHaveAttribute("aria-hidden", "true"))
+  })
+
+  it("calls onJumpToNode with the selected node when a search result is picked", () => {
+    const node: CanvasNode = {
+      id: "node-1",
+      type: "canvasNode",
+      position: { x: 0, y: 0 },
+      data: { label: "API Gateway", color: DEFAULT_NODE_COLOR, textColor: DEFAULT_NODE_TEXT_COLOR, shape: "rectangle" },
+    }
+    const { onJumpToNode } = renderBar({ nodes: [node] })
+
+    fireEvent.click(screen.getByRole("button", { name: /search nodes/i }))
+    fireEvent.change(screen.getByPlaceholderText(/search nodes by label/i), { target: { value: "API" } })
+    fireEvent.click(screen.getByRole("button", { name: "API Gateway" }))
+
+    expect(onJumpToNode).toHaveBeenCalledWith(node)
   })
 
   it("calls onOpenSaveTemplate when the save-as-template button is clicked", () => {
@@ -80,6 +98,8 @@ describe("CanvasControlBar", () => {
         isExportingImage
         canExportImage
         onOpenSaveTemplate={vi.fn()}
+        nodes={[]}
+        onJumpToNode={vi.fn()}
       />,
     )
 

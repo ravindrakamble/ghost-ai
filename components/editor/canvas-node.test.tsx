@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react"
 import { CanvasNode } from "./canvas-node"
+import { CanvasSearchHighlightContext } from "@/hooks/use-canvas-search-highlight"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
 import { NODE_MIN_SIZE } from "@/lib/canvas-shapes"
 import {
@@ -81,6 +82,22 @@ function rerenderNode(
  */
 function getShapeRoot(container: HTMLElement): HTMLElement {
   return container.firstElementChild!.firstElementChild as HTMLElement
+}
+
+/**
+ * Spec 36 (Canvas Node Search): wraps `<CanvasNode>` in
+ * `CanvasSearchHighlightContext.Provider` so highlight-comparison tests can
+ * set the "currently highlighted node id" independently of the update-node
+ * context above.
+ */
+function renderNodeWithHighlight(props: NodeProps<CanvasNodeType>, highlightedNodeId: string | null) {
+  return render(
+    <ReactFlowProvider>
+      <CanvasSearchHighlightContext.Provider value={highlightedNodeId}>
+        <CanvasNode {...props} />
+      </CanvasSearchHighlightContext.Provider>
+    </ReactFlowProvider>,
+  )
 }
 
 describe("CanvasNode", () => {
@@ -297,6 +314,40 @@ describe("CanvasNode", () => {
       fireEvent.doubleClick(screen.getByText("X"))
       const textarea = screen.getByRole("textbox") as HTMLTextAreaElement
       expect(textarea.style.color).toBe("rgb(82, 168, 255)") // #52A8FF
+    })
+  })
+
+  describe("search highlight (spec 36)", () => {
+    it("applies a highlight ring to the wrapper when this node is the highlighted id", () => {
+      const { container } = renderNodeWithHighlight(makeProps(), "node-1")
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.className).toContain("ring-brand")
+    })
+
+    it("applies no highlight ring when a different node is highlighted", () => {
+      const { container } = renderNodeWithHighlight(makeProps(), "some-other-node")
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.className).not.toContain("ring-brand")
+    })
+
+    it("applies no highlight ring when nothing is highlighted (null)", () => {
+      const { container } = renderNodeWithHighlight(makeProps(), null)
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.className).not.toContain("ring-brand")
+    })
+
+    it("does not throw and applies no highlight when rendered outside any highlight provider", () => {
+      expect(() => renderNode(makeProps())).not.toThrow()
+      const { container } = renderNode(makeProps())
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.className).not.toContain("ring-brand")
+    })
+
+    it("uses a visibly wider/offset ring, distinct from the selected-state border treatment", () => {
+      const { container } = renderNodeWithHighlight(makeProps({}, true), "node-1")
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.className).toContain("ring-4")
+      expect(wrapper.className).toContain("ring-offset-2")
     })
   })
 })
