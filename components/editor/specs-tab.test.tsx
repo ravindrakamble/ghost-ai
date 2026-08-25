@@ -155,6 +155,40 @@ describe("SpecsTab", () => {
   });
 });
 
+describe("SpecsTab — Download as Terraform (spec 35)", () => {
+  const SPECS_WITH_MIXED_IAC = [
+    { id: "s1", filename: "spec-s1.md", createdAt: "2026-01-01T00:00:00.000Z", hasIac: true },
+    { id: "s2", filename: "spec-s2.md", createdAt: "2026-01-02T00:00:00.000Z", hasIac: false },
+  ];
+
+  it("renders a working <a href download> Terraform download action when hasIac is true", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(true, { specs: SPECS_WITH_MIXED_IAC }));
+    render(<SpecsTab projectId="p1" />);
+
+    await waitFor(() => expect(screen.getByText("spec-s1.md")).toBeInTheDocument());
+
+    const terraformLink = screen.getByRole("link", { name: /download spec-s1\.md as terraform/i });
+    expect(terraformLink).toHaveAttribute(
+      "href",
+      "/api/projects/p1/specs/s1/download-iac",
+    );
+    expect(terraformLink).toHaveAttribute("download");
+  });
+
+  it("renders a visibly-present but disabled control (not a live link) when hasIac is false", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(true, { specs: SPECS_WITH_MIXED_IAC }));
+    render(<SpecsTab projectId="p1" />);
+
+    await waitFor(() => expect(screen.getByText("spec-s2.md")).toBeInTheDocument());
+
+    expect(
+      screen.queryByRole("link", { name: /download spec-s2\.md as terraform/i }),
+    ).not.toBeInTheDocument();
+    const disabledButton = screen.getByRole("button", { name: /download spec-s2\.md as terraform/i });
+    expect(disabledButton).toBeDisabled();
+  });
+});
+
 describe("SpecsTab — Generate Spec (spec 30)", () => {
   it("converts nodes/edges/chatMessages and POSTs /api/ai/spec with { roomId, chatHistory, nodes, edges }", async () => {
     stubGenerateSpecFlow();

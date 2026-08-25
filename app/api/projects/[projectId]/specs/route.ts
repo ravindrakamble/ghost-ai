@@ -32,13 +32,20 @@ function accessErrorResponse(access: Extract<ProjectAccessResult, { ok: false }>
  * presupposes a client already knows a real `specId`, and spec 29's raw text
  * explicitly assumes "the existing ProjectSpec API" for fetching a list.
  *
- * Metadata only (`id`, a derived `filename`, `createdAt`) — never
- * `ProjectSpec.filePath` (the raw Blob URL) and never spec content, which
- * only the access-checked download route serves. Open Questions #3's own
- * text offers "filePath or a derived filename" as the two options; the
- * derived filename is chosen to keep this route consistent with every other
- * Blob-backed route in this codebase (`canvas`, `specs/[specId]/download`),
- * none of which ever put a raw Blob URL in a response body.
+ * Metadata only (`id`, a derived `filename`, `createdAt`, `hasIac`) — never
+ * `ProjectSpec.filePath`/`iacFilePath` (the raw Blob URLs) and never spec
+ * content, which only the access-checked download routes serve. Open
+ * Questions #3's own text offers "filePath or a derived filename" as the two
+ * options; the derived filename is chosen to keep this route consistent with
+ * every other Blob-backed route in this codebase (`canvas`,
+ * `specs/[specId]/download`), none of which ever put a raw Blob URL in a
+ * response body.
+ *
+ * `hasIac` (spec 35's Analyst Brief, Open Questions #3) is derived as
+ * `spec.iacFilePath !== null` — never the raw `iacFilePath` value itself —
+ * so the Specs tab can tell a pre-existing spec (no Terraform ever
+ * generated, would 404 if downloaded) from one generated after spec 35
+ * shipped, without a raw Blob URL leaking into the response.
  */
 export async function GET(_request: NextRequest, { params }: RouteContext) {
   const { projectId } = await params
@@ -49,7 +56,7 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
 
   const specs = await prisma.projectSpec.findMany({
     where: { projectId },
-    select: { id: true, createdAt: true },
+    select: { id: true, createdAt: true, iacFilePath: true },
     orderBy: { createdAt: "desc" },
   })
 
@@ -58,6 +65,7 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
       id: spec.id,
       filename: `spec-${spec.id}.md`,
       createdAt: spec.createdAt,
+      hasIac: spec.iacFilePath !== null,
     })),
   })
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import type { GenerateSpecInput } from "@/lib/generate-spec-ai"
-import { generateSpecMarkdown } from "@/lib/generate-spec-ai"
+import type { GenerateSpecInput, GenerateIacInput } from "@/lib/generate-spec-ai"
+import { generateSpecMarkdown, generateIacSkeleton } from "@/lib/generate-spec-ai"
 import type { AiChatMessage } from "@/types/tasks"
 
 type GlobalWithGemini = typeof globalThis & { specGenGoogleProvider?: unknown }
@@ -127,5 +127,97 @@ describe("generateSpecMarkdown", () => {
     generateTextMock.mockRejectedValue(new Error("gemini down"))
 
     await expect(generateSpecMarkdown(EMPTY_INPUT)).rejects.toThrow("gemini down")
+  })
+})
+
+describe("generateIacSkeleton", () => {
+  const originalKey = process.env.GEMINI_API_KEY
+  const EMPTY_IAC_INPUT: GenerateIacInput = { nodes: [], edges: [] }
+
+  beforeEach(() => {
+    clearCachedProvider()
+    vi.clearAllMocks()
+    process.env.GEMINI_API_KEY = "test-gemini-key"
+  })
+
+  afterEach(() => {
+    clearCachedProvider()
+    if (originalKey === undefined) {
+      delete process.env.GEMINI_API_KEY
+    } else {
+      process.env.GEMINI_API_KEY = originalKey
+    }
+  })
+
+  it("throws a handled error when GEMINI_API_KEY is not set, without calling the provider", async () => {
+    delete process.env.GEMINI_API_KEY
+
+    await expect(generateIacSkeleton(EMPTY_IAC_INPUT)).rejects.toThrow(/GEMINI_API_KEY/)
+    expect(createGoogleGenerativeAIMock).not.toHaveBeenCalled()
+    expect(generateTextMock).not.toHaveBeenCalled()
+  })
+
+  it("reuses the same cached, lazily-instantiated Google provider as generateSpecMarkdown and calls generateText with the model/prompt", async () => {
+    generateTextMock.mockResolvedValue({ text: 'resource "null_resource" "example" {}' })
+
+    await generateSpecMarkdown(EMPTY_INPUT)
+    await generateIacSkeleton(EMPTY_IAC_INPUT)
+
+    expect(createGoogleGenerativeAIMock).toHaveBeenCalledTimes(1)
+    expect(createGoogleGenerativeAIMock).toHaveBeenCalledWith({ apiKey: "test-gemini-key" })
+    expect(providerFnMock).toHaveBeenCalledWith("gemini-3.6-flash")
+
+    const call = generateTextMock.mock.calls[1][0] as MockGenerateTextArgs
+    expect(call.model).toEqual({ modelId: "gemini-3.6-flash" })
+    expect(call.maxOutputTokens).toBe(8192)
+  })
+
+  it("returns Gemini's raw text output unmodified", async () => {
+    generateTextMock.mockResolvedValue({ text: 'resource "aws_db_instance" "database" {}' })
+
+    const result = await generateIacSkeleton(EMPTY_IAC_INPUT)
+
+    expect(result).toBe('resource "aws_db_instance" "database" {}')
+  })
+
+  it("includes the node/edge graph summary in the prompt", async () => {
+    generateTextMock.mockResolvedValue({ text: "# terraform" })
+
+    const input: GenerateIacInput = {
+      nodes: [{ id: "n1", label: "API Gateway", shape: "hexagon", x: 0, y: 0 }],
+      edges: [{ id: "e1", sourceNodeId: "n1", targetNodeId: "n1", label: "self" }],
+    }
+
+    await generateIacSkeleton(input)
+
+    const call = generateTextMock.mock.calls[0][0] as MockGenerateTextArgs
+    expect(call.prompt).toContain("API Gateway")
+    expect(call.prompt).toContain("hexagon")
+    expect(call.prompt).toContain("e1")
+  })
+
+  it("instructs the model to respond with plain Terraform content only, no Markdown code fence", async () => {
+    generateTextMock.mockResolvedValue({ text: "# terraform" })
+
+    await generateIacSkeleton(EMPTY_IAC_INPUT)
+
+    const call = generateTextMock.mock.calls[0][0] as MockGenerateTextArgs
+    expect(call.prompt).toMatch(/no commentary|no explanatory/i)
+    expect(call.prompt).toMatch(/code fence/i)
+  })
+
+  it("notes an empty graph distinctly in the prompt rather than omitting the section", async () => {
+    generateTextMock.mockResolvedValue({ text: "# terraform" })
+
+    await generateIacSkeleton(EMPTY_IAC_INPUT)
+
+    const call = generateTextMock.mock.calls[0][0] as MockGenerateTextArgs
+    expect(call.prompt).toMatch(/empty/i)
+  })
+
+  it("propagates a genuine upstream Gemini failure rather than swallowing it", async () => {
+    generateTextMock.mockRejectedValue(new Error("gemini down"))
+
+    await expect(generateIacSkeleton(EMPTY_IAC_INPUT)).rejects.toThrow("gemini down")
   })
 })

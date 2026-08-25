@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useState } from "react"
 
 /** A single generated spec's list-item metadata, matching the shape
- * `GET /api/projects/[projectId]/specs` (spec 28) returns. */
+ * `GET /api/projects/[projectId]/specs` (spec 28) returns. `hasIac` (spec
+ * 35) is `true` only for a spec whose Terraform skeleton was actually
+ * generated and persisted — never inferred client-side, always the server's
+ * own `ProjectSpec.iacFilePath !== null` check. */
 export interface ProjectSpecSummary {
   id: string
   filename: string
   createdAt: string
+  hasIac: boolean
 }
 
 interface SpecsListResponse {

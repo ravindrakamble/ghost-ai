@@ -71,7 +71,7 @@ describe("GET /api/projects/[projectId]/specs", () => {
     expect(body).toEqual({ specs: [] })
   })
 
-  it("lists specs newest first, as metadata only — never the raw Blob URL", async () => {
+  it("lists specs newest first, as metadata only — never the raw Blob URL, with a derived hasIac flag", async () => {
     getProjectAccessMock.mockResolvedValue({
       ok: true,
       project: { id: "p1", name: "P" },
@@ -80,8 +80,8 @@ describe("GET /api/projects/[projectId]/specs", () => {
     const createdAt1 = new Date("2026-01-01T00:00:00Z")
     const createdAt2 = new Date("2026-01-02T00:00:00Z")
     prismaMock.projectSpec.findMany.mockResolvedValue([
-      { id: "spec_2", createdAt: createdAt2 },
-      { id: "spec_1", createdAt: createdAt1 },
+      { id: "spec_2", createdAt: createdAt2, iacFilePath: "https://blob.example/specs/p1/spec_2.tf" },
+      { id: "spec_1", createdAt: createdAt1, iacFilePath: null },
     ])
 
     const response = await GET(getRequest(), ctx())
@@ -90,14 +90,14 @@ describe("GET /api/projects/[projectId]/specs", () => {
     const body = await response.json()
     expect(body).toEqual({
       specs: [
-        { id: "spec_2", filename: "spec-spec_2.md", createdAt: createdAt2.toISOString() },
-        { id: "spec_1", filename: "spec-spec_1.md", createdAt: createdAt1.toISOString() },
+        { id: "spec_2", filename: "spec-spec_2.md", createdAt: createdAt2.toISOString(), hasIac: true },
+        { id: "spec_1", filename: "spec-spec_1.md", createdAt: createdAt1.toISOString(), hasIac: false },
       ],
     })
     expect(JSON.stringify(body)).not.toContain("blob")
     expect(prismaMock.projectSpec.findMany).toHaveBeenCalledWith({
       where: { projectId: "p1" },
-      select: { id: true, createdAt: true },
+      select: { id: true, createdAt: true, iacFilePath: true },
       orderBy: { createdAt: "desc" },
     })
   })

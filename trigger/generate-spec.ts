@@ -2,12 +2,13 @@ import { task, logger, metadata } from "@trigger.dev/sdk"
 import { z } from "zod"
 import {
   generateSpecMarkdown,
+  generateIacSkeleton,
   type GenerateSpecGraphNode,
   type GenerateSpecGraphEdge,
 } from "@/lib/generate-spec-ai"
 import { AiChatMessageSchema, type AiChatMessage, type AiStatusStage, type AiStatusMessage } from "@/types/tasks"
 import { prisma } from "@/lib/prisma"
-import { uploadSpecMarkdown } from "@/lib/spec-blob"
+import { uploadSpecMarkdown, uploadSpecIac } from "@/lib/spec-blob"
 
 /**
  * Payload accepted by the generate-spec task. `roomId`/`projectId` are the
@@ -43,6 +44,8 @@ export interface GenerateSpecResult {
   specId: string
   /** The generated Markdown spec, returned as task output for convenience — also durably persisted to Vercel Blob + Prisma (spec 28), not ephemeral-only as spec 27 originally shipped it. */
   markdown: string
+  /** The generated Terraform skeleton, returned as task output for convenience — mirroring `markdown`'s own precedent — also durably persisted to Vercel Blob + Prisma (spec 35). */
+  terraform: string
 }
 
 export const GENERATE_SPEC_TASK_ID = "generate-spec"
@@ -100,34 +103,45 @@ function setGenerateSpecStatus(stage: AiStatusStage, text: string): void {
 }
 
 /**
- * Persists a generated spec's Markdown content: upload to Vercel Blob +
- * create/link a `ProjectSpec` Prisma row, per spec 28's Analyst Brief
- * (Open Questions #1's recommended resolution — persistence lives inside
- * this task, not a separate client-triggered route).
+ * Persists a generated spec's Markdown + Terraform content: upload both to
+ * Vercel Blob + create/link a single `ProjectSpec` Prisma row, per spec 28's
+ * Analyst Brief (Open Questions #1's recommended resolution — persistence
+ * lives inside this task, not a separate client-triggered route) extended by
+ * spec 35's Analyst Brief.
  *
- * Two-write pattern (Open Questions #2's recommended resolution): the Blob
- * pathname (`specs/{projectId}/{specId}.md`) needs a `specId` before it
- * exists, and Prisma's `@default(cuid())` only generates one at insert time.
- * A `ProjectSpec` row is created first (with a placeholder empty
- * `filePath`) to obtain the generated id, then the Markdown is uploaded to
- * Blob using that id, then the row is updated with the resulting URL.
+ * Placeholder-create-then-upload-then-update pattern (Open Questions #2's
+ * recommended resolution): the Blob pathnames (`specs/{projectId}/{specId}
+ * .md`/`.tf`) need a `specId` before they exist, and Prisma's
+ * `@default(cuid())` only generates one at insert time. A `ProjectSpec` row
+ * is created first (with a placeholder empty `filePath`, `iacFilePath`
+ * omitted so it defaults to `null`) to obtain the generated id, then the
+ * Markdown is uploaded to Blob using that id, then the Terraform is uploaded
+ * using the same id, then **one** update call sets `filePath`/`iacFilePath`
+ * together (spec 35's Analyst Brief's own explicit "set it in the same
+ * update call" instruction) — never a partial row with one persisted and
+ * not the other.
  *
- * If the Blob upload or the follow-up update fails, the placeholder row is
+ * If either upload or the single update call fails, the placeholder row is
  * deleted (best-effort) before rethrowing — leaving it behind would surface
  * a spec in the list/download routes that can never actually be fetched, a
  * silent-failure mode `code-standards.md`'s "write real error handling" rule
  * argues against.
  */
-async function persistGeneratedSpec(projectId: string, markdown: string): Promise<string> {
+async function persistGeneratedSpec(
+  projectId: string,
+  markdown: string,
+  terraform: string,
+): Promise<string> {
   const spec = await prisma.projectSpec.create({
     data: { projectId, filePath: "" },
   })
 
   try {
     const filePath = await uploadSpecMarkdown(projectId, spec.id, markdown)
+    const iacFilePath = await uploadSpecIac(projectId, spec.id, terraform)
     await prisma.projectSpec.update({
       where: { id: spec.id },
-      data: { filePath },
+      data: { filePath, iacFilePath },
     })
     return spec.id
   } catch (error) {
@@ -170,9 +184,13 @@ export async function runGenerateSpec(payload: GenerateSpecPayload): Promise<Gen
 
     const markdown = await generateSpecMarkdown({ chatHistory, nodes, edges })
 
+    setGenerateSpecStatus("processing", "Ghost AI is drafting the Terraform skeleton…")
+
+    const terraform = await generateIacSkeleton({ nodes, edges })
+
     setGenerateSpecStatus("processing", "Ghost AI is saving the generated spec…")
 
-    const specId = await persistGeneratedSpec(projectId, markdown)
+    const specId = await persistGeneratedSpec(projectId, markdown, terraform)
 
     setGenerateSpecStatus("complete", "Ghost AI finished drafting the spec.")
 
@@ -181,9 +199,10 @@ export async function runGenerateSpec(payload: GenerateSpecPayload): Promise<Gen
       projectId,
       specId,
       markdownLength: markdown.length,
+      terraformLength: terraform.length,
     })
 
-    return { roomId, projectId, specId, markdown }
+    return { roomId, projectId, specId, markdown, terraform }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     logger.error("generate-spec task failed", { roomId, projectId, error: message })

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useRealtimeRun } from "@trigger.dev/react-hooks"
-import { AlertCircle, Download, FileText, Loader2 } from "lucide-react"
+import { AlertCircle, Download, FileCode, FileText, Loader2 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { SpecPreviewModal } from "@/components/editor/spec-preview-modal"
@@ -139,6 +139,15 @@ function formatCreatedAt(value: string): string {
  * uses, and the same route the modal's `fetch()`-based preview reads from
  * (spec 29's Analyst Brief, Open Questions #2). No Blob URL is ever read or
  * constructed client-side.
+ *
+ * Spec 35 adds a second, adjacent download action pointed at the new
+ * `download-iac` route, downloading the same spec's generated Terraform
+ * skeleton (a distinct icon, `FileCode`, so the two aren't visually
+ * identical). Rendered as a real `<a href download>` when `spec.hasIac` is
+ * `true`; rendered as a visibly-present but natively `disabled` shadcn
+ * `Button` (not a live 404-prone link, not omitted entirely) when `false` --
+ * a spec generated before spec 35 shipped never has Terraform content to
+ * download (spec 35's Analyst Brief, Open Questions #4).
  *
  * Spec 30 wires the "Generate Spec" button: `handleGenerateSpec` converts the
  * current `nodes`/`edges` props via `toGenerateSpecNodes`/`toGenerateSpecEdges`
@@ -329,6 +338,27 @@ export function SpecsTab({ projectId, nodes = [], edges = [], chatMessages = [] 
                       <Download />
                       <span className="sr-only">Download {spec.filename}</span>
                     </a>
+                    {spec.hasIac ? (
+                      <a
+                        href={`/api/projects/${projectId}/specs/${spec.id}/download-iac`}
+                        download
+                        className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "shrink-0")}
+                      >
+                        <FileCode />
+                        <span className="sr-only">Download {spec.filename} as Terraform</span>
+                      </a>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled
+                        className="shrink-0"
+                      >
+                        <FileCode />
+                        <span className="sr-only">Download {spec.filename} as Terraform</span>
+                      </Button>
+                    )}
                   </div>
                 </li>
               ))}

@@ -10,6 +10,7 @@ const SPEC: ProjectSpecSummary = {
   id: "spec-1",
   filename: "spec-spec-1.md",
   createdAt: "2026-01-01T00:00:00.000Z",
+  hasIac: false,
 }
 
 beforeEach(() => {
