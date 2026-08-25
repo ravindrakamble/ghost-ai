@@ -31,6 +31,7 @@ const {
   zoomInMock,
   zoomOutMock,
   fitViewMock,
+  setCenterMock,
   useUndoMock,
   useRedoMock,
   useCanUndoMock,
@@ -62,6 +63,9 @@ const {
   zoomInMock: vi.fn(),
   zoomOutMock: vi.fn(),
   fitViewMock: vi.fn(),
+  // Spec 36 (Canvas Node Search): `handleJumpToNode`'s own real dependency,
+  // same `useReactFlow()` call the other zoom methods already come from.
+  setCenterMock: vi.fn(),
   useUndoMock: vi.fn(),
   useRedoMock: vi.fn(),
   useCanUndoMock: vi.fn(),
@@ -215,6 +219,7 @@ vi.mock("@xyflow/react", () => ({
     zoomIn: zoomInMock,
     zoomOut: zoomOutMock,
     fitView: fitViewMock,
+    setCenter: setCenterMock,
   }),
   // `LiveCursors` (spec 19) also calls this directly — a no-op reactive
   // return is enough here since this suite doesn't test pan/zoom behavior.
@@ -433,8 +438,8 @@ describe("Canvas", () => {
     // 6 shape-panel buttons (rectangle, diamond, circle, pill, cylinder,
     // hexagon) plus the 5 control-bar buttons (zoom out, fit view, zoom in,
     // undo, redo) added in spec 17, plus the export-as-image button, plus
-    // the save-as-template button (spec 33).
-    expect(screen.getAllByRole("button")).toHaveLength(13);
+    // the save-as-template button (spec 33), plus the search button (spec 36).
+    expect(screen.getAllByRole("button")).toHaveLength(14);
   });
 
   it("renders the canvas control bar wired to the real React Flow zoom methods and Liveblocks history hooks", () => {
@@ -1114,6 +1119,80 @@ describe("Canvas", () => {
       renderCanvas({ onCanvasGraphChange });
 
       expect(onCanvasGraphChange).toHaveBeenCalledWith(nodes, edges);
+    });
+  });
+
+  describe("canvas node search (spec 36)", () => {
+    const searchNode = {
+      id: "search-node-1",
+      type: CANVAS_NODE_TYPE,
+      position: { x: 100, y: 200 },
+      width: 160,
+      height: 80,
+      data: { label: "API Gateway", color: DEFAULT_NODE_COLOR, textColor: "#EDEDED", shape: "rectangle" as const },
+    };
+
+    beforeEach(() => {
+      useLiveblocksFlowMock.mockReturnValue({
+        nodes: [searchNode],
+        edges: [],
+        onNodesChange,
+        onEdgesChange,
+        onConnect,
+        onDelete: onDeleteMock,
+      });
+    });
+
+    it("jumps the viewport via setCenter, computed from getNodesBounds([node]), when a search result is selected", () => {
+      getNodesBoundsMock.mockReturnValue({ x: 100, y: 200, width: 160, height: 80 });
+
+      renderCanvas();
+
+      fireEvent.click(screen.getByRole("button", { name: /search nodes/i }));
+      fireEvent.change(screen.getByPlaceholderText(/search nodes by label/i), {
+        target: { value: "API" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "API Gateway" }));
+
+      expect(getNodesBoundsMock).toHaveBeenCalledWith([searchNode]);
+      // center = { x: 100 + 160/2, y: 200 + 80/2 } = { x: 180, y: 240 }
+      expect(setCenterMock).toHaveBeenCalledWith(180, 240, { zoom: 1, duration: expect.any(Number) });
+    });
+
+    it("closes the search popover after selecting a result", () => {
+      getNodesBoundsMock.mockReturnValue({ x: 100, y: 200, width: 160, height: 80 });
+
+      renderCanvas();
+
+      fireEvent.click(screen.getByRole("button", { name: /search nodes/i }));
+      fireEvent.change(screen.getByPlaceholderText(/search nodes by label/i), {
+        target: { value: "API" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "API Gateway" }));
+
+      expect(screen.queryByPlaceholderText(/search nodes by label/i)).not.toBeInTheDocument();
+    });
+
+    it("does not throw when two searches are selected in rapid succession (clears the previous highlight timeout)", () => {
+      getNodesBoundsMock.mockReturnValue({ x: 100, y: 200, width: 160, height: 80 });
+
+      renderCanvas();
+
+      expect(() => {
+        fireEvent.click(screen.getByRole("button", { name: /search nodes/i }));
+        fireEvent.change(screen.getByPlaceholderText(/search nodes by label/i), {
+          target: { value: "API" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "API Gateway" }));
+
+        fireEvent.click(screen.getByRole("button", { name: /search nodes/i }));
+        fireEvent.change(screen.getByPlaceholderText(/search nodes by label/i), {
+          target: { value: "API" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "API Gateway" }));
+      }).not.toThrow();
+
+      expect(setCenterMock).toHaveBeenCalledTimes(2);
     });
   });
 });

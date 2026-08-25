@@ -4,6 +4,7 @@ import { useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 
 import { Handle, NodeResizer, Position, type NodeProps } from "@xyflow/react"
 import { NodeColorToolbar } from "@/components/editor/node-color-toolbar"
 import { ShapeVisual } from "@/components/editor/shape-visual"
+import { useCanvasSearchHighlight } from "@/hooks/use-canvas-search-highlight"
 import { useUpdateCanvasNode } from "@/hooks/use-update-canvas-node"
 import { NODE_MIN_SIZE } from "@/lib/canvas-shapes"
 import { cn } from "@/lib/utils"
@@ -58,6 +59,18 @@ import { type CanvasNode as CanvasNodeType, type NodeColorPair } from "@/types/c
  * regardless of `type`, so a single handle per side already supports
  * "connect any handle to any other handle." See spec 16's Analyst Brief,
  * Open Questions #4.
+ *
+ * Spec 36 (Canvas Node Search) adds one more minimal, explicitly-permitted
+ * addition to this file: `useCanvasSearchHighlight()` is compared against
+ * this node's own `id`, and a highlight ring class is conditionally added to
+ * the same `group relative` wrapper `<div>` above via `cn(...)` — not a new
+ * element, and not applied inside `ShapeVisual` itself. This is the *only*
+ * change this spec makes here; drag/resize/edit/select/connection-handle
+ * behavior is otherwise untouched. See spec 36's Analyst Brief, Concrete
+ * deliverables and Open Questions #2 (visual treatment: a wider/offset
+ * `ring-brand` ring, deliberately distinct from `ShapeVisual`'s own 1px
+ * `border-brand` selected-state border, so a search-jump stays visually
+ * obvious even when the jumped-to node also happens to be selected).
  */
 const CONNECTION_HANDLES: ReadonlyArray<{ id: string; position: Position }> = [
   { id: "top", position: Position.Top },
@@ -69,6 +82,8 @@ const CONNECTION_HANDLES: ReadonlyArray<{ id: string; position: Position }> = [
 export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
   const [isEditing, setIsEditing] = useState(false)
   const updateNodeData = useUpdateCanvasNode()
+  const highlightedNodeId = useCanvasSearchHighlight()
+  const isSearchHighlighted = highlightedNodeId === id
 
   function handleDoubleClick(event: MouseEvent<HTMLDivElement>) {
     event.stopPropagation()
@@ -103,7 +118,12 @@ export function CanvasNode({ id, data, selected }: NodeProps<CanvasNodeType>) {
 
   return (
     <>
-      <div className="group relative h-full w-full">
+      <div
+        className={cn(
+          "group relative h-full w-full",
+          isSearchHighlighted && "rounded-xl ring-4 ring-brand ring-offset-2 ring-offset-base",
+        )}
+      >
         <ShapeVisual shape={data.shape} color={data.color} textColor={data.textColor} selected={selected}>
           {/*
             `nodrag`/`nopan` — React Flow's own convention for interactive

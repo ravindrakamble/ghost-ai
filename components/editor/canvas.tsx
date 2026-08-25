@@ -43,6 +43,7 @@ import { StarterTemplatesModal } from "@/components/editor/starter-templates-mod
 import type { CanvasTemplate } from "@/components/editor/starter-templates"
 import { CanvasEdgeUpdateContext, type UpdateCanvasEdgeData } from "@/hooks/use-update-canvas-edge"
 import { CanvasNodeUpdateContext, type UpdateCanvasNodeData } from "@/hooks/use-update-canvas-node"
+import { CanvasSearchHighlightContext } from "@/hooks/use-canvas-search-highlight"
 import { useAiChatFeed } from "@/hooks/use-ai-chat-feed"
 import { useAiStatusFeed } from "@/hooks/use-ai-status-feed"
 import { useCanvasAutosave, type CanvasSaveStatus } from "@/hooks/use-canvas-autosave"
@@ -105,6 +106,22 @@ const ZOOM_TRANSITION_DURATION_MS = 200
  * exported image's border.
  */
 const EXPORT_IMAGE_PADDING_PX = 48
+
+/**
+ * Zoom level `handleJumpToNode` (spec 36, Canvas Node Search) passes to
+ * `setCenter` — the diagram's authored 1:1 scale, the same reference scale
+ * `handleExportImage` above already treats as meaningful ("exports at the
+ * diagram's authored 1:1 scale... not whatever zoom the viewer happens to be
+ * at"). No exact number is pinned by the spec text itself — see spec 36's
+ * Analyst Brief, Open Questions #1.
+ */
+const SEARCH_JUMP_ZOOM = 1
+
+/**
+ * How long a search-jump's target-node highlight stays visible before
+ * clearing itself — spec 36's own literal "~1.5s."
+ */
+const SEARCH_HIGHLIGHT_DURATION_MS = 1500
 
 /**
  * Shallow runtime shape-check for `GET /api/projects/[projectId]/canvas`'s
@@ -492,6 +509,18 @@ function CanvasError() {
  * clear-then-add mechanism unchanged (spec 33's own explicit "no new import
  * mechanism" requirement); the modal's own "My Templates" section fetches a
  * saved template's content itself and calls the same `onImport` prop.
+ *
+ * Spec 36 (Canvas Node Search) adds `handleJumpToNode` and `highlightedNodeId`
+ * state (with a `useRef`-tracked clear timeout, see that handler's own
+ * docblock below) — both passed down: `nodes`/`handleJumpToNode` as two new
+ * `CanvasControlBar` props (which forwards them to `CanvasSearchPopover`),
+ * and `highlightedNodeId` via a new `CanvasSearchHighlightContext.Provider`
+ * nested alongside the existing `CanvasNodeUpdateContext`/
+ * `CanvasEdgeUpdateContext` providers, consumed by the leaf `CanvasNode`
+ * renderer. This state never leaves the room-bounded `CanvasFlow` subtree —
+ * no push-up to `WorkspaceShell`, since nothing outside the canvas needs to
+ * know about search/highlight state (unlike most recent specs' `on*Change`
+ * push-ups above). See spec 36's Analyst Brief, Concrete deliverables.
  */
 function CanvasFlow({
   projectId,
@@ -522,7 +551,7 @@ function CanvasFlow({
     nodes: { initial: [] },
     edges: { initial: [] },
   })
-  const { screenToFlowPosition, flowToScreenPosition, zoomIn, zoomOut, fitView } = useReactFlow()
+  const { screenToFlowPosition, flowToScreenPosition, zoomIn, zoomOut, fitView, setCenter } = useReactFlow()
   const undo = useUndo()
   const redo = useRedo()
   const canUndo = useCanUndo()
@@ -549,6 +578,23 @@ function CanvasFlow({
   const [isSaveTemplateDialogOpen, setIsSaveTemplateDialogOpen] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
   const [saveTemplateError, setSaveTemplateError] = useState<string | null>(null)
+
+  // Spec 36 (Canvas Node Search): the currently-highlighted (search-jumped-
+  // to) node's id, local/ephemeral only — never written to Liveblocks
+  // Storage or Presence. `highlightTimeoutRef` tracks the pending
+  // clear-back-to-null timeout so two rapid searches in a row clear the
+  // previous timeout first, rather than leaving a stale clear firing late or
+  // two nodes appearing highlighted at once.
+  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null)
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current)
+      }
+    }
+  }, [])
 
   /**
    * Spec 21 (Canvas Autosave): on mount, decide whether to load a
@@ -856,6 +902,42 @@ function CanvasFlow({
   }, [nodes, projectId])
 
   /**
+   * Jumps the viewport to a search-selected node (spec 36, Canvas Node
+   * Search) and briefly highlights it. `getNodesBounds([node])` — the exact
+   * same `@xyflow/react` utility `handleExportImage` above already imports
+   * and calls (there, on the full `nodes` array for the whole-diagram
+   * bounding box) — is called here with a single-element array to get that
+   * one node's own `{ x, y, width, height }` box, so a node with no
+   * `width`/`height` yet doesn't need its own hand-rolled fallback. `center`
+   * is that box's own center, passed to `setCenter` (the same `useReactFlow()`
+   * call already destructured above for `screenToFlowPosition`/`zoomIn`/
+   * `zoomOut`/`fitView`) with `SEARCH_JUMP_ZOOM` and the existing
+   * `ZOOM_TRANSITION_DURATION_MS` — reused as-is rather than inventing a
+   * second duration constant. See spec 36's Analyst Brief, Open Questions #1.
+   *
+   * Any previously-pending highlight-clear timeout is cleared first, so two
+   * rapid searches in a row never leave two nodes highlighted at once or a
+   * stale clear firing late and wiping out the newer highlight.
+   */
+  const handleJumpToNode = useCallback(
+    (node: CanvasNodeAlias) => {
+      const bounds = getNodesBounds([node])
+      const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+      setCenter(center.x, center.y, { zoom: SEARCH_JUMP_ZOOM, duration: ZOOM_TRANSITION_DURATION_MS })
+
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current)
+      }
+      setHighlightedNodeId(node.id)
+      highlightTimeoutRef.current = setTimeout(() => {
+        setHighlightedNodeId(null)
+        highlightTimeoutRef.current = null
+      }, SEARCH_HIGHLIGHT_DURATION_MS)
+    },
+    [setCenter],
+  )
+
+  /**
    * Saves the current canvas as a new named `CustomTemplate` (spec 33) —
    * `POST /api/templates` with this component's own live `nodes`/`edges`
    * (the same values `handleExportImage`/`onCanvasGraphChange` already
@@ -895,52 +977,56 @@ function CanvasFlow({
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
-        <div ref={canvasContainerRef} className="relative h-full w-full">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={CANVAS_NODE_TYPES}
-            edgeTypes={CANVAS_EDGE_TYPES}
-            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-            connectionMode={ConnectionMode.Loose}
-            onPaneMouseMove={handlePaneMouseMove}
-            onPaneMouseLeave={handlePaneMouseLeave}
-            fitView
-          >
-            <Background variant={BackgroundVariant.Dots} />
-          </ReactFlow>
-          <ShapePanel onDropShape={handleDropShape} />
-          <CanvasControlBar
-            onZoomIn={handleZoomIn}
-            onZoomOut={handleZoomOut}
-            onFitView={handleFitView}
-            onUndo={undo}
-            onRedo={redo}
-            canUndo={canUndo}
-            canRedo={canRedo}
-            onExportImage={handleExportImage}
-            isExportingImage={isExportingImage}
-            canExportImage={nodes.length > 0}
-            onOpenSaveTemplate={() => setIsSaveTemplateDialogOpen(true)}
-          />
-          <StarterTemplatesModal
-            open={isTemplatesModalOpen}
-            onOpenChange={setIsTemplatesModalOpen}
-            onImport={handleImportTemplate}
-          />
-          <SaveTemplateDialog
-            open={isSaveTemplateDialogOpen}
-            onOpenChange={setIsSaveTemplateDialogOpen}
-            onSave={handleSaveTemplate}
-            isSaving={isSavingTemplate}
-            error={saveTemplateError}
-          />
-          <PresenceAvatars />
-          <LiveCursors flowToScreenPosition={flowToScreenPosition} />
-        </div>
+        <CanvasSearchHighlightContext.Provider value={highlightedNodeId}>
+          <div ref={canvasContainerRef} className="relative h-full w-full">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={CANVAS_NODE_TYPES}
+              edgeTypes={CANVAS_EDGE_TYPES}
+              defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+              connectionMode={ConnectionMode.Loose}
+              onPaneMouseMove={handlePaneMouseMove}
+              onPaneMouseLeave={handlePaneMouseLeave}
+              fitView
+            >
+              <Background variant={BackgroundVariant.Dots} />
+            </ReactFlow>
+            <ShapePanel onDropShape={handleDropShape} />
+            <CanvasControlBar
+              onZoomIn={handleZoomIn}
+              onZoomOut={handleZoomOut}
+              onFitView={handleFitView}
+              onUndo={undo}
+              onRedo={redo}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onExportImage={handleExportImage}
+              isExportingImage={isExportingImage}
+              canExportImage={nodes.length > 0}
+              onOpenSaveTemplate={() => setIsSaveTemplateDialogOpen(true)}
+              nodes={nodes}
+              onJumpToNode={handleJumpToNode}
+            />
+            <StarterTemplatesModal
+              open={isTemplatesModalOpen}
+              onOpenChange={setIsTemplatesModalOpen}
+              onImport={handleImportTemplate}
+            />
+            <SaveTemplateDialog
+              open={isSaveTemplateDialogOpen}
+              onOpenChange={setIsSaveTemplateDialogOpen}
+              onSave={handleSaveTemplate}
+              isSaving={isSavingTemplate}
+              error={saveTemplateError}
+            />
+            <PresenceAvatars />
+            <LiveCursors flowToScreenPosition={flowToScreenPosition} />
+          </div>
+        </CanvasSearchHighlightContext.Provider>
       </CanvasEdgeUpdateContext.Provider>
     </CanvasNodeUpdateContext.Provider>
   )
