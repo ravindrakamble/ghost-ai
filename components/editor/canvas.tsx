@@ -37,6 +37,7 @@ import { CanvasEdge } from "@/components/editor/canvas-edge"
 import { CanvasNode } from "@/components/editor/canvas-node"
 import { LiveCursors } from "@/components/editor/live-cursors"
 import { PresenceAvatars } from "@/components/editor/presence-avatars"
+import { SaveTemplateDialog } from "@/components/editor/save-template-dialog"
 import { ShapePanel, type OnDropShape } from "@/components/editor/shape-panel"
 import { StarterTemplatesModal } from "@/components/editor/starter-templates-modal"
 import type { CanvasTemplate } from "@/components/editor/starter-templates"
@@ -475,6 +476,22 @@ function CanvasError() {
  * to `CanvasControlBar` as three new props alongside the existing
  * zoom/undo/redo ones, the same plain-prop convention spec 17 already
  * established for that component — no new context.
+ *
+ * Spec 33 (Custom Templates) adds "Save as template": `isSaveTemplateDialogOpen`
+ * state and `handleSaveTemplate(name, description)`, following the same
+ * "dialog rendered here, `CanvasControlBar` only gets a plain trigger prop"
+ * split spec 18 established for `StarterTemplatesModal`/`isTemplatesModalOpen`
+ * — see spec 33's Analyst Brief, Open Questions #3. `handleSaveTemplate`
+ * POSTs `{ name, description, nodes, edges }` (this component's own live
+ * `nodes`/`edges`, already destructured from `useLiveblocksFlow`) to
+ * `POST /api/templates`, tracked via local `isSavingTemplate`/
+ * `saveTemplateError` state passed down to `<SaveTemplateDialog>` as plain
+ * props (`ShareDialog`'s "mutation owned by parent, dialog presentational"
+ * convention). Does not touch `handleImportTemplate`/`StarterTemplatesModal`
+ * — importing a saved template still goes through that exact same
+ * clear-then-add mechanism unchanged (spec 33's own explicit "no new import
+ * mechanism" requirement); the modal's own "My Templates" section fetches a
+ * saved template's content itself and calls the same `onImport` prop.
  */
 function CanvasFlow({
   projectId,
@@ -525,6 +542,13 @@ function CanvasFlow({
    */
   const canvasContainerRef = useRef<HTMLDivElement>(null)
   const [isExportingImage, setIsExportingImage] = useState(false)
+
+  // Spec 33 (Custom Templates): "Save as template" dialog open/close state
+  // and in-flight/error state, owned here (not `CanvasControlBar`) — see
+  // this component's own docblock above.
+  const [isSaveTemplateDialogOpen, setIsSaveTemplateDialogOpen] = useState(false)
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+  const [saveTemplateError, setSaveTemplateError] = useState<string | null>(null)
 
   /**
    * Spec 21 (Canvas Autosave): on mount, decide whether to load a
@@ -831,6 +855,43 @@ function CanvasFlow({
     }
   }, [nodes, projectId])
 
+  /**
+   * Saves the current canvas as a new named `CustomTemplate` (spec 33) —
+   * `POST /api/templates` with this component's own live `nodes`/`edges`
+   * (the same values `handleExportImage`/`onCanvasGraphChange` already
+   * read). Returns whether the save succeeded so `SaveTemplateDialog` (a
+   * presentational component, per `ShareDialog`'s convention) knows whether
+   * to close itself — the same `Promise<boolean>` return shape
+   * `useCollaborators()`'s `invite`/`remove` already use.
+   */
+  const handleSaveTemplate = useCallback(
+    async (name: string, description: string): Promise<boolean> => {
+      setIsSavingTemplate(true)
+      setSaveTemplateError(null)
+      try {
+        const response = await fetch("/api/templates", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name, description: description || undefined, nodes, edges }),
+        })
+
+        if (!response.ok) {
+          const body: { error?: string } = await response.json().catch(() => ({}))
+          setSaveTemplateError(body.error ?? "Failed to save the template.")
+          return false
+        }
+
+        return true
+      } catch {
+        setSaveTemplateError("Failed to save the template. Please check your connection and try again.")
+        return false
+      } finally {
+        setIsSavingTemplate(false)
+      }
+    },
+    [nodes, edges],
+  )
+
   return (
     <CanvasNodeUpdateContext.Provider value={updateNodeData}>
       <CanvasEdgeUpdateContext.Provider value={updateEdgeData}>
@@ -863,11 +924,19 @@ function CanvasFlow({
             onExportImage={handleExportImage}
             isExportingImage={isExportingImage}
             canExportImage={nodes.length > 0}
+            onOpenSaveTemplate={() => setIsSaveTemplateDialogOpen(true)}
           />
           <StarterTemplatesModal
             open={isTemplatesModalOpen}
             onOpenChange={setIsTemplatesModalOpen}
             onImport={handleImportTemplate}
+          />
+          <SaveTemplateDialog
+            open={isSaveTemplateDialogOpen}
+            onOpenChange={setIsSaveTemplateDialogOpen}
+            onSave={handleSaveTemplate}
+            isSaving={isSavingTemplate}
+            error={saveTemplateError}
           />
           <PresenceAvatars />
           <LiveCursors flowToScreenPosition={flowToScreenPosition} />

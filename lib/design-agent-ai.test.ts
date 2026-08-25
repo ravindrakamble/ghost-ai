@@ -92,7 +92,7 @@ describe("interpretDesignPrompt", () => {
   })
 
   it("instantiates the Google provider once (lazily, cached) and calls generateObject with the model/schema/prompt", async () => {
-    generateObjectMock.mockResolvedValue({ object: { actions: [] } })
+    generateObjectMock.mockResolvedValue({ object: { actions: [], summary: "No changes made." } })
 
     await interpretDesignPrompt({ prompt: "design a checkout flow", currentGraph: EMPTY_GRAPH })
     await interpretDesignPrompt({ prompt: "add a database", currentGraph: EMPTY_GRAPH })
@@ -107,11 +107,39 @@ describe("interpretDesignPrompt", () => {
     expect(typeof call.schema.validate).toBe("function")
   })
 
-  it("returns an empty action list when Gemini produces no actions", async () => {
-    mockGenerateObjectWith({ actions: [] })
+  it("includes the summary instruction (asking for a grounded summary and a critique-mode instruction) in the prompt text", async () => {
+    generateObjectMock.mockResolvedValue({ object: { actions: [], summary: "No changes made." } })
+
+    await interpretDesignPrompt({ prompt: "review this design", currentGraph: EMPTY_GRAPH })
+
+    const call = generateObjectMock.mock.calls[0][0] as MockGenerateObjectArgs
+    expect(call.prompt).toMatch(/summary/i)
+    expect(call.prompt).toMatch(/critique/i)
+  })
+
+  it("returns an empty action list plus the model's summary when Gemini produces no actions", async () => {
+    mockGenerateObjectWith({ actions: [], summary: "No changes were needed." })
 
     const result = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
-    expect(result).toEqual([])
+    expect(result).toEqual({ actions: [], summary: "No changes were needed." })
+  })
+
+  it("rejects a response missing the summary field", async () => {
+    mockGenerateObjectWith({ actions: [] })
+
+    await expect(interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })).rejects.toThrow()
+  })
+
+  it("rejects a response with an empty-string summary", async () => {
+    mockGenerateObjectWith({ actions: [], summary: "" })
+
+    await expect(interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })).rejects.toThrow()
+  })
+
+  it("rejects a response with a non-string summary", async () => {
+    mockGenerateObjectWith({ actions: [], summary: 42 })
+
+    await expect(interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })).rejects.toThrow()
   })
 
   it("propagates a real validation failure (a nearly-empty raw action) as a thrown error", async () => {
@@ -137,10 +165,13 @@ describe("interpretDesignPrompt", () => {
   it("normalizes a valid addNode action: real generated ID, SHAPE_DEFAULT_SIZES size, and the exact NODE_COLORS pair for the chosen color name", async () => {
     mockGenerateObjectWith({
       actions: [{ kind: "addNode", nodeId: "local-1", shape: "circle", colorName: "blue", label: "Cache", x: 50, y: 60 }],
+      summary: "Added a cache node.",
     })
 
-    const [action] = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
+    const { actions, summary } = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
+    const [action] = actions
 
+    expect(summary).toBe("Added a cache node.")
     expect(action).toMatchObject({
       kind: "addNode",
       shape: "circle",
@@ -163,12 +194,13 @@ describe("interpretDesignPrompt", () => {
         { kind: "addNode", nodeId: "local-b", shape: "rectangle", colorName: "neutral", label: "B", x: 300, y: 0 },
         { kind: "addEdge", edgeId: "local-edge", sourceNodeId: "local-a", targetNodeId: "local-b", label: "calls" },
       ],
+      summary: "Connected A to B.",
     })
 
-    const actions = (await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })) as Array<
+    const { actions } = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
+    const [nodeA, nodeB, edge] = actions as Array<
       { kind: string; nodeId?: string; sourceNodeId?: string; targetNodeId?: string; label?: string }
     >
-    const [nodeA, nodeB, edge] = actions
 
     expect(edge.sourceNodeId).toBe(nodeA.nodeId)
     expect(edge.targetNodeId).toBe(nodeB.nodeId)
@@ -178,9 +210,10 @@ describe("interpretDesignPrompt", () => {
   it("drops an addEdge action referencing a node ID that doesn't exist in the current graph and wasn't added this batch", async () => {
     mockGenerateObjectWith({
       actions: [{ kind: "addEdge", edgeId: "e1", sourceNodeId: "ghost-node", targetNodeId: "also-ghost" }],
+      summary: "No valid edge to add.",
     })
 
-    const actions = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
+    const { actions } = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
     expect(actions).toEqual([])
   })
 
@@ -196,9 +229,10 @@ describe("interpretDesignPrompt", () => {
         { kind: "deleteEdge", edgeId: "existing-edge" },
         { kind: "deleteNode", nodeId: "existing-node" },
       ],
+      summary: "Moved, resized, and then removed the existing node and edge.",
     })
 
-    const actions = await interpretDesignPrompt({ prompt: "p", currentGraph })
+    const { actions } = await interpretDesignPrompt({ prompt: "p", currentGraph })
 
     expect(actions).toEqual([
       { kind: "moveNode", nodeId: "existing-node", x: 10, y: 20 },
@@ -215,9 +249,10 @@ describe("interpretDesignPrompt", () => {
         { kind: "resizeNode", nodeId: "ghost", width: 100, height: 100 },
         { kind: "deleteNode", nodeId: "ghost" },
       ],
+      summary: "No valid targets found.",
     })
 
-    const actions = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
+    const { actions } = await interpretDesignPrompt({ prompt: "p", currentGraph: EMPTY_GRAPH })
     expect(actions).toEqual([])
   })
 
@@ -226,9 +261,13 @@ describe("interpretDesignPrompt", () => {
       nodes: [{ id: "n1", label: "N1", shape: "rectangle", x: 0, y: 0 }],
       edges: [],
     }
-    mockGenerateObjectWith({ actions: [{ kind: "resizeNode", nodeId: "n1", width: 5, height: 5 }] })
+    mockGenerateObjectWith({
+      actions: [{ kind: "resizeNode", nodeId: "n1", width: 5, height: 5 }],
+      summary: "Resized the node.",
+    })
 
-    const [action] = await interpretDesignPrompt({ prompt: "p", currentGraph })
+    const { actions } = await interpretDesignPrompt({ prompt: "p", currentGraph })
+    const [action] = actions
     expect(action).toEqual({ kind: "resizeNode", nodeId: "n1", width: 40, height: 40 })
   })
 
@@ -242,9 +281,10 @@ describe("interpretDesignPrompt", () => {
         { kind: "updateNodeData", nodeId: "n1", label: "Renamed" },
         { kind: "updateNodeData", nodeId: "n1", colorName: "red" },
       ],
+      summary: "Updated the node's label and color.",
     })
 
-    const actions = await interpretDesignPrompt({ prompt: "p", currentGraph })
+    const { actions } = await interpretDesignPrompt({ prompt: "p", currentGraph })
 
     expect(actions[0]).toEqual({ kind: "updateNodeData", nodeId: "n1", label: "Renamed" })
     expect(actions[1]).toEqual({ kind: "updateNodeData", nodeId: "n1", color: "#3C1618", textColor: "#FF6166" })

@@ -100,3 +100,29 @@ model ProjectSpec {
 
   @@index([projectId, createdAt])
 }
+
+/// A user's own saved canvas template (spec 33), lifting spec 18's "no
+/// template saving" scope limit. Deliberately has no `projectId`/`Project`
+/// relation — a saved template belongs to the *user*, reusable across any of
+/// their projects, not scoped to the project it was saved from (spec 33's
+/// Analyst Brief, Concrete deliverables). `ownerId` is a plain Clerk user ID
+/// string (the same convention `Project.ownerId` already uses), not a
+/// foreign key — this app has no local `User` table to reference. The
+/// node/edge JSON itself lives in Vercel Blob at
+/// `templates/{ownerId}/{templateId}.json` (`lib/template-blob.ts`) — this
+/// model holds only the reference (`filePath`), never the content, per
+/// `code-standards.md`'s "Do not store large generated content directly in
+/// the database." `@@index([ownerId, createdAt])` mirrors `ProjectSpec`'s own
+/// `@@index([projectId, createdAt])` — the same "list rows scoped to X,
+/// sorted by createdAt" query shape `GET /api/templates` uses (spec 33's
+/// Analyst Brief, Open Questions #1).
+model CustomTemplate {
+  id          String   @id @default(cuid())
+  ownerId     String
+  name        String
+  description String?
+  filePath    String
+  createdAt   DateTime @default(now())
+
+  @@index([ownerId, createdAt])
+}

@@ -1,6 +1,6 @@
 "use client"
 
-import { Download, Loader2, Maximize, Redo2, Undo2, ZoomIn, ZoomOut } from "lucide-react"
+import { Download, Loader2, Maximize, Redo2, Save, Undo2, ZoomIn, ZoomOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export interface CanvasControlBarProps {
@@ -24,6 +24,16 @@ export interface CanvasControlBarProps {
   isExportingImage: boolean
   /** False when the canvas has no nodes to export — disables/dims the button the same way `canUndo`/`canRedo` do, rather than letting a click silently no-op. */
   canExportImage: boolean
+  /**
+   * Opens the "Save as template" dialog (spec 33). A plain trigger only —
+   * `CanvasControlBar` stays props-only/no-local-complex-state, the same
+   * convention every other action here already follows; the dialog's own
+   * JSX/state/`POST /api/templates` call live in `CanvasFlow`
+   * (`components/editor/canvas.tsx`), which already holds the live
+   * `nodes`/`edges` the save flow needs. See spec 33's Analyst Brief, Open
+   * Questions #3.
+   */
+  onOpenSaveTemplate: () => void
 }
 
 /**
@@ -57,6 +67,11 @@ export interface CanvasControlBarProps {
  * `canExportImage` disables/dims it exactly like `canUndo`/`canRedo` do for
  * their own buttons, rather than letting a click on an empty canvas no-op
  * silently.
+ *
+ * "Save as template" (spec 33) adds a fourth button to the same Export
+ * group, after another copy of the same divider — a plain `onOpenSaveTemplate`
+ * trigger, no busy/disabled state of its own here (the save dialog owns its
+ * own in-flight state once open).
  */
 export function CanvasControlBar({
   onZoomIn,
@@ -69,6 +84,7 @@ export function CanvasControlBar({
   onExportImage,
   isExportingImage,
   canExportImage,
+  onOpenSaveTemplate,
 }: CanvasControlBarProps) {
   return (
     <div className="pointer-events-none absolute bottom-24 left-6 z-10">
@@ -119,6 +135,16 @@ export function CanvasControlBar({
           aria-label="Export as image"
         >
           {isExportingImage ? <Loader2 className="animate-spin" /> : <Download />}
+        </Button>
+        <div aria-hidden className="mx-1 h-5 w-px bg-surface-border" />
+        <Button
+          variant="ghost"
+          size="icon-lg"
+          onClick={onOpenSaveTemplate}
+          title="Save as template"
+          aria-label="Save as template"
+        >
+          <Save />
         </Button>
       </div>
     </div>
