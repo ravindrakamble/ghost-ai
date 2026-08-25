@@ -133,3 +133,110 @@ Commands run, all green:
 - No live smoke test against a real Gemini key / Trigger.dev worker was performed in this environment (no running dev server / real Trigger.dev worker here) — recommended as a human smoke test: click "Generate Spec" on a real project, confirm both a `.md` and `.tf` file are downloadable afterward, and confirm a legacy (pre-migration) spec's Terraform button renders disabled.
 - No `.tf` syntax validation of any kind is performed anywhere — explicit Scope Limit, honored as specified (this is a starting skeleton, not apply-ready IaC).
 - Consistent with the brief's own Out-of-scope callouts: no CloudFormation/Pulumi/CDK support, no new AI provider abstraction, no separate "Generate IaC" trigger/button/route, no Terraform preview/render in `spec-preview-modal.tsx` (confirmed zero-line diff), no backfill of `iacFilePath` for pre-existing rows, and `trigger/design-agent.ts`/`lib/design-agent-ai.ts` both have a zero-line diff (confirmed via `git diff --stat`).
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | PASS — clean, no errors |
+| `npx eslint .` | PASS — 0 errors/warnings in this diff's files. Full-repo run shows 1 pre-existing error (`components/editor/editor-shell.tsx`, `react-hooks/set-state-in-effect`) and 1 pre-existing warning (`.agents/skills/.../__root.tsx`); independently confirmed via `git diff main...spec/35-iac-export -- <file>` that neither file appears in this branch's diff — both are pre-existing, unrelated to this spec |
+| `npx vitest run --no-file-parallelism` | PASS — 818/818 tests, 80/80 files |
+| `npx next build` | PASS — succeeds; `/api/projects/[projectId]/specs/[specId]/download-iac` appears as a new dynamic route in the output |
+| `npx prisma migrate status` | PASS — "Database schema is up to date!", 7 migrations found |
+
+All Dev Notes claims about the mechanical gate were independently reproduced and confirmed accurate.
+
+### Acceptance criteria checklist
+
+1. **PASS** — `prisma/schema.prisma` has `iacFilePath String?` (nullable) on `ProjectSpec`; migration `20260825054109_add_project_spec_iac_file_path/migration.sql` is exactly `ALTER TABLE "ProjectSpec" ADD COLUMN "iacFilePath" TEXT;` — additive, no `NOT NULL`, no default, no index.
+2. **PASS** — `trigger/generate-spec.ts#persistGeneratedSpec` uploads both Markdown and Terraform under the same placeholder `spec.id`, then a single `prisma.projectSpec.update` call sets `{ filePath, iacFilePath }` together. Verified in code and in `trigger/generate-spec.test.ts`'s persistence assertions.
+3. **PASS** — `runGenerateSpec` keeps both generation calls and `persistGeneratedSpec` inside one `try` block; a Terraform-generation or -upload failure hits the same catch, deletes the placeholder row, and rethrows. Verified against dedicated tests: "never persists anything when Terraform generation fails", "deletes the placeholder row and rethrows when the Terraform Blob upload fails", "deletes the placeholder row and rethrows when the combined filePath+iacFilePath update fails" — all present and passing.
+4. **PASS** — `generateIacSkeleton` is called only after `generateSpecMarkdown` resolves (sequential `await`s in `runGenerateSpec`); confirmed by the explicit call-order test and the "never persists ... never calls generateIacSkeleton" Markdown-failure test.
+5. **PASS** — `download-iac/route.ts` uses the same `getProjectAccess` gate/401-404-403 precedence as `download/route.ts`; returns `Content-Type: text/plain; charset=utf-8` and `Content-Disposition: attachment; filename="spec-{specId}.tf"`; returns the fetched Terraform text for a valid spec (verified by test + code read).
+6. **PASS** — `iacFilePath === null` short-circuits to a 404 ("IaC content not found") before ever calling `fetchSpecIac`, distinct from the 200/500 paths. Verified in code and in the dedicated null-path test.
+7. **PASS** — `GET /api/projects/[projectId]/specs` selects `iacFilePath` only to derive `hasIac: spec.iacFilePath !== null` in the response map; the raw `iacFilePath` value is never included in the returned object.
+8. **PASS** — `specs-tab.tsx` renders a real `<a href download>` Terraform link when `spec.hasIac` is `true`, and a visibly-present, natively `disabled` shadcn `Button` (same icon/label) when `false`. Verified by the two new tests in `specs-tab.test.tsx`.
+9. **PASS** — the pre-existing `SPECS` fixture in `specs-tab.test.tsx` (no `hasIac` field) is untouched, and the pre-existing "exactly 2 download links" assertion (`downloadLinks.toHaveLength(2)`) still passes unmodified, since the disabled Terraform control renders as a `<button>`, not matched by `getByRole("link")`. `trigger/generate-spec.test.ts`'s Markdown-only assertions and `download/route.test.ts` (unmodified per `git diff --stat`) both continue to pass.
+10. **PASS** — `generateIacSkeleton` calls the same `getGoogleProvider()` function `generateSpecMarkdown` uses; a dedicated test (`"reuses the same cached, lazily-instantiated Google provider as generateSpecMarkdown..."`) asserts `createGoogleGenerativeAIMock` is called exactly once across both functions.
+11. **PASS** — no new trigger task, button, or route exists for IaC generation independent of "Generate Spec"; confirmed by reading `specs-tab.tsx` (single `handleGenerateSpec` handler) and the full diff stat.
+12. **PASS** — `spec-preview-modal.tsx` has a zero-line diff (`git diff main...spec/35-iac-export -- components/editor/spec-preview-modal.tsx` produces no output); only its test fixture file was touched for a required-field type update.
+13. **PASS** — `trigger/design-agent.ts` and `lib/design-agent-ai.ts` both have a zero-line diff, confirmed via `git diff --stat`.
+14. **PASS** — `npx tsc --noEmit`, `npx eslint`, `npx vitest run --no-file-parallelism`, and `npx next build` all pass, independently reproduced above.
+
+### Architecture invariants
+
+- No long-running AI work in a request handler — both Gemini calls stay inside `trigger/generate-spec.ts`'s background task; `download-iac/route.ts` only reads already-persisted content. OK.
+- Metadata (`iacFilePath`, a URL) vs. blob storage (Terraform content itself) kept separate — the Prisma column stores only the Blob URL, never the `.tf` content. OK.
+- Auth/ownership enforced at every mutation boundary — `download-iac` reuses the same `getProjectAccess` gate as every other project route; no new mutation route was added by this spec. OK.
+- No violation found.
+
+### Standards compliance spot-check
+
+- No `any` introduced in non-test diff lines (checked via `grep -nE '\bany\b'` across the diff, excluding test files — only a false-positive match on the English word "any" in a test name and a prompt string).
+- No raw Tailwind color classes (`zinc-`, `slate-`) or hex literals introduced in the diff (`grep` came back empty).
+- `components/ui/*` untouched — not present in the diff stat.
+- New `download-iac/route.ts` follows the thin-route/shared-module convention (`fetchSpecIac` lives in `lib/spec-blob.ts`).
+
+### Error handling
+
+- Missing `iacFilePath` (legacy spec): 404, not 500/empty-200 — verified.
+- Missing/expired Blob content: 404 via `fetchSpecIac`'s `null` return — verified.
+- Genuine upstream Blob failure: 500, not masked as 404 — verified.
+- Unauthenticated/forbidden/project-not-found: 401/403/404 via the shared `getProjectAccess` gate, same precedence as the Markdown route — verified.
+- Missing `GEMINI_API_KEY`: `generateIacSkeleton` throws a handled, legible error before calling the provider — verified by test.
+- Terraform generation/upload failure mid-run: whole run fails, placeholder row cleaned up, no partial `filePath`-only row — verified by test.
+
+### Housekeeping
+
+- `context/progress-tracker.md` updated: Phase 34 entry text corrected (link to run-stop note removed since the run continued), a new Phase 35 "In Progress" summary entry added, "Current Goal" updated, and a detailed "In Progress" bullet list added — accurately reflects what was built and correctly flags spec 35 as not yet QA'd/PO-reviewed. No premature "Completed" claim.
+
+### Issues found
+
+None.
+
+**QA passed — ready for Product Owner review.**
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent re-verification (not trusting Dev/QA claims at face value)
+
+Read `context/project-overview.md`, the full spec-status file (Analyst Brief, Dev Notes, QA Report), the raw spec at `context/feature-specs/35-iac-export.md`, and `context/progress-tracker.md`. Then independently re-derived the diff rather than accepting Dev Notes' file list:
+
+- `git diff --stat main...spec/35-iac-export` — 19 files changed, matches Dev Notes' file list exactly (no undisclosed file touched).
+- `git diff main...spec/35-iac-export -- trigger/design-agent.ts lib/design-agent-ai.ts components/editor/spec-preview-modal.tsx` — **empty output**. All three files genuinely have a zero-line diff, confirming acceptance criteria 12/13 directly rather than trusting the claim.
+- `prisma/schema.prisma` diff — `iacFilePath String?` added as the only schema change, nullable, no default, no index. The migration file (`20260825054109_add_project_spec_iac_file_path/migration.sql`) is exactly `ALTER TABLE "ProjectSpec" ADD COLUMN "iacFilePath" TEXT;` — additive-only, no `NOT NULL`, no default, cannot fail or misrepresent any pre-existing `ProjectSpec` row. Every row created before this migration reads `iacFilePath: null` with no backfill attempted or needed.
+- `download-iac/route.ts` read in full — same `getProjectAccess` gate and 401/404/403 precedence as the Markdown download route; explicitly short-circuits to a 404 ("IaC content not found") when `iacFilePath === null`, before ever attempting a Blob fetch — never a 500 or empty-200 for a legacy spec.
+- `trigger/generate-spec.ts` diff read in full — `persistGeneratedSpec` creates one placeholder row, uploads Markdown then Terraform under the same `spec.id`, and sets `{ filePath, iacFilePath }` in a single combined `update` call. The `catch` block deletes the placeholder row entirely (best-effort) on any failure in that span and rethrows — confirmed there is no code path that can leave a row with `filePath` set and `iacFilePath` missing, or vice versa. `runGenerateSpec` calls `generateIacSkeleton` only after `generateSpecMarkdown` resolves, both inside the same `try` block — a Terraform failure fails the whole run through the exact same error/cleanup path a Markdown failure already used.
+- `lib/generate-spec-ai.ts` / `lib/spec-blob.ts` diffs read in full — `generateIacSkeleton` calls the same `getGoogleProvider()`/`GEMINI_MODEL_ID` as `generateSpecMarkdown` (no second provider instance), same `maxOutputTokens: 8192`, no retry logic. `uploadSpecIac`/`fetchSpecIac`/`iacBlobPathname` are structurally parallel to, not merged into, the existing Markdown functions — spec 28's shipped code is untouched.
+- `app/api/projects/[projectId]/specs/route.ts` diff — `hasIac: spec.iacFilePath !== null` added to the response map; the raw `iacFilePath` value is never included, matching this route's existing "never a raw Blob URL in a response body" convention for `filePath`.
+- `components/editor/specs-tab.tsx` diff — a real `<a href download>` Terraform link renders when `spec.hasIac` is true; a visibly-present, natively `disabled` shadcn `Button` (not an omitted control, not a live 404-prone link) renders when false, so a legacy spec's row communicates *why* Terraform isn't available.
+
+### Scope fit against `project-overview.md`
+
+- **Out of Scope wall**: touches none of it. No billing/subscription, no new permission tier, no versioned spec history, no production object-storage migration, no mobile app. This is a second Blob-stored artifact on the same `ProjectSpec` row using the identical private-Blob-plus-Prisma-metadata pattern spec 28 already established — not a new storage architecture.
+- **In Scope fit**: sits squarely inside the already-in-scope "AI-powered Markdown spec generation from the canvas graph" / "Persistent storage for project metadata and generated artifacts" / "Spec download" lines — this is the same generation-and-download pipeline extended to a second artifact type, not a new feature surface with its own entry point. There is no new trigger task, no new "Generate IaC" button, and no independent way to invoke Terraform generation outside the existing "Generate Spec" action — verified directly in `specs-tab.tsx` (single `handleGenerateSpec` handler, unchanged) and the full diff stat (no new trigger file).
+- **Success Criteria**: doesn't literally strengthen Success Criterion 5 ("graph -> persisted Markdown spec") since the Markdown path is byte-for-byte unaffected (confirmed via the untouched `download/route.ts`, unmodified per `git diff --stat`, and Dev/QA's shared claim that the pre-existing Markdown test suites pass unmodified in behavior). It does support Success Criterion 6 ("Project metadata and generated artifacts are stored in the correct layers") — a second generated-artifact class (Terraform text) is stored using the exact same Blob-URL-in-Postgres, never-raw-URL-in-response discipline the Markdown artifact already uses, reinforcing rather than diluting that criterion's intent. Consistent with the precedent set in spec 34's own Product Owner review (public share link also didn't map to a numbered Success Criterion directly and was accepted as legitimate additive product surface rather than disqualified) — the same reasoning applies here: a narrowly-scoped, opt-in-by-nature (rides on an already-existing action), non-breaking addition to an already-in-scope feature area.
+
+### Nullable migration / `hasIac` gating — legacy-row safety
+
+Confirmed directly (not just via Dev/QA's description) that the migration cannot break any existing `ProjectSpec` row: `iacFilePath` is nullable with no default and no `NOT NULL`, so every pre-migration row silently reads `null` with zero data-loss risk or migration-failure risk. `hasIac` is derived purely from that nullability at the list route, and both the UI and the download route treat `null`/`false` as "not available" (disabled control, 404 not 500/empty-200) rather than a broken or ambiguous state. This is the same nullable-first-then-additive-migration discipline used in spec 33/34, applied correctly here.
+
+### Rough edges — acceptable at this stage
+
+- No live smoke test against a real Gemini key / Trigger.dev worker (disclosed by Dev, confirmed reasonable for this environment) — recommended, not blocking, per `ai-workflow-rules.md`'s incremental philosophy.
+- No `.tf` syntax validation — explicit Scope Limit in the raw spec, correctly honored, not a gap.
+- `GenerateSpecResult.terraform` and the new intermediate status message are both currently inert (no frontend consumer reads `realtimeRun.output` or the status metadata for this task) — flagged transparently in both the raw spec's Open Questions and Dev Notes, structurally symmetric with the existing `markdown` field, and does not block anything a later spec would need to build on.
+
+None of the above would block a later spec from building on this one correctly — the storage/metadata contract (`iacFilePath`, `hasIac`, `download-iac`) is complete and self-consistent as shipped.
+
+### `progress-tracker.md` accuracy
+
+QA's Housekeeping section correctly notes the tracker was left at "In Progress" (Dev complete, awaiting QA) with no premature "Completed" claim — accurate as of the QA handoff. Updating it now to move Phase 35 to Completed, reflecting QA PASS and this Product Owner PASS, and advancing "Current Goal" to spec 36. A PR has not been opened as of this review — opening it is a separate step per this task's explicit instructions, so the tracker entry notes it as pending rather than fabricating a PR link.
+
+**Recommendation: PASS — ready for human review.** This is a legitimate, narrowly-scoped, additive extension of the existing generate-spec pipeline. It does not cross any Out of Scope boundary, reuses every existing pattern (lazy Gemini provider, Blob upload/fetch, placeholder-create-then-upload-then-update persistence, access-gated download route) rather than inventing new ones, and correctly protects every pre-existing `ProjectSpec` row via a nullable, additive-only migration with consistent `null`-means-unavailable handling end to end (schema -> persistence -> list route -> UI -> download route).
