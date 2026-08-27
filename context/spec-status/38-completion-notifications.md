@@ -117,3 +117,110 @@ Commands run, all green:
 - The optional `options?: { flashText?: string }` second parameter on `notifyCompletion` is a minimal, additive deviation from the raw spec's illustrative single-argument phrasing, adopted specifically to fulfill Open Questions #3's own explicit (not "minor/optional," unlike #5) recommendation that success/failure flash text differ per call site — flagged here for QA/PO visibility in case a stricter reading of "exposes a single `notifyCompletion(message: string)` function" is preferred; reverting to a single shared flash string for both outcomes would be a one-line change (drop the `options` parameter and its two call-site arguments) if desired.
 
 Implementation ready for QA at `context/spec-status/38-completion-notifications.md`.
+
+## QA Report
+
+**Overall verdict: PASS**
+
+### Mechanical gate
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | PASS -- clean, no errors |
+| `npx eslint .` | PASS -- 0 errors/warnings in this diff's files (`hooks/use-completion-notification.ts`, `hooks/use-completion-notification.test.ts`, `components/editor/ai-architect-tab.tsx`, `components/editor/specs-tab.tsx`). Full-repo run shows the same 1 pre-existing error (`components/editor/editor-shell.tsx`, react-hooks/set-state-in-effect) and 1 pre-existing warning (.agents/skills/.../__root.tsx) already documented by specs 35-37's own QA passes -- confirmed both files have a zero-line diff on this branch, so the pre-existing error is unrelated to this feature |
+| `npx vitest run --no-file-parallelism` | PASS -- 872/872 tests, 84/84 files (matches Dev Notes claim exactly, up from 858/83 at the spec-37 branch point) |
+| `npx next build` | PASS -- succeeds; route list unchanged from spec 37 (no new app/api route or page) |
+
+All Dev Notes claims about the mechanical gate were independently reproduced and confirmed accurate.
+
+### Acceptance criteria checklist
+
+1. PASS -- use-completion-notification.ts#useCompletionNotification() returns { notifyCompletion, requestPermissionOnSubmit }; notifyCompletion(message, options?) is fully callable with just message, satisfying the literal "includes a notifyCompletion(message: string) function" wording.
+2. PASS -- notifyCompletion returns immediately (if visibilityState is not "hidden", return) while visible; verified in code and by the hook's own unit test ("is a no-op while the tab is visible, even with permission already granted").
+3. PASS -- hidden plus Notification.permission === "granted" constructs a Notification with title "Ghost AI" and body message, returning before touching document.title; test-covered.
+4. PASS -- hidden without granted permission (default, denied, or API unavailable) falls back to a setInterval-driven title flash alternating the real title with a status string, cleared and title restored on the next visibilitychange to visible; all four sub-cases are independently test-covered.
+5. PASS -- requestPermissionOnSubmit() is called as the literal first statement in submitDesignRequest (ai-architect-tab.tsx, before the try block) and handleGenerateSpec (specs-tab.tsx, before setIsSubmittingRun(true)); grepped the full diff -- Notification.requestPermission is invoked from exactly one place, itself gated on the tab being visible. No mount-time effect calls it anywhere in the diff.
+6. PASS -- gated on Notification.permission === "default"; once explicitly granted or denied, the browser's own persisted state prevents a repeat prompt with no extra bookkeeping needed. Both branches test-covered.
+7. PASS -- the run-settled effect in ai-architect-tab.tsx passes the exact same resolveSuccessMessage/buildDesignAgentFailureMessage string to both pushAgentMessage and notifyCompletion (verified by reading the effect body directly -- one local const, used twice, no divergent text).
+8. PASS -- specs-tab.tsx's completion effect calls notifyCompletion with SPEC_GENERATION_SUCCESS_MESSAGE on success and with the same failureMessage value now also passed to setGenerateError on failure (the effect was refactored to compute it once, read by both call sites -- confirmed this does not reintroduce react-hooks/set-state-in-effect, since setGenerateError is still called unconditionally after branching resolves to a plain value).
+9. PASS -- the diff on ai-architect-tab.tsx and specs-tab.tsx shows only additive lines (one requestPermissionOnSubmit call, one notifyCompletion call per branch, one hook destructure, updated dependency arrays) -- the isGenerating status line/spinner, the isBusy-driven disabled/spinner treatment, the "Generate Spec" busy button, and generateError's inline text are all byte-for-byte unchanged.
+10. PASS -- grepped the full diff for fetch(, app/api, and Trigger.dev imports in use-completion-notification.ts: none found. No new route appears in the next build route list. No state persisted beyond two refs scoped to the hook's own render lifetime -- no history/inbox of any kind.
+11. PASS -- all four mechanical gate commands reproduced independently above, all green, all counts matching Dev Notes claims exactly.
+
+### Architecture invariants
+
+- No long-running AI work in a request handler -- no request handler is touched by this diff at all (pure client-side browser-API hook). OK.
+- Metadata vs. blob storage kept separate -- not applicable; no persistence of any kind is added by this feature. OK.
+- Auth/ownership enforced at every mutation boundary -- not applicable; this feature adds no new mutation/API surface. OK.
+- Client components used only where browser interactivity or real-time state requires them -- use-completion-notification.ts is correctly marked "use client"; it is inherently browser-API-dependent (Notification, document.title, visibilitychange). OK.
+- Canvas schema consistency between user-created content and imported templates -- untouched; this feature has no relationship to canvas node/edge data. OK.
+- No violation found.
+
+### Standards compliance spot-check
+
+- No raw Tailwind grayscale (zinc-/slate-/gray-/neutral-) or hex colors found in any new/changed file -- grepped all four touched/new files; zero matches (this feature has no rendered UI of its own -- no new JSX/styling surface).
+- No "any" type in any new/changed line -- grepped all four files above; zero matches. The MockNotification class in the test file is locally and explicitly typed.
+- components/ui/* -- confirmed absent from the diff.
+- Hooks convention -- use-completion-notification.ts correctly lives in the top-level hooks/ folder per architecture-context.md's Hooks Convention, matching this repo's existing hooks/use-*.ts client-hook pattern.
+
+### Error handling
+
+- Notification API unavailable in the current browser: both notifyCompletion and requestPermissionOnSubmit feature-detect via typeof Notification before touching the global -- handled and test-covered.
+- Permission denied: falls back to the title flash rather than throwing or silently doing nothing -- handled and test-covered.
+- Two completions arriving in quick succession on the same hook instance: a prior flash is cleared before a new one starts, so intervals never stack -- handled and test-covered.
+- Unmount mid-flash: cleanup restores the real title rather than leaving it stuck mid-flash -- handled and test-covered.
+- All acceptance-criteria-relevant failure modes are handled and test-covered at the unit level.
+
+One non-blocking edge case, not covered by any acceptance criterion, worth flagging for awareness:
+
+- [Bug to Dev, non-blocking] AiArchitectTab (kept mounted at all times via its TabsContent's keepMounted prop) and SpecsTab each call useCompletionNotification() independently, so they hold two entirely separate original-title/flash-interval ref pairs. Nothing in the current design or spec-generation flows prevents both a design-agent run and a spec-generation run from being in flight at the same time -- they share no busy-state gate across tabs, and the existing combined-runs-per-window rate limit does not preclude two concurrent in-flight runs. If both settle while the tab is hidden and neither has native Notification permission granted, each hook instance's flash interval mutates the same document.title independently with no coordination -- the second hook to fire could capture the first hook's flash text as its own "original" title, and on refocus could restore that captured, incorrect value instead of the page's real title, leaving the tab title stuck on a stale flash string until reload. This is a narrow scenario not exercised by any acceptance criterion or by the raw spec's own single-run framing, and does not fail any stated Check-When-Done item -- flagging for optional follow-up rather than blocking this PASS.
+
+### Signature deviation judgment: notifyCompletion(message, options?)
+
+The disclosed deviation -- an additive, optional second parameter for overriding the flash text -- is judged a reasonable implementation-level extension, not a spec-level gap:
+
+- It is fully backward-compatible with the raw spec's literal notifyCompletion(message: string) signature and with acceptance criterion 1's own wording -- every call site can still call it with just message, and none of the raw spec's Check-When-Done items are affected by the option's presence or absence.
+- It directly implements the Analyst Brief's own Open Questions #3 second recommendation that the fallback title-flash text should differ per call site -- the brief already made this product-level call; the optional-parameter shape is purely a Dev-level mechanism for realizing it, not a new product decision.
+- It introduces no new user-facing surface beyond what the brief already described.
+
+No escalation to the Product Analyst is warranted for this deviation.
+
+### Housekeeping
+
+- context/progress-tracker.md updated: the In Progress section accurately describes spec 38 as Dev-complete and not yet QA'd or PO-reviewed, and its summary of what was built matches the actual diff independently verified above.
+
+### Handoff
+
+QA passed -- ready for Product Owner review.
+
+## Product Owner Review (round 1)
+
+**Verdict: PASS — ready for human review**
+
+### Independent re-verification (not taken on Dev/QA's word)
+
+Re-ran `git diff main...spec/38-completion-notifications --stat` and read the full diffs directly, rather than trusting the Dev Notes/QA narrative:
+
+- Diff touches exactly six files: `hooks/use-completion-notification.ts` (new), `hooks/use-completion-notification.test.ts` (new), `components/editor/ai-architect-tab.tsx`, `components/editor/specs-tab.tsx`, `context/spec-status/38-completion-notifications.md`, `context/progress-tracker.md`. No `app/api` route, no `prisma/schema.prisma`, no Trigger.dev task file, no `components/ui/*` file appears anywhere in the diff — confirmed directly from the stat output, not from the disclosed claim.
+- Read `hooks/use-completion-notification.ts` in full. `notifyCompletion` genuinely returns immediately when `document.visibilityState !== "hidden"` (line 127) before touching either `Notification` or `document.title` — this is what makes "a user who stays on the tab sees no behavior change from today" actually true in code, not just asserted. The granted-permission branch constructs `new Notification("Ghost AI", { body: message })` and returns before ever reaching the flash-fallback code. The fallback branch calls `stopFlashing()` first (clearing any prior interval) before starting a new one — two flashes cannot stack, matching the disclosed claim. A single `visibilitychange` listener attached once for the hook's lifetime (not per-call) restores the real title on the transition to visible. `requestPermissionOnSubmit` only calls `Notification.requestPermission()` when `Notification` exists, the tab is visible, and permission is `"default"` — verified this is the *only* call site of `Notification.requestPermission` in the new file.
+- Read the full diffs of `ai-architect-tab.tsx` and `specs-tab.tsx`. Confirmed `requestPermissionOnSubmit()` is the literal first statement in `submitDesignRequest` (before the `try` block) and in `handleGenerateSpec` (before `setIsSubmittingRun(true)`) — matching the brief's own stated "genuine submission moment" requirement, not merely somewhere inside those functions. Confirmed the run-settled effect in `ai-architect-tab.tsx` computes `successMessage`/`failureMessage` once and passes the *same* local variable to both `pushAgentMessage(...)` and `notifyCompletion(...)` — no divergent text between the chat feed and the notification, satisfying acceptance criterion 7 exactly as claimed. Confirmed the equivalent refactor in `specs-tab.tsx`'s completion effect: `failureMessage` is computed once and read by both `notifyCompletion` and the now-unconditional `setGenerateError(failureMessage)` call — this preserves (does not reintroduce a violation of) the file's own documented `react-hooks/set-state-in-effect` compliance pattern, since `setGenerateError` is still called exactly once, unconditionally, after branching has already resolved to a plain value.
+- Confirmed via direct diff read that neither file's existing on-tab status surface changed: `ai-architect-tab.tsx`'s `isGenerating` status line/spinner and `specs-tab.tsx`'s "Generate Spec" busy button and inline `generateError` JSX are untouched — every added line in both files is either an import, a new top-level constant, a `useCompletionNotification()` destructure, a `requestPermissionOnSubmit()` call, a `notifyCompletion(...)` call, or a dependency-array update. Nothing else moved.
+- Confirmed the raw spec's own Check-When-Done items map cleanly onto what's actually implemented: a native notification when granted, a title flash otherwise, no behavior change while visible, permission requested only at submission — all four verified in the code paths above, not just in the narrative.
+
+Everything Dev/QA claimed about these files is genuinely present in the diff. No claim was taken at face value.
+
+### Product fit against `project-overview.md`
+
+- **Scope**: this is a client-only UX affordance layered on top of two already-in-scope flows — "AI-powered architecture generation from prompts" and "AI-powered Markdown spec generation from the canvas graph" (both explicitly In Scope). It adds no new system boundary: no new `app/api` route, no new Prisma model or migration, no new Trigger.dev task, no billing/quota concept, no new permission tier, no versioned history, no object-storage change, no mobile surface. Checked directly against the Out of Scope wall — none of it is touched.
+- **Success criteria**: none of `project-overview.md`'s six numbered Success Criteria name notifications directly, so this spec doesn't move any of them the way, say, spec 37 (node comments) moved Success Criterion 2. It is best read as reinforcing the *reliability of the existing loop* behind Success Criteria 4 and 5 ("AI can generate an architecture into the shared room from a prompt" / "the graph can be converted into a persisted Markdown spec") — both flows already work end to end, but a user who tabs away during a real multi-second/multi-minute generation run had no way to learn a run finished without returning to check manually. That's a genuine usability gap in an already-shipped flow, not new product surface. This is the same "acceptable additive product surface, not disqualifying" posture applied to specs 34/35/36 in their own Product Owner reviews, and I'm applying it consistently here.
+- No crossing into Out of Scope: no email/server-side delivery (grepped the new hook file directly — no `fetch`, no `app/api` import, no Trigger.dev import), no persistent notification history/inbox (state is two `useRef`s scoped to the hook's own render lifetime, nothing written to Storage/Prisma/localStorage), no permission request outside an actual submission (both call sites confirmed above), no broadcast of a "run complete" signal to other room participants (no Liveblocks import anywhere in the new file, confirmed by direct read) — this stays a private, per-tab signal to the submitting user only, as the brief intended.
+- The Analyst Brief's Open Questions #1 deviation (splitting the raw spec's literal "single function" into `notifyCompletion` + `requestPermissionOnSubmit`) is a legitimate, necessary reading — the raw spec's own two rules ("request permission only at submission, while visible" and "notifyCompletion is the completion-time entry point") are genuinely incompatible under a literal single-function reading, since a hidden tab at completion time is the entire scenario the feature exists for. This was resolved once, at the brief stage, not re-litigated by Dev or QA — appropriate.
+
+### Rough edges — acceptable at this stage, one worth tracking
+
+- QA's flagged non-blocking finding (`AiArchitectTab` and `SpecsTab` each holding independent title-flash state, so two concurrent settle-while-hidden runs with no granted permission could race on which "original title" gets restored on refocus) is real — I traced it in the code: both components call `useCompletionNotification()` independently, and nothing in either submit path gates on the other tab's busy state, so two runs genuinely can be in flight at once. The failure mode is a stale/incorrect tab title until reload, not data loss, not a broken generation, and not something a later spec would inherit as a hidden contract violation (this hook has no other consumer to date). This is a legitimate "rough edge acceptable for this stage" per `ai-workflow-rules.md`'s incremental philosophy, not a product-intent miss — the feature's stated intent ("a visible signal... when a run finishes") is still delivered correctly in the overwhelmingly common single-run case, and native `Notification` permission (once granted) sidesteps the whole scenario since the racing code path is title-flash-only. Recommending this be logged as a small follow-up rather than reopening this spec for it.
+- Disclosed, not a blocker: no live browser/manual smoke test of the actual native permission-prompt UI, a real hidden-tab `visibilitychange` transition, or the flash's on-screen cadence — consistent with how prior specs in this run (33, 34, 37) have deferred the same class of live-browser verification to a human smoke test.
+
+### `progress-tracker.md` accuracy
+
+The "In Progress" entry for spec 38 accurately reflects what was actually built and verified: the two-function hook shape and why (Open Questions #1), the exact wiring into `submitDesignRequest`/`handleGenerateSpec` and the two completion effects, the explicit Scope Limits honored (no email/server delivery, no history, no permission request outside submission, no status-line/spinner change), and the 872/872 test count — all independently confirmed above against the actual diff, not aspirational. This entry will be moved to "Completed" as part of this review; PR opening is the next step.
