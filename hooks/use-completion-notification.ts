@@ -3,6 +3,65 @@
 import { useCallback, useEffect, useRef } from "react"
 
 /**
+ * `document.title` is one global resource, but `useCompletionNotification()`
+ * is called independently by both `ai-architect-tab.tsx` and
+ * `specs-tab.tsx`. A per-hook-instance `originalTitleRef` let a second
+ * instance's flash snapshot the *first* instance's in-progress flash text as
+ * if it were the real original title — corrupting whatever title got
+ * restored on refocus when a design run and a spec run both completed while
+ * hidden. Tracking the flash as module-level singleton state (one real
+ * original title, one interval, one current owner) fixes that: starting a
+ * new flash while one is already running resynchronizes to the same real
+ * original title instead of re-snapshotting the currently-displayed text.
+ */
+let sharedOriginalTitle: string | null = null
+let sharedFlashInterval: ReturnType<typeof setInterval> | null = null
+let sharedFlashOwner: symbol | null = null
+
+/**
+ * Stops the active flash and restores the real title. With `ownerId`
+ * supplied (an unmounting hook instance's own cleanup), this is a no-op
+ * unless that instance currently owns the active flash — so one instance
+ * unmounting can't kill a flash a different, still-mounted instance started
+ * afterward. Called with no `ownerId` (tab regained focus) it always stops,
+ * regardless of owner.
+ */
+function stopSharedFlash(ownerId?: symbol) {
+  if (ownerId !== undefined && sharedFlashOwner !== ownerId) return
+
+  if (sharedFlashInterval !== null) {
+    clearInterval(sharedFlashInterval)
+    sharedFlashInterval = null
+  }
+  if (sharedOriginalTitle !== null) {
+    document.title = sharedOriginalTitle
+    sharedOriginalTitle = null
+  }
+  sharedFlashOwner = null
+}
+
+/** Starts (or takes over) the shared title flash, owned by `ownerId`. */
+function startSharedFlash(ownerId: symbol, flashText: string) {
+  if (sharedFlashInterval !== null) {
+    clearInterval(sharedFlashInterval)
+    // A flash was already running — resync to the real original title
+    // synchronously rather than re-snapshotting `document.title`, which
+    // right now holds that other flash's alternating text, not the truth.
+    document.title = sharedOriginalTitle as string
+  } else {
+    sharedOriginalTitle = document.title
+  }
+
+  sharedFlashOwner = ownerId
+  const originalTitle = sharedOriginalTitle as string
+  let showingFlash = false
+  sharedFlashInterval = setInterval(() => {
+    showingFlash = !showingFlash
+    document.title = showingFlash ? flashText : originalTitle
+  }, TITLE_FLASH_INTERVAL_MS)
+}
+
+/**
  * Branded, stable title for every native `Notification` this hook shows —
  * `message` supplies the dynamic `body`, per the Analyst Brief's Open
  * Questions #4, the same "stable label + dynamic content" pairing
@@ -81,73 +140,56 @@ export interface UseCompletionNotificationResult {
  * guaranteed synchronous and tab-visible at both of its call sites (a click
  * handler cannot fire on a hidden tab).
  *
- * `notifyCompletion` clears any title-flash already in progress before
- * starting a new one (mirrors `canvas.tsx`'s own "clear the previous
- * timeout before scheduling a new one" convention from spec 36's search-
- * highlight clearing) — two concurrent flashes never stack. A single
- * `visibilitychange` listener, attached for this hook's whole lifetime,
- * restores the real title and stops any active flash the moment the tab
- * becomes visible again.
+ * `notifyCompletion` hands off to the shared, module-level flash state above
+ * so a completion arriving mid-flash from *this same* hook instance
+ * restarts cleanly (two concurrent flashes from one instance never stack),
+ * and so a second hook instance's flash can't corrupt the first's recorded
+ * original title. A `visibilitychange` listener, attached for this hook's
+ * whole lifetime, restores the real title and stops any active flash the
+ * moment the tab becomes visible again — regardless of which instance owns
+ * it, since the tab being visible ends every flash unconditionally.
  */
 export function useCompletionNotification(): UseCompletionNotificationResult {
-  const originalTitleRef = useRef<string | null>(null)
-  const flashIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  /** Stops any in-progress title flash and restores the real title. A safe
-   * no-op when no flash is currently running. */
-  const stopFlashing = useCallback(() => {
-    if (flashIntervalRef.current !== null) {
-      clearInterval(flashIntervalRef.current)
-      flashIntervalRef.current = null
-    }
-    if (originalTitleRef.current !== null) {
-      document.title = originalTitleRef.current
-      originalTitleRef.current = null
-    }
-  }, [])
+  // Identifies this hook instance as a flash owner (see `stopSharedFlash`)
+  // without depending on referential identity of a callback, which would
+  // change across renders. `useRef` initializes once per mounted instance.
+  const instanceIdRef = useRef<symbol | null>(null)
+  if (instanceIdRef.current === null) {
+    instanceIdRef.current = Symbol("useCompletionNotification instance")
+  }
 
   useEffect(() => {
+    const ownerId = instanceIdRef.current as symbol
+
     function handleVisibilityChange() {
       if (document.visibilityState === "visible") {
-        stopFlashing()
+        stopSharedFlash()
       }
     }
 
     document.addEventListener("visibilitychange", handleVisibilityChange)
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange)
-      stopFlashing()
+      stopSharedFlash(ownerId)
     }
-  }, [stopFlashing])
+  }, [])
 
-  const notifyCompletion = useCallback(
-    (message: string, options?: NotifyCompletionOptions) => {
-      // A user who stays on the tab sees no behavior change from today —
-      // acceptance criterion 2.
-      if (document.visibilityState !== "hidden") return
+  const notifyCompletion = useCallback((message: string, options?: NotifyCompletionOptions) => {
+    // A user who stays on the tab sees no behavior change from today —
+    // acceptance criterion 2.
+    if (document.visibilityState !== "hidden") return
 
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification(NOTIFICATION_TITLE, { body: message })
-        return
-      }
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      new Notification(NOTIFICATION_TITLE, { body: message })
+      return
+    }
 
-      // Title-flash fallback: permission not yet granted (`"default"` or
-      // `"denied"`), or the `Notification` API is unavailable in the
-      // current browser.
-      stopFlashing()
-
-      const flashText = options?.flashText ?? DEFAULT_FLASH_TEXT
-      const originalTitle = document.title
-      originalTitleRef.current = originalTitle
-      let showingFlash = false
-
-      flashIntervalRef.current = setInterval(() => {
-        showingFlash = !showingFlash
-        document.title = showingFlash ? flashText : originalTitle
-      }, TITLE_FLASH_INTERVAL_MS)
-    },
-    [stopFlashing],
-  )
+    // Title-flash fallback: permission not yet granted (`"default"` or
+    // `"denied"`), or the `Notification` API is unavailable in the current
+    // browser.
+    const flashText = options?.flashText ?? DEFAULT_FLASH_TEXT
+    startSharedFlash(instanceIdRef.current as symbol, flashText)
+  }, [])
 
   const requestPermissionOnSubmit = useCallback(() => {
     if (typeof Notification === "undefined") return
