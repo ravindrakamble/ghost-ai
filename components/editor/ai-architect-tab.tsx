@@ -5,6 +5,7 @@ import { useRealtimeRun } from "@trigger.dev/react-hooks"
 import { AlertCircle, Bot, Loader2, Send, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { useCompletionNotification } from "@/hooks/use-completion-notification"
 import type {
   AiChatMessage,
   AiStatusMessage,
@@ -228,6 +229,14 @@ function buildDesignAgentFailureMessage(detail?: string): string {
 }
 
 /**
+ * Short title-flash status text (spec 38) for a failed design-agent run —
+ * distinct from `useCompletionNotification`'s own default success text, so a
+ * returning user can tell success from failure at a glance given a flashing
+ * tab title's very limited space (Analyst Brief, Open Questions #3).
+ */
+const DESIGN_AGENT_FAILURE_FLASH_TEXT = "⚠️ Ghost AI hit an error"
+
+/**
  * AI Architect tab (spec 20/24/25) — chat UI shell. Submitting (Enter
  * without Shift, or the Send button) calls the real `sendMessage` prop
  * (spec 25, `hooks/use-ai-chat-feed.ts` via `CanvasFlow`) with the trimmed
@@ -295,6 +304,14 @@ function buildDesignAgentFailureMessage(detail?: string): string {
  * critique prompt through the same `submitPromptText`/`submitDesignRequest`
  * path `handleSubmit` already used for typed prompts — no new request shape,
  * no new endpoint.
+ *
+ * Spec 38 adds a browser-local completion signal on top of the unchanged
+ * pipeline above: `submitDesignRequest` calls `requestPermissionOnSubmit()`
+ * first (the genuine "a generation was just submitted" moment), and the
+ * completion effect calls `notifyCompletion(...)` with the exact same
+ * success/failure text it already pushes onto `ai-chat` — a native
+ * `Notification` or a flashing tab title while this tab isn't being
+ * watched, a no-op while it is. See `hooks/use-completion-notification.ts`.
  */
 export function AiArchitectTab({
   projectId = "",
@@ -324,6 +341,11 @@ export function AiArchitectTab({
    * already completed.
    */
   const handledRunIdRef = useRef<string | null>(null)
+
+  // Spec 38: visible signal (native `Notification` or a title flash) when
+  // this client's own run finishes while the tab isn't being watched. See
+  // `hooks/use-completion-notification.ts`'s own docblock.
+  const { notifyCompletion, requestPermissionOnSubmit } = useCompletionNotification()
 
   const { run: realtimeRun } = useRealtimeRun<typeof designAgentTask>(runId ?? undefined, {
     accessToken: publicToken ?? undefined,
@@ -388,17 +410,26 @@ export function AiArchitectTab({
     handledRunIdRef.current = runId
 
     if (realtimeRun.isSuccess) {
-      pushAgentMessage(resolveSuccessMessage(realtimeRun.output?.summary))
+      const successMessage = resolveSuccessMessage(realtimeRun.output?.summary)
+      pushAgentMessage(successMessage)
+      notifyCompletion(successMessage)
     } else {
-      pushAgentMessage(buildDesignAgentFailureMessage(realtimeRun.error?.message))
+      const failureMessage = buildDesignAgentFailureMessage(realtimeRun.error?.message)
+      pushAgentMessage(failureMessage)
+      notifyCompletion(failureMessage, { flashText: DESIGN_AGENT_FAILURE_FLASH_TEXT })
     }
 
     setRunId(null)
     setPublicToken(null)
-  }, [isRunSettled, runId, realtimeRun, pushAgentMessage])
+  }, [isRunSettled, runId, realtimeRun, pushAgentMessage, notifyCompletion])
 
   const submitDesignRequest = useCallback(
     async (prompt: string) => {
+      // Spec 38: the genuine "a generation is actually submitted" moment —
+      // synchronous, and guaranteed tab-visible (a click handler cannot
+      // fire on a hidden tab). Called before the `try` block so it never
+      // depends on network timing.
+      requestPermissionOnSubmit()
       setIsSubmittingRun(true)
 
       try {
@@ -434,7 +465,7 @@ export function AiArchitectTab({
         setIsSubmittingRun(false)
       }
     },
-    [projectId, pushAgentMessage],
+    [projectId, pushAgentMessage, requestPermissionOnSubmit],
   )
 
   /**

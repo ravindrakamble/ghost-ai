@@ -6,6 +6,7 @@ import { AlertCircle, Download, FileCode, FileText, Loader2 } from "lucide-react
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { SpecPreviewModal } from "@/components/editor/spec-preview-modal"
+import { useCompletionNotification } from "@/hooks/use-completion-notification"
 import { useProjectSpecs, type ProjectSpecSummary } from "@/hooks/use-project-specs"
 import { cn } from "@/lib/utils"
 import type { CanvasEdge, CanvasNode } from "@/types/canvas"
@@ -109,6 +110,24 @@ function buildGenerateSpecFailureMessage(detail?: string): string {
     : "Failed to generate a spec. Please try again."
 }
 
+/**
+ * Success text for `notifyCompletion` (spec 38) on a successful spec-
+ * generation run — this file has no existing success-message string to
+ * reuse, unlike `ai-architect-tab.tsx`'s `resolveSuccessMessage`/
+ * `DESIGN_AGENT_SUCCESS_MESSAGE` (Analyst Brief, Open Questions #2). The
+ * failure branch reuses the already-computed `buildGenerateSpecFailureMessage`
+ * string instead of inventing new failure text.
+ */
+const SPEC_GENERATION_SUCCESS_MESSAGE = "Your spec has finished generating."
+
+/**
+ * Short title-flash status text (spec 38) for a failed spec-generation run —
+ * distinct from `useCompletionNotification`'s own default success text, so a
+ * returning user can tell success from failure at a glance given a flashing
+ * tab title's very limited space (Analyst Brief, Open Questions #3).
+ */
+const SPEC_GENERATION_FAILURE_FLASH_TEXT = "⚠️ Ghost AI hit an error"
+
 /** Formats a spec's ISO `createdAt` for display next to its filename. Locale
  * pinned to `"en-US"` for a deterministic format *shape* across
  * environments, same convention `ai-architect-tab.tsx#formatMessageTimestamp`
@@ -169,6 +188,15 @@ function formatCreatedAt(value: string): string {
  * combined-busy convention `ai-architect-tab.tsx` uses. Nothing else in this
  * tab (the existing list, preview modal, download actions) is gated by this
  * state -- this spec's own explicit acceptance criterion.
+ *
+ * Spec 38 adds a browser-local completion signal on top of the unchanged
+ * pipeline above: `handleGenerateSpec` calls `requestPermissionOnSubmit()`
+ * first (the genuine "a generation was just submitted" moment), and the
+ * completion effect calls `notifyCompletion(...)` reflecting success or
+ * failure -- a native `Notification` or a flashing tab title while this tab
+ * isn't being watched, a no-op while it is. This tab's own existing busy
+ * state/inline `generateError` text are unchanged. See
+ * `hooks/use-completion-notification.ts`.
  */
 export function SpecsTab({ projectId, nodes = [], edges = [], chatMessages = [] }: SpecsTabProps) {
   const { specs, isLoading, error, refetch } = useProjectSpecs(projectId)
@@ -185,6 +213,11 @@ export function SpecsTab({ projectId, nodes = [], edges = [], chatMessages = [] 
    * established, for the same `react-hooks/set-state-in-effect` reason.
    */
   const handledRunIdRef = useRef<string | null>(null)
+
+  // Spec 38: visible signal (native `Notification` or a title flash) when
+  // this client's own run finishes while the tab isn't being watched. See
+  // `hooks/use-completion-notification.ts`'s own docblock.
+  const { notifyCompletion, requestPermissionOnSubmit } = useCompletionNotification()
 
   const { run: realtimeRun } = useRealtimeRun(runId ?? undefined, {
     accessToken: publicToken ?? undefined,
@@ -221,24 +254,41 @@ export function SpecsTab({ projectId, nodes = [], edges = [], chatMessages = [] 
    * plain callback from `useProjectSpecs`, not a `useState` setter this
    * component owns) stays inside its own `if` branch since it isn't a
    * locally-recognized `setState` call the rule tracks.
+   *
+   * Spec 38 adds one `notifyCompletion(...)` call per branch (also staying
+   * inside its own `if`/`else` branch, for the same reason `refetch()`
+   * does) — success passes the new `SPEC_GENERATION_SUCCESS_MESSAGE`
+   * constant (this file has no prior success-message string to reuse,
+   * unlike `ai-architect-tab.tsx`'s `resolveSuccessMessage`), failure
+   * reuses the same `buildGenerateSpecFailureMessage` string already
+   * computed for `generateError` rather than inventing new failure text
+   * (Analyst Brief, Open Questions #2).
    */
   useEffect(() => {
     if (!isRunSettled || !runId || !realtimeRun) return
     if (handledRunIdRef.current === runId) return
     handledRunIdRef.current = runId
 
+    let failureMessage: string | null = null
+
     if (realtimeRun.isSuccess) {
       void refetch()
+      notifyCompletion(SPEC_GENERATION_SUCCESS_MESSAGE)
+    } else {
+      failureMessage = buildGenerateSpecFailureMessage(realtimeRun.error?.message)
+      notifyCompletion(failureMessage, { flashText: SPEC_GENERATION_FAILURE_FLASH_TEXT })
     }
 
-    setGenerateError(
-      realtimeRun.isSuccess ? null : buildGenerateSpecFailureMessage(realtimeRun.error?.message),
-    )
+    setGenerateError(failureMessage)
     setRunId(null)
     setPublicToken(null)
-  }, [isRunSettled, runId, realtimeRun, refetch])
+  }, [isRunSettled, runId, realtimeRun, refetch, notifyCompletion])
 
   const handleGenerateSpec = useCallback(async () => {
+    // Spec 38: the genuine "a generation is actually submitted" moment —
+    // synchronous, and guaranteed tab-visible (a click handler cannot fire
+    // on a hidden tab). Called before `setIsSubmittingRun(true)`.
+    requestPermissionOnSubmit()
     setIsSubmittingRun(true)
     setGenerateError(null)
 
@@ -279,7 +329,7 @@ export function SpecsTab({ projectId, nodes = [], edges = [], chatMessages = [] 
     } finally {
       setIsSubmittingRun(false)
     }
-  }, [projectId, chatMessages, nodes, edges])
+  }, [projectId, chatMessages, nodes, edges, requestPermissionOnSubmit])
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
