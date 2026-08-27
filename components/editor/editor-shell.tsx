@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useParams } from "next/navigation"
 import type { Project } from "@/types/project"
 import { EditorNavbar } from "./editor-navbar"
@@ -14,25 +14,34 @@ interface EditorShellProps {
 }
 
 export function EditorShell({ children, ownedProjects, sharedProjects }: EditorShellProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   // `roomId` is `undefined` on `/editor` (the project-list "home") and a
   // real ID on `/editor/[roomId]` (a project's canvas) — same
   // `useParams<{ roomId?: string }>()` convention already used by
-  // `project-sidebar.tsx`/`hooks/use-project-actions.ts`. `EditorShell`
-  // itself never remounts across a sibling navigation between these two
-  // (it's rendered by the shared `/editor` layout), so a plain
-  // mount-time-only default wouldn't reopen the sidebar when navigating
-  // *back* to home from inside a project (e.g. via the new Home link) —
-  // this effect reacts to that transition instead. Only opens, never
-  // force-closes: if the user closes the sidebar while still on `/editor`,
-  // `roomId` hasn't changed, so this doesn't re-fire and snap it back open.
+  // `project-sidebar.tsx`/`hooks/use-project-actions.ts`.
   const { roomId } = useParams<{ roomId?: string }>()
+  const [sidebarOpen, setSidebarOpen] = useState(() => !roomId)
 
-  useEffect(() => {
+  // `EditorShell` itself never remounts across a sibling navigation between
+  // `/editor` and `/editor/[roomId]` (it's rendered by the shared `/editor`
+  // layout), so reopening the sidebar when navigating *back* to home (e.g.
+  // via the Home link) needs to react to the `roomId` transition, not just
+  // the initial mount. Adjusted during render via a second `useState` that
+  // tracks the previous `roomId` — React's own documented pattern for state
+  // that depends on a prop change (a `useRef` would work under plain React
+  // rules but is rejected by this repo's Compiler-safe `react-hooks/refs`
+  // lint rule, which forbids reading/writing ref values during render) —
+  // rather than inside a `useEffect`, which would call `setState`
+  // synchronously in the effect body and force an extra, avoidable render
+  // pass. Only opens, never force-closes: if the user closes the sidebar
+  // while still on `/editor`, `roomId` hasn't changed, so this comparison
+  // doesn't re-fire.
+  const [prevRoomId, setPrevRoomId] = useState(roomId)
+  if (prevRoomId !== roomId) {
+    setPrevRoomId(roomId)
     if (!roomId) {
       setSidebarOpen(true)
     }
-  }, [roomId])
+  }
 
   return (
     <ProjectDialogsProvider ownedProjects={ownedProjects} sharedProjects={sharedProjects}>
