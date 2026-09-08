@@ -101,7 +101,11 @@ export async function POST(request: NextRequest) {
     triggeredRun = await triggerDesignAgent({ prompt: body.prompt, roomId: body.roomId })
   } catch (error) {
     console.error("Failed to trigger the design-agent task", error)
-    return errorResponse("Failed to start design generation", 502)
+    // TEMPORARY debug aid — remove once the Trigger.dev 502 root cause is
+    // confirmed. Surfaces the real upstream error in the response body so it
+    // shows up in the browser Network tab without needing Vercel log access.
+    const debugMessage = error instanceof Error ? error.message : String(error)
+    return errorResponse(`Failed to start design generation: ${debugMessage}`, 502)
   }
 
   try {
