@@ -1,4 +1,4 @@
-import { tasks, auth } from "@trigger.dev/sdk"
+import { tasks, auth, configure } from "@trigger.dev/sdk"
 import { DESIGN_AGENT_TASK_ID, type DesignAgentPayload } from "@/trigger/design-agent"
 import type { designAgentTask } from "@/trigger/design-agent"
 import { GENERATE_SPEC_TASK_ID, type GenerateSpecPayload } from "@/trigger/generate-spec"
@@ -43,6 +43,31 @@ function requireTriggerSecretKey(): void {
   }
 }
 
+/**
+ * Vercel sets `VERCEL_GIT_COMMIT_REF` (e.g. `"main"`) on every deployment,
+ * including Production — not just previews. The installed SDK's
+ * `apiClientManager` resolves its preview-branch header unconditionally from
+ * `TRIGGER_PREVIEW_BRANCH ?? VERCEL_GIT_COMMIT_REF ?? ...` with no check for
+ * key type (verified directly against
+ * `@trigger.dev/core/dist/commonjs/v3/apiClientManager/index.js`), so a
+ * production `tr_prod_...` key still gets an `x-trigger-branch: main` header
+ * sent on every request. The server then tries to resolve a *branch
+ * environment* named "main" and fails with "No matching branch env" — branch
+ * environments only exist under the Preview environment, which this
+ * project's plan allows zero of.
+ *
+ * Vercel's dashboard won't accept an empty-string env var value (so setting
+ * `TRIGGER_PREVIEW_BRANCH=` there isn't an option), but `configure()`
+ * accepts one directly: an explicit `""` short-circuits the SDK's own `??`
+ * fallback chain before it ever reads `VERCEL_GIT_COMMIT_REF`, and an empty
+ * string is falsy, so the header is never added. Only `previewBranch` is
+ * overridden here — `TRIGGER_SECRET_KEY` is still read from the environment
+ * as normal by every call site.
+ */
+function suppressVercelBranchDetection(): void {
+  configure({ previewBranch: "" })
+}
+
 export interface TriggeredDesignRun {
   runId: string
 }
@@ -56,6 +81,7 @@ export interface TriggeredGenerateSpecRun {
  */
 export async function triggerDesignAgent(payload: DesignAgentPayload): Promise<TriggeredDesignRun> {
   requireTriggerSecretKey()
+  suppressVercelBranchDetection()
 
   const handle = await tasks.trigger<typeof designAgentTask>(DESIGN_AGENT_TASK_ID, payload)
 
@@ -68,6 +94,7 @@ export async function triggerDesignAgent(payload: DesignAgentPayload): Promise<T
  */
 export async function triggerGenerateSpec(payload: GenerateSpecPayload): Promise<TriggeredGenerateSpecRun> {
   requireTriggerSecretKey()
+  suppressVercelBranchDetection()
 
   const handle = await tasks.trigger<typeof generateSpecTask>(GENERATE_SPEC_TASK_ID, payload)
 
@@ -85,6 +112,7 @@ export async function triggerGenerateSpec(payload: GenerateSpecPayload): Promise
  */
 export async function createRunToken(runId: string): Promise<string> {
   requireTriggerSecretKey()
+  suppressVercelBranchDetection()
 
   return auth.createPublicToken({
     scopes: { read: { runs: [runId] } },

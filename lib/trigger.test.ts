@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const { triggerMock, createPublicTokenMock } = vi.hoisted(() => ({
+const { triggerMock, createPublicTokenMock, configureMock } = vi.hoisted(() => ({
   triggerMock: vi.fn(),
   createPublicTokenMock: vi.fn(),
+  configureMock: vi.fn(),
 }))
 
 vi.mock("@trigger.dev/sdk", () => ({
   tasks: { trigger: triggerMock },
   auth: { createPublicToken: createPublicTokenMock },
+  configure: configureMock,
 }))
 
 vi.mock("@/trigger/design-agent", () => ({
@@ -56,6 +58,9 @@ describe("triggerDesignAgent / triggerGenerateSpec / createRunToken", () => {
         prompt: "design it",
         roomId: "room-1",
       })
+      // Neutralizes the SDK's own VERCEL_GIT_COMMIT_REF -> "no matching
+      // branch env" bug for production keys — see suppressVercelBranchDetection.
+      expect(configureMock).toHaveBeenCalledWith({ previewBranch: "" })
     })
 
     it("propagates a genuine upstream trigger failure rather than swallowing it", async () => {
