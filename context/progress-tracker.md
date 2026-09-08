@@ -1,6 +1,6 @@
 # Progress Tracker
 
-Update this file whenever the current phase, active feature, or implementation state changes.
+Update this file whenever the current phase, active feature, or implementation state changes. Keep this file up to date.
 
 ## Current Phase
 - Phase 30: Generate Spec Button — Completed (QA PASS, Product Owner PASS, PR #27 opened against `main`). This wires the Specs tab's "Generate Spec" button to a real `POST /api/ai/spec` -> token -> `useRealtimeRun` flow (mirroring spec 26's design-agent pattern), closing the generate -> persist -> view -> download loop end to end from the UI for the first time — the entire Core User Flow (`project-overview.md`, steps 5-10) is now reachable in one continuous session with no manual API call.
